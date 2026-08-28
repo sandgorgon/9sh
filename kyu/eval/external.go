@@ -2,17 +2,34 @@ package eval
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
+
+	p9 "github.com/sandgorgon/9p"
 
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/value"
+	"github.com/sandgorgon/9sh/ns"
 )
 
 // runExternal evaluates a `%cmd arg...` external/legacy-binary call. in is
 // the piped-in value (nil if %cmd is used bare, with no pipe input) and is
 // rendered to bytes for the subprocess's stdin — see renderForExternal.
+//
+// When a namespace is attached (see Env.Namespace), this routes through
+// /jobs the same way `&`-backgrounded jobs do (evalBackground), just
+// waiting for the result instead of returning immediately — matching the
+// design doc's "every command, foreground or background, is treated as a
+// job" so session history (package session, hooked to job.Manager's
+// OnFinish) captures ordinary foreground commands, not only backgrounded
+// ones, with no separate logging path. Without a namespace (mainly bare
+// eval package tests that don't need job tracking), it falls back to a
+// direct os/exec call — the original Phase 1 implementation, unchanged —
+// rather than making a namespace suddenly mandatory for basic %cmd use.
 //
 // A process that starts but exits non-zero is not an error here: exit
 // codes are ordinary shell-level data (grep's "no match" convention, etc),
@@ -33,7 +50,14 @@ func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, er
 		args[i] = s
 	}
 
-	cmd := exec.Command(x.Name, args...)
+	if namespace := env.Namespace(); namespace != nil {
+		return runExternalViaJob(namespace, x.Name, args, in)
+	}
+	return runExternalDirect(x.Name, args, in)
+}
+
+func runExternalDirect(name string, args []string, in value.Value) (value.Value, error) {
+	cmd := exec.Command(name, args...)
 	if in != nil {
 		cmd.Stdin = bytes.NewReader(renderForExternal(in))
 	}
@@ -42,11 +66,111 @@ func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, er
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %v", x.Name, err)}, nil
+		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %v", name, err)}, nil
 	}
 	_ = cmd.Wait() // non-zero exit is ordinary data, not a Go-level error here
 
 	return value.Bytes(stdout.Bytes()), nil
+}
+
+// jobWaitStatus is the subset of job.Status this function needs from the
+// wait file's JSON — a local, minimal decode rather than pulling in
+// job.Status itself (eval doesn't otherwise depend on package job; only
+// on the namespace files any 9P client would see).
+type jobWaitStatus struct {
+	State string `json:"state"`
+	Err   string `json:"error"`
+}
+
+// runExternalViaJob is runExternalDirect's job-tracked equivalent: the
+// same clone/argv/stdin/ctl-start sequence evalBackground uses, but
+// blocks on wait before returning instead of handing back a live
+// record. A job that fails to start (job.StateFailed — its status
+// carries the exec.Start error, since the ctl "start" Write itself
+// never fails for this case, only the job's terminal status does)
+// becomes a value.ErrorVal, matching runExternalDirect's
+// exec.Start()-failure handling exactly, so kyu code can't tell which
+// path ran from a bad-command-name failure alone.
+func runExternalViaJob(namespace *ns.Namespace, name string, args []string, in value.Value) (value.Value, error) {
+	ctx := context.Background()
+	root, err := namespace.Attach(ctx, "9sh", "")
+	if err != nil {
+		return nil, err
+	}
+	clone, err := openFile(ctx, root, p9.OREAD, "jobs", "clone")
+	if err != nil {
+		return nil, fmt.Errorf("%%%s: %w (is /jobs bound?)", name, err)
+	}
+	idBytes, err := readAllFile(ctx, clone)
+	if err != nil {
+		return nil, fmt.Errorf("%%%s: reading job id: %w", name, err)
+	}
+	clone.Close()
+	id := strings.TrimSpace(string(idBytes))
+
+	argv := append([]string{name}, args...)
+	argvFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "argv")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := argvFile.Write(ctx, 0, []byte(strings.Join(argv, "\n"))); err != nil {
+		return nil, fmt.Errorf("%%%s: writing argv: %w", name, err)
+	}
+	argvFile.Close()
+
+	ctlFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "ctl")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := ctlFile.Write(ctx, 0, []byte("start")); err != nil {
+		return nil, fmt.Errorf("%%%s: starting job: %w", name, err)
+	}
+	ctlFile.Close()
+
+	// stdin is written only after start, not before: it's a real
+	// io.Pipe() (synchronous, unbuffered), and nothing reads from it
+	// until the process is actually running and os/exec's internal
+	// stdin-forwarding goroutine begins draining it — a write attempted
+	// before ctl start would deadlock waiting for a reader that doesn't
+	// exist yet.
+	stdinFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "stdin")
+	if err != nil {
+		return nil, err
+	}
+	if in != nil {
+		if _, err := stdinFile.Write(ctx, 0, renderForExternal(in)); err != nil {
+			return nil, fmt.Errorf("%%%s: writing stdin: %w", name, err)
+		}
+	}
+	stdinFile.Close() // EOF regardless of whether anything was written — see job/job_test.go's note
+
+	waitFile, err := openFile(ctx, root, p9.OREAD, "jobs", id, "wait")
+	if err != nil {
+		return nil, err
+	}
+	waitBytes, err := readAllFile(ctx, waitFile)
+	waitFile.Close()
+	if err != nil {
+		return nil, fmt.Errorf("%%%s: waiting: %w", name, err)
+	}
+	var st jobWaitStatus
+	if err := json.Unmarshal(waitBytes, &st); err != nil {
+		return nil, fmt.Errorf("%%%s: decoding job status: %w", name, err)
+	}
+	if st.State == "failed" {
+		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %s", name, st.Err)}, nil
+	}
+
+	stdoutFile, err := openFile(ctx, root, p9.OREAD, "jobs", id, "stdout")
+	if err != nil {
+		return nil, err
+	}
+	out, err := readAllFile(ctx, stdoutFile)
+	stdoutFile.Close()
+	if err != nil {
+		return nil, fmt.Errorf("%%%s: reading stdout: %w", name, err)
+	}
+	return value.Bytes(out), nil
 }
 
 func argString(v value.Value) (string, error) {

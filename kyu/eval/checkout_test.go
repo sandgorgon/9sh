@@ -7,11 +7,16 @@ import (
 
 	"github.com/sandgorgon/9p/examples/dirfs"
 
+	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/ns"
 )
 
 // dirfsEnv binds a real dirfs-backed temp directory at /src, the primary
-// real-world checkout scenario (a legacy tool editing an actual file).
+// real-world checkout scenario (a legacy tool editing an actual file),
+// plus /jobs — needed because %cmd inside a checkout closure now routes
+// through /jobs whenever a namespace is present (see external.go's
+// runExternalViaJob), matching the real cmd/9sh bootstrap shape rather
+// than a namespace with only /src bound.
 // It returns the env and the temp directory's real path for direct
 // assertions against the underlying filesystem.
 func dirfsEnv(t *testing.T) (*Env, string) {
@@ -24,6 +29,9 @@ func dirfsEnv(t *testing.T) (*Env, string) {
 	namespace := ns.New()
 	if err := namespace.BindFS(fs, "", "/src", ns.Replace); err != nil {
 		t.Fatalf("bind /src: %v", err)
+	}
+	if err := namespace.BindFS(job.New(job.NewManager()), "", "/jobs", ns.Replace); err != nil {
+		t.Fatalf("bind /jobs: %v", err)
 	}
 	return NewGlobalEnv(namespace), dir
 }

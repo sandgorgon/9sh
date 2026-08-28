@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
 	"github.com/sandgorgon/tui/term"
@@ -22,48 +23,67 @@ import (
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/ns"
 	"github.com/sandgorgon/9sh/pane"
+	"github.com/sandgorgon/9sh/session"
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run is main's actual body, returning an exit code instead of calling
+// os.Exit directly — os.Exit skips deferred functions, and the session
+// recorder's Close (its final checkpoint flush, "shell exit" being one
+// of its three checkpoint triggers) must run on every exit path, not
+// just a clean one.
+func run() int {
 	forceRepl := flag.Bool("repl", false,
 		"use the line-based REPL even when a real terminal is available (default: launch the pane multiplexer)")
 	flag.Parse()
 
-	env := bootstrap()
+	env, recorder := bootstrap()
+	if recorder != nil {
+		defer recorder.Close()
+	}
 
 	if args := flag.Args(); len(args) > 0 {
 		src, err := os.ReadFile(args[0])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
 		if !runSource(string(src), env) {
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	if !*forceRepl && term.IsTerminal(os.Stdin) {
 		if err := runTUI(env); err != nil {
 			fmt.Fprintln(os.Stderr, "9sh:", err)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	repl(env)
+	return 0
 }
 
-// bootstrap wires up 9sh's namespace and returns the shared kyu
-// evaluation environment — used by every mode (script, line REPL, and
-// the tui pane multiplexer's own kyu-repl pane) so kyu code behaves
-// identically no matter how it's reached.
-func bootstrap() *eval.Env {
+// bootstrap wires up 9sh's namespace, its job manager, and (best-effort)
+// session history, returning the shared kyu evaluation environment used
+// by every mode (script, line REPL, and the tui pane multiplexer's own
+// kyu-repl pane) so kyu code behaves identically no matter how it's
+// reached. The returned *session.Recorder is nil if session history
+// isn't available this run (no 9vcs on PATH, no writable home
+// directory, ...) — that's never fatal to starting the shell at all,
+// only to the history feature itself.
+func bootstrap() (*eval.Env, *session.Recorder) {
 	namespace := ns.New()
+	mgr := job.NewManager()
 	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
 	// `bind` (which only reshapes what's already in the namespace) can
 	// do — see ns.Namespace.BindFS's doc.
-	if err := namespace.BindFS(job.New(job.NewManager()), "", "/jobs", ns.Replace); err != nil {
+	if err := namespace.BindFS(job.New(mgr), "", "/jobs", ns.Replace); err != nil {
 		fmt.Fprintln(os.Stderr, "9sh: bootstrapping /jobs:", err)
 		os.Exit(1)
 	}
@@ -75,7 +95,37 @@ func bootstrap() *eval.Env {
 			namespace.BindFS(fs, "", "/local", ns.Replace)
 		}
 	}
-	return eval.NewGlobalEnv(namespace)
+
+	recorder := bootstrapSession(mgr)
+	return eval.NewGlobalEnv(namespace), recorder
+}
+
+// bootstrapSession sets up ~/.config/9/session and attaches it to mgr's
+// OnFinish hook, so every job that reaches a terminal state — whether
+// backgrounded via kyu's `&` or a synchronous foreground %cmd routed
+// through /jobs — gets a history line for free (see package session's
+// doc comment). Any failure here (no 9vcs on PATH, no home directory, a
+// 9vcs error) is printed once and otherwise ignored: session history is
+// a feature 9sh can run perfectly well without, not a startup
+// requirement.
+func bootstrapSession(mgr *job.Manager) *session.Recorder {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "9sh: session history disabled:", err)
+		return nil
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		host = "unknown-host"
+	}
+	dir := filepath.Join(home, ".config", "9", "session")
+	rec, err := session.New(dir, host)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "9sh: session history disabled:", err)
+		return nil
+	}
+	rec.Attach(mgr)
+	return rec
 }
 
 // mouse reporting isn't on by default — tui.App.Run doesn't enable it

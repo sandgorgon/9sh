@@ -10,12 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type State string
@@ -66,29 +68,37 @@ type InprocFunc func(ctx context.Context, stdin io.Reader, stdout, stderr io.Wri
 // codec exists (see kyu/eval/external.go's renderForExternal for the same
 // deferral on the %cmd side).
 type Status struct {
-	ID       int      `json:"id"`
-	Kind     Kind     `json:"kind"`
-	State    State    `json:"state"`
-	Argv     []string `json:"argv,omitempty"`
-	Pid      int      `json:"pid,omitempty"`
-	ExitCode *int     `json:"exit_code,omitempty"`
-	Err      string   `json:"error,omitempty"`
-	Detached bool     `json:"detached,omitempty"`
+	ID         int       `json:"id"`
+	Kind       Kind      `json:"kind"`
+	State      State     `json:"state"`
+	Argv       []string  `json:"argv,omitempty"`
+	Pid        int       `json:"pid,omitempty"`
+	ExitCode   *int      `json:"exit_code,omitempty"`
+	Signal     string    `json:"signal,omitempty"`
+	Err        string    `json:"error,omitempty"`
+	Detached   bool      `json:"detached,omitempty"`
+	Cwd        string    `json:"cwd,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitzero"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
 }
 
 type Job struct {
 	ID   int
 	kind Kind
 
-	mu       sync.Mutex
-	state    State
-	argv     []string
-	env      []string
-	pid      int
-	exitCode *int
-	errMsg   string
-	detached bool
-	killed   bool // set by kill() before cancel(), to distinguish "we killed it" from a plain nonzero exit
+	mu         sync.Mutex
+	state      State
+	argv       []string
+	env        []string
+	pid        int
+	exitCode   *int
+	lastSignal string
+	errMsg     string
+	detached   bool
+	killed     bool // set by kill() before cancel(), to distinguish "we killed it" from a plain nonzero exit
+	cwd        string
+	startedAt  time.Time
+	finishedAt time.Time
 
 	stdinW io.WriteCloser
 	stdinR io.ReadCloser
@@ -101,6 +111,21 @@ type Job struct {
 
 	proc *exec.Cmd
 	fn   InprocFunc
+
+	mgr *Manager // for notifyFinished's OnFinish callback; never nil (always set by allocLocked)
+}
+
+// notifyFinished runs the owning Manager's OnFinish hook (if any),
+// asynchronously — the session recorder it exists for does its own
+// I/O (an fs append, occasionally a 9vcs record), which must never
+// block a job's own finish() and, transitively, whatever's waiting on
+// it via WaitFor.
+func (j *Job) notifyFinished() {
+	fn := j.mgr.getOnFinish()
+	if fn == nil {
+		return
+	}
+	go fn(j.Status())
 }
 
 func (j *Job) Kind() Kind { return j.kind }
@@ -112,7 +137,8 @@ func (j *Job) Status() Status {
 	return Status{
 		ID: j.ID, Kind: j.kind, State: j.state,
 		Argv: append([]string(nil), j.argv...),
-		Pid:  j.pid, ExitCode: j.exitCode, Err: j.errMsg, Detached: j.detached,
+		Pid:  j.pid, ExitCode: j.exitCode, Signal: j.lastSignal, Err: j.errMsg, Detached: j.detached,
+		Cwd: j.cwd, StartedAt: j.startedAt, FinishedAt: j.finishedAt,
 	}
 }
 
@@ -257,6 +283,7 @@ func (j *Job) start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	j.cancel = cancel
 	j.state = StateRunning
+	j.startedAt = time.Now()
 	j.mu.Unlock()
 	j.appendEvent()
 
@@ -267,10 +294,10 @@ func (j *Job) start() error {
 		go func() {
 			err := j.fn(ctx, j.stdinR, j.stdout, j.stderr)
 			if err != nil {
-				j.finish(StateFailed, nil, err.Error())
+				j.finish(StateFailed, nil, "", err.Error())
 			} else {
 				zero := 0
-				j.finish(StateDone, &zero, "")
+				j.finish(StateDone, &zero, "", "")
 			}
 		}()
 		return nil
@@ -296,7 +323,7 @@ func (j *Job) startSubprocess(ctx context.Context) error {
 	// ctl command), so no separate signal-on-cancel wiring is needed.
 
 	if err := cmd.Start(); err != nil {
-		j.finish(StateFailed, nil, err.Error())
+		j.finish(StateFailed, nil, "", err.Error())
 		return nil // the failure is job status, not a ctl-command error
 	}
 	j.mu.Lock()
@@ -311,6 +338,15 @@ func (j *Job) startSubprocess(ctx context.Context) error {
 	return nil
 }
 
+// finishFromExec classifies cmd.Wait()'s result. StateFailed is reserved
+// for a job that never got to run at all (exec.Start() itself failing —
+// handled separately, in startSubprocess) or an unexpected non-exit
+// error from Wait(); a process that *ran* and exited, even nonzero or
+// via a signal it didn't ask for, is StateDone — a nonzero exit code is
+// ordinary process output, not a job-control failure (the same
+// principle kyu/eval/external.go's %cmd handling already relies on:
+// "exit codes are ordinary shell-level data"). Only our own `ctl kill`
+// (the killed flag, set before cancel()) produces StateKilled.
 func (j *Job) finishFromExec(err error) {
 	j.mu.Lock()
 	killed := j.killed
@@ -318,24 +354,35 @@ func (j *Job) finishFromExec(err error) {
 
 	if err == nil {
 		zero := 0
-		j.finish(StateDone, &zero, "")
+		j.finish(StateDone, &zero, "", "")
 		return
 	}
 	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		code := exitErr.ExitCode()
+		sig := signalFromExitError(exitErr)
 		if killed {
-			j.finish(StateKilled, &code, "")
+			j.finish(StateKilled, &code, sig, "")
 		} else {
-			j.finish(StateFailed, &code, err.Error())
+			j.finish(StateDone, &code, sig, "")
 		}
 		return
 	}
-	j.finish(StateFailed, nil, err.Error())
+	j.finish(StateFailed, nil, "", err.Error())
+}
+
+// signalFromExitError reports the signal that terminated a process, or
+// "" if it exited normally (a non-zero exit code alone isn't a signal).
+func signalFromExitError(err *exec.ExitError) string {
+	ws, ok := err.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() {
+		return ""
+	}
+	return ws.Signal().String()
 }
 
 // finish makes a terminal-state transition, idempotently (the first
 // caller wins — a natural exit racing a kill() is expected).
-func (j *Job) finish(state State, exitCode *int, errMsg string) {
+func (j *Job) finish(state State, exitCode *int, signal, errMsg string) {
 	j.mu.Lock()
 	if j.state.Terminal() {
 		j.mu.Unlock()
@@ -343,7 +390,9 @@ func (j *Job) finish(state State, exitCode *int, errMsg string) {
 	}
 	j.state = state
 	j.exitCode = exitCode
+	j.lastSignal = signal
 	j.errMsg = errMsg
+	j.finishedAt = time.Now()
 	j.mu.Unlock()
 
 	close(j.waitCh)
@@ -351,6 +400,7 @@ func (j *Job) finish(state State, exitCode *int, errMsg string) {
 	j.stdout.Close()
 	j.stderr.Close()
 	j.events.Close()
+	j.notifyFinished()
 }
 
 func (j *Job) kill() error {
@@ -362,12 +412,14 @@ func (j *Job) kill() error {
 	}
 	if j.state == StatePending {
 		j.state = StateKilled
+		j.finishedAt = time.Now()
 		j.mu.Unlock()
 		close(j.waitCh)
 		j.appendEvent()
 		j.stdout.Close()
 		j.stderr.Close()
 		j.events.Close()
+		j.notifyFinished()
 		return nil
 	}
 	j.killed = true
@@ -428,23 +480,45 @@ func (j *Job) setPriority(n int) error {
 
 // Manager allocates and tracks Jobs.
 type Manager struct {
-	mu     sync.Mutex
-	nextID int
-	jobs   map[int]*Job
+	mu       sync.Mutex
+	nextID   int
+	jobs     map[int]*Job
+	onFinish func(Status)
 }
 
 func NewManager() *Manager {
 	return &Manager{jobs: map[int]*Job{}}
 }
 
+// OnFinish registers fn to be called, on its own goroutine, whenever
+// any job this Manager owns reaches a terminal state — the hook 9sh's
+// session recorder (package session) attaches to build history from,
+// so "every job gets a history line" falls out of the job-control
+// mechanism itself rather than needing a separate logging path. Only
+// one callback is supported; a second call replaces the first.
+func (m *Manager) OnFinish(fn func(Status)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onFinish = fn
+}
+
+func (m *Manager) getOnFinish() func(Status) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.onFinish
+}
+
 func (m *Manager) allocLocked(kind Kind) *Job {
 	m.nextID++
 	pr, pw := io.Pipe()
+	cwd, _ := os.Getwd() // best-effort — kyu has no per-job cwd yet, this is 9sh's own process-wide cwd
 	j := &Job{
 		ID: m.nextID, kind: kind, state: StatePending,
 		stdinR: pr, stdinW: pw,
 		stdout: newGrowBuf(), stderr: newGrowBuf(), events: newGrowBuf(),
 		waitCh: make(chan struct{}),
+		cwd:    cwd,
+		mgr:    m,
 	}
 	m.jobs[j.ID] = j
 	j.appendEvent()

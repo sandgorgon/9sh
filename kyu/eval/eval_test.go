@@ -348,3 +348,68 @@ func TestJobStatusFieldIsReadOnly(t *testing.T) {
 	runEnv(t, `j := %true &`, env)
 	runEnvErr(t, `j.status = "done"`, env)
 }
+
+// jobsEnvWithManager is jobsEnv but also returns the *job.Manager, for
+// tests that need to observe job creation directly (e.g. via List())
+// rather than only through kyu-visible effects.
+func jobsEnvWithManager(t *testing.T) (*Env, *job.Manager) {
+	t.Helper()
+	mgr := job.NewManager()
+	namespace := ns.New()
+	if err := namespace.BindFS(job.New(mgr), "", "/jobs", ns.Replace); err != nil {
+		t.Fatalf("bootstrap bind /jobs: %v", err)
+	}
+	return NewGlobalEnv(namespace), mgr
+}
+
+func TestForegroundExternalCallRoutesThroughJobsWhenNamespacePresent(t *testing.T) {
+	skipUnlessOnPath(t, "echo")
+	env, mgr := jobsEnvWithManager(t)
+	if len(mgr.List()) != 0 {
+		t.Fatalf("expected 0 jobs before any %%cmd, got %d", len(mgr.List()))
+	}
+	v := runEnv(t, `%echo "hello job-routed"`, env)
+	if string(v.(value.Bytes)) != "hello job-routed\n" {
+		t.Fatalf("stdout = %q, want %q", v, "hello job-routed\n")
+	}
+	if len(mgr.List()) != 1 {
+		t.Fatalf("expected 1 job after a foreground %%cmd, got %d", len(mgr.List()))
+	}
+	st := mgr.List()[0].Status()
+	if st.State != job.StateDone {
+		t.Fatalf("job state = %v, want done", st.State)
+	}
+}
+
+func TestForegroundExternalCallStdinRoutedThroughJob(t *testing.T) {
+	skipUnlessOnPath(t, "cat")
+	env := jobsEnv(t)
+	v := runEnv(t, `"piped in" | %cat`, env)
+	if string(v.(value.Bytes)) != "piped in\n" {
+		t.Fatalf("stdout = %q, want %q", v, "piped in\n")
+	}
+}
+
+func TestForegroundExternalCallBadCommandStillErrorVal(t *testing.T) {
+	env := jobsEnv(t)
+	v := run(t, `%this-command-does-not-exist-9sh`) // no namespace: direct-exec fallback path
+	if _, ok := v.(value.ErrorVal); !ok {
+		t.Fatalf("direct-exec path: want ErrorVal, got %#v", v)
+	}
+	v2 := runEnv(t, `%this-command-does-not-exist-9sh`, env) // job-routed path
+	if _, ok := v2.(value.ErrorVal); !ok {
+		t.Fatalf("job-routed path: want ErrorVal, got %#v", v2)
+	}
+}
+
+func TestForegroundExternalCallNonzeroExitIsNotAnError(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	v := runEnv(t, `%sh "-c" "exit 3"`, env)
+	if _, ok := v.(value.ErrorVal); ok {
+		t.Fatalf("a nonzero exit should be ordinary data, not ErrorVal, got %#v", v)
+	}
+	if _, ok := v.(value.Bytes); !ok {
+		t.Fatalf("want value.Bytes, got %T", v)
+	}
+}

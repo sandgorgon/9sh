@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"testing"
 	"time"
 )
@@ -202,6 +203,148 @@ func TestManagerListSortedByID(t *testing.T) {
 	list := mgr.List()
 	if len(list) != 3 || list[0].ID != a.ID || list[1].ID != b.ID || list[2].ID != c.ID {
 		t.Fatalf("List() = %v, want sorted [%d %d %d]", ids(list), a.ID, b.ID, c.ID)
+	}
+}
+
+func TestStatusCarriesCwdAndTimestamps(t *testing.T) {
+	wantCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	mgr := NewManager()
+	j := mgr.AllocSubprocess()
+	if j.Status().Cwd != wantCwd {
+		t.Fatalf("Cwd = %q, want %q", j.Status().Cwd, wantCwd)
+	}
+	if !j.Status().StartedAt.IsZero() {
+		t.Fatal("StartedAt should be zero before start()")
+	}
+
+	j.SetArgv([]string{"true"})
+	before := time.Now()
+	j.Ctl("start")
+	j.closeStdin()
+	st, err := j.WaitFor(withTimeout(t))
+	if err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	after := time.Now()
+
+	if st.StartedAt.Before(before) || st.StartedAt.After(after) {
+		t.Errorf("StartedAt = %v, want between %v and %v", st.StartedAt, before, after)
+	}
+	if st.FinishedAt.Before(st.StartedAt) || st.FinishedAt.After(after) {
+		t.Errorf("FinishedAt = %v, want between StartedAt and %v", st.FinishedAt, after)
+	}
+}
+
+// TestNonzeroExitIsDoneNotFailed locks in a real bug fix: a process
+// that runs to completion and exits nonzero (grep's "no match"
+// convention, sh's `exit N`, ...) is StateDone with that ExitCode, not
+// StateFailed — a nonzero exit is ordinary process output, not a
+// job-control failure. StateFailed is reserved for a job that never
+// got to run at all. This matters beyond job's own semantics: kyu's
+// %cmd (kyu/eval/external.go's runExternalViaJob) treats StateFailed
+// specifically as an in-stream ErrorVal, so misclassifying a plain
+// nonzero exit as failed would make ordinary shell exit codes look
+// like %cmd itself broke.
+func TestNonzeroExitIsDoneNotFailed(t *testing.T) {
+	mgr := NewManager()
+	j := mgr.AllocSubprocess()
+	j.SetArgv([]string{"sh", "-c", "exit 3"})
+	j.Ctl("start")
+	j.closeStdin()
+
+	st, err := j.WaitFor(withTimeout(t))
+	if err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	if st.State != StateDone {
+		t.Fatalf("state = %v, want done (err=%s)", st.State, st.Err)
+	}
+	if st.ExitCode == nil || *st.ExitCode != 3 {
+		t.Fatalf("exit code = %v, want 3", st.ExitCode)
+	}
+	if st.Err != "" {
+		t.Errorf("Err = %q, want empty for a plain nonzero exit", st.Err)
+	}
+}
+
+func TestSignalCapturedOnKill(t *testing.T) {
+	mgr := NewManager()
+	j := mgr.AllocSubprocess()
+	j.SetArgv([]string{"sleep", "30"})
+	j.Ctl("start")
+	j.closeStdin()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for j.Status().Pid == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := j.Ctl("kill"); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	st, err := j.WaitFor(withTimeout(t))
+	if err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	if st.State != StateKilled {
+		t.Fatalf("state = %v, want killed", st.State)
+	}
+	if st.Signal != "killed" {
+		t.Fatalf("Signal = %q, want %q (syscall.SIGKILL.String())", st.Signal, "killed")
+	}
+}
+
+func TestOnFinishFiresForEveryTerminalJob(t *testing.T) {
+	mgr := NewManager()
+	statuses := make(chan Status, 8)
+	mgr.OnFinish(func(st Status) { statuses <- st })
+
+	j1 := mgr.AllocSubprocess()
+	j1.SetArgv([]string{"true"})
+	j1.Ctl("start")
+	j1.closeStdin()
+
+	j2 := mgr.AllocInproc(func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
+		return nil
+	})
+	j2.Ctl("start")
+
+	seen := map[int]bool{}
+	deadline := time.After(3 * time.Second)
+	for len(seen) < 2 {
+		select {
+		case st := <-statuses:
+			if !st.State.Terminal() {
+				t.Fatalf("OnFinish delivered a non-terminal status: %+v", st)
+			}
+			seen[st.ID] = true
+		case <-deadline:
+			t.Fatalf("timed out waiting for OnFinish callbacks, got %d/2: %v", len(seen), seen)
+		}
+	}
+	if !seen[j1.ID] || !seen[j2.ID] {
+		t.Fatalf("expected callbacks for both jobs, got %v", seen)
+	}
+}
+
+func TestOnFinishDoesNotBlockWaitFor(t *testing.T) {
+	mgr := NewManager()
+	mgr.OnFinish(func(st Status) {
+		time.Sleep(200 * time.Millisecond) // deliberately slow
+	})
+	j := mgr.AllocSubprocess()
+	j.SetArgv([]string{"true"})
+	j.Ctl("start")
+	j.closeStdin()
+
+	start := time.Now()
+	if _, err := j.WaitFor(withTimeout(t)); err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("WaitFor took %v — a slow OnFinish callback should not block it (it runs on its own goroutine)", elapsed)
 	}
 }
 

@@ -1,0 +1,249 @@
+package parser
+
+import (
+	"testing"
+
+	"github.com/sandgorgon/9sh/kyu/ast"
+)
+
+func parseOK(t *testing.T, src string) *ast.Program {
+	t.Helper()
+	p := New(src)
+	prog := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		t.Fatalf("src %q: parse errors: %v", src, p.Errors())
+	}
+	return prog
+}
+
+func TestDefineAndAssign(t *testing.T) {
+	prog := parseOK(t, `x := 5`)
+	if len(prog.Stmts) != 1 {
+		t.Fatalf("want 1 stmt, got %d", len(prog.Stmts))
+	}
+	def, ok := prog.Stmts[0].(*ast.DefineStmt)
+	if !ok {
+		t.Fatalf("want DefineStmt, got %T", prog.Stmts[0])
+	}
+	if def.Name != "x" {
+		t.Errorf("want name x, got %s", def.Name)
+	}
+	if lit, ok := def.Val.(*ast.IntLit); !ok || lit.Val != 5 {
+		t.Errorf("want IntLit(5), got %#v", def.Val)
+	}
+}
+
+func TestFieldAssign(t *testing.T) {
+	prog := parseOK(t, `job.ctl = "stop"`)
+	as, ok := prog.Stmts[0].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("want AssignStmt, got %T", prog.Stmts[0])
+	}
+	fa, ok := as.Target.(*ast.FieldAccess)
+	if !ok {
+		t.Fatalf("want FieldAccess target, got %T", as.Target)
+	}
+	if fa.Field != "ctl" {
+		t.Errorf("want field ctl, got %s", fa.Field)
+	}
+	if sl, ok := as.Val.(*ast.StringLit); !ok || sl.Val != "stop" {
+		t.Errorf("want StringLit(stop), got %#v", as.Val)
+	}
+}
+
+func TestBinaryPrecedence(t *testing.T) {
+	prog := parseOK(t, `1 + 2 * 3`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	be, ok := es.X.(*ast.BinaryExpr)
+	if !ok {
+		t.Fatalf("want top-level BinaryExpr, got %T", es.X)
+	}
+	if _, ok := be.Left.(*ast.IntLit); !ok {
+		t.Errorf("want left=IntLit(1), got %#v", be.Left)
+	}
+	rhs, ok := be.Right.(*ast.BinaryExpr)
+	if !ok {
+		t.Fatalf("want right=BinaryExpr(2*3), got %#v", be.Right)
+	}
+	if l := rhs.Left.(*ast.IntLit).Val; l != 2 {
+		t.Errorf("want 2, got %d", l)
+	}
+}
+
+func TestRecordLiteral(t *testing.T) {
+	prog := parseOK(t, `{ name: "job1", pid: 42 }`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	rec, ok := es.X.(*ast.RecordLit)
+	if !ok {
+		t.Fatalf("want RecordLit, got %T", es.X)
+	}
+	if len(rec.Fields) != 2 {
+		t.Fatalf("want 2 fields, got %d", len(rec.Fields))
+	}
+	if rec.Fields[0].Name != "name" || rec.Fields[1].Name != "pid" {
+		t.Errorf("unexpected field names: %#v", rec.Fields)
+	}
+}
+
+func TestTableLiteral(t *testing.T) {
+	prog := parseOK(t, `[{a: 1}, {a: 2}]`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	tbl, ok := es.X.(*ast.TableLit)
+	if !ok {
+		t.Fatalf("want TableLit, got %T", es.X)
+	}
+	if len(tbl.Rows) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(tbl.Rows))
+	}
+}
+
+func TestListLiteral(t *testing.T) {
+	prog := parseOK(t, `[1, 2, 3]`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	lst, ok := es.X.(*ast.ListLit)
+	if !ok {
+		t.Fatalf("want ListLit, got %T", es.X)
+	}
+	if len(lst.Elements) != 3 {
+		t.Fatalf("want 3 elements, got %d", len(lst.Elements))
+	}
+}
+
+func TestPipeWithClosureAndFieldAccess(t *testing.T) {
+	prog := parseOK(t, `jobs | where { |j| j.status == "running" }`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	pipe, ok := es.X.(*ast.PipeExpr)
+	if !ok {
+		t.Fatalf("want PipeExpr, got %T", es.X)
+	}
+	if _, ok := pipe.Left.(*ast.Ident); !ok {
+		t.Errorf("want left=Ident(jobs), got %#v", pipe.Left)
+	}
+	call, ok := pipe.Right.(*ast.Call)
+	if !ok {
+		t.Fatalf("want right=Call, got %#v", pipe.Right)
+	}
+	if fn, ok := call.Fn.(*ast.Ident); !ok || fn.Name != "where" {
+		t.Fatalf("want fn=where, got %#v", call.Fn)
+	}
+	if len(call.Args) != 1 {
+		t.Fatalf("want 1 arg, got %d", len(call.Args))
+	}
+	clo, ok := call.Args[0].(*ast.Closure)
+	if !ok {
+		t.Fatalf("want Closure arg, got %#v", call.Args[0])
+	}
+	if len(clo.Params) != 1 || clo.Params[0] != "j" {
+		t.Errorf("want params [j], got %v", clo.Params)
+	}
+	if len(clo.Body) != 1 {
+		t.Fatalf("want 1 body stmt, got %d", len(clo.Body))
+	}
+	bodyExpr := clo.Body[0].(*ast.ExprStmt).X
+	cmp, ok := bodyExpr.(*ast.BinaryExpr)
+	if !ok {
+		t.Fatalf("want BinaryExpr body, got %#v", bodyExpr)
+	}
+	fa, ok := cmp.Left.(*ast.FieldAccess)
+	if !ok || fa.Field != "status" {
+		t.Errorf("want left=field access .status, got %#v", cmp.Left)
+	}
+}
+
+func TestChainedPipe(t *testing.T) {
+	prog := parseOK(t, `jobs | where { |j| j.ok } | count()`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	outer, ok := es.X.(*ast.PipeExpr)
+	if !ok {
+		t.Fatalf("want PipeExpr, got %T", es.X)
+	}
+	// left-associative: (jobs | where{...}) | count()
+	if _, ok := outer.Left.(*ast.PipeExpr); !ok {
+		t.Fatalf("want left to be a nested PipeExpr, got %#v", outer.Left)
+	}
+	call, ok := outer.Right.(*ast.Call)
+	if !ok {
+		t.Fatalf("want right=Call(count), got %#v", outer.Right)
+	}
+	if fn := call.Fn.(*ast.Ident); fn.Name != "count" {
+		t.Errorf("want count, got %s", fn.Name)
+	}
+}
+
+func TestExternalCall(t *testing.T) {
+	prog := parseOK(t, `%grep "foo" file`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	ext, ok := es.X.(*ast.ExternalCall)
+	if !ok {
+		t.Fatalf("want ExternalCall, got %T", es.X)
+	}
+	if ext.Name != "grep" {
+		t.Errorf("want name grep, got %s", ext.Name)
+	}
+	if len(ext.Args) != 2 {
+		t.Fatalf("want 2 args, got %d", len(ext.Args))
+	}
+}
+
+func TestExternalCallInPipe(t *testing.T) {
+	prog := parseOK(t, `jobs | %grep "foo"`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	pipe := es.X.(*ast.PipeExpr)
+	if _, ok := pipe.Right.(*ast.ExternalCall); !ok {
+		t.Fatalf("want right=ExternalCall, got %#v", pipe.Right)
+	}
+}
+
+func TestPathLiteral(t *testing.T) {
+	// 'bind' itself is a reserved keyword (lexed ahead for Phase 3's
+	// namespace verbs) and isn't given statement-level parsing yet, so
+	// this only asserts that a Path literal parses cleanly as a value.
+	prog := parseOK(t, `p := /local/bin`)
+	def := prog.Stmts[0].(*ast.DefineStmt)
+	pl, ok := def.Val.(*ast.PathLit)
+	if !ok {
+		t.Fatalf("want PathLit, got %T", def.Val)
+	}
+	if pl.Val != "/local/bin" {
+		t.Errorf("want /local/bin, got %s", pl.Val)
+	}
+}
+
+func TestIfElse(t *testing.T) {
+	prog := parseOK(t, `if x == 1 { y := 2 } else { y := 3 }`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	ie, ok := es.X.(*ast.IfExpr)
+	if !ok {
+		t.Fatalf("want IfExpr, got %T", es.X)
+	}
+	if len(ie.Then) != 1 || len(ie.Else) != 1 {
+		t.Fatalf("want 1 stmt in each branch, got then=%d else=%d", len(ie.Then), len(ie.Else))
+	}
+}
+
+func TestErrCheckPostfix(t *testing.T) {
+	prog := parseOK(t, `risky()?`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	if _, ok := es.X.(*ast.ErrCheck); !ok {
+		t.Fatalf("want ErrCheck, got %T", es.X)
+	}
+}
+
+func TestMultiStatementNewlineSeparated(t *testing.T) {
+	prog := parseOK(t, "x := 1\ny := x + 1\ny")
+	if len(prog.Stmts) != 3 {
+		t.Fatalf("want 3 stmts, got %d: %#v", len(prog.Stmts), prog.Stmts)
+	}
+}
+
+func TestDurationLiteral(t *testing.T) {
+	prog := parseOK(t, `500ms`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	d, ok := es.X.(*ast.DurationLit)
+	if !ok {
+		t.Fatalf("want DurationLit, got %T", es.X)
+	}
+	if d.Nanos != 500_000_000 {
+		t.Errorf("want 500ms in nanos, got %d", d.Nanos)
+	}
+}

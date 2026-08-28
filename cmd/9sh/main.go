@@ -9,6 +9,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/ns"
 	"github.com/sandgorgon/9sh/pane"
+	"github.com/sandgorgon/9sh/remote"
 	"github.com/sandgorgon/9sh/session"
 )
 
@@ -38,9 +40,11 @@ func main() {
 func run() int {
 	forceRepl := flag.Bool("repl", false,
 		"use the line-based REPL even when a real terminal is available (default: launch the pane multiplexer)")
+	listenAddr := flag.String("listen", "",
+		"serve this shell's own namespace over mutual TLS on addr (host:port), so another 9sh can bind it at /n/<host> and run @host{} blocks against it — see package remote")
 	flag.Parse()
 
-	env, recorder := bootstrap()
+	env, recorder := bootstrap(*listenAddr)
 	if recorder != nil {
 		defer recorder.Close()
 	}
@@ -77,7 +81,7 @@ func run() int {
 // isn't available this run (no 9vcs on PATH, no writable home
 // directory, ...) — that's never fatal to starting the shell at all,
 // only to the history feature itself.
-func bootstrap() (*eval.Env, *session.Recorder) {
+func bootstrap(listenAddr string) (*eval.Env, *session.Recorder) {
 	namespace := ns.New()
 	mgr := job.NewManager()
 	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
@@ -93,6 +97,16 @@ func bootstrap() (*eval.Env, *session.Recorder) {
 	if cwd, err := os.Getwd(); err == nil {
 		if fs, err := dirfs.New(cwd); err == nil {
 			namespace.BindFS(fs, "", "/local", ns.Replace)
+		}
+	}
+
+	if listenAddr != "" {
+		// Serving is fire-and-forget for the shell's own lifetime — no
+		// separate shutdown hook needed, since the process exiting tears
+		// down the listener along with everything else.
+		if _, err := remote.Listen(context.Background(), listenAddr, namespace); err != nil {
+			fmt.Fprintln(os.Stderr, "9sh: -listen:", err)
+			os.Exit(1)
 		}
 	}
 

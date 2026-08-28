@@ -120,6 +120,21 @@ func (u NSUnion) String() string {
 	return b.String()
 }
 
+// MountHandle is what dial(addr) returns: an unbound remote filesystem
+// root, ready for `bind` to graft into the local namespace (bind detects
+// this kind and routes to ns.Namespace.BindFS instead of BindPath — see
+// kyu/eval/namespace.go's evalBindStmt). FS is `any` (concretely a
+// server.FileSystem, from package remote) so this package keeps its
+// documented independence from the namespace/9P machinery; only kyu/eval
+// ever type-asserts it back out.
+type MountHandle struct {
+	Addr string
+	FS   any
+}
+
+func (MountHandle) Kind() string     { return "mount" }
+func (m MountHandle) String() string { return fmt.Sprintf("<mount %s>", m.Addr) }
+
 // Record is an ordered field map. Field order is preserved for stable
 // printing/serialization; lookups are O(1) via the index map. A field may
 // also be live-backed (see FieldBacking) instead of holding a plain value.

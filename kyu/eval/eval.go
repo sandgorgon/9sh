@@ -143,6 +143,8 @@ func evalExpr(e ast.Expr, env *Env) (value.Value, error) {
 		return evalErrCheck(x, env)
 	case *ast.IfExpr:
 		return evalIf(x, env)
+	case *ast.AtHost:
+		return evalAtHost(x, env)
 	case *ast.Background:
 		return evalBackground(x, env)
 	default:

@@ -11,9 +11,10 @@ import (
 // way every other language keeps one thing (here, "what /jobs resolves
 // to") outside the scope-per-block model that vars/Define/Set exist for.
 type Env struct {
-	vars   map[string]value.Value
-	parent *Env
-	ns     *ns.Namespace
+	vars    map[string]value.Value
+	parent  *Env
+	ns      *ns.Namespace
+	jobRoot []string // nil = inherit from parent; see JobRoot
 }
 
 func NewEnv(parent *Env) *Env {
@@ -28,6 +29,24 @@ func (e *Env) Namespace() *ns.Namespace {
 		n = n.parent
 	}
 	return n.ns
+}
+
+// JobRoot returns the namespace path prefix job creation should use —
+// ["jobs"] normally, or ["n", host, "jobs"] inside an `@host { ... }`
+// block (see evalAtHost), searching outward through parents the same way
+// Get does. This is how `@host{}` desugars to "no separate remote-job
+// protocol" per the design doc: evalBackground and runExternalViaJob
+// don't know they're running inside an @host block at all, they just ask
+// for the current job root.
+func (e *Env) JobRoot() []string {
+	n := e
+	for n != nil {
+		if n.jobRoot != nil {
+			return n.jobRoot
+		}
+		n = n.parent
+	}
+	return []string{"jobs"}
 }
 
 // Get looks up name in this scope, then outward through parents.

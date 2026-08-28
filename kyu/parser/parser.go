@@ -300,6 +300,8 @@ func (p *Parser) parsePrefix() ast.Expr {
 		return p.parseExternalCall()
 	case token.IF:
 		return p.parseIfExpr()
+	case token.AT:
+		return p.parseAtHost()
 	default:
 		p.errorf("unexpected token %s(%q)", p.cur.Kind, p.cur.Literal)
 		return nil
@@ -560,6 +562,29 @@ func (p *Parser) parseIfExpr() ast.Expr {
 		}
 	}
 	return ie
+}
+
+// parseAtHost parses `@host { ... }`. host is a bareword identifier
+// directly after '@', the same treatment %cmd's external command name
+// gets after '%' — exempt from the usual bareword-ambiguity concerns
+// since nothing infix-operator-shaped can follow '@' at this position.
+func (p *Parser) parseAtHost() ast.Expr {
+	tok := p.cur // '@'
+	p.next()     // consume '@' -> host ident
+	if p.cur.Kind != token.IDENT {
+		p.errorf("expected a host name after '@', got %s(%q)", p.cur.Kind, p.cur.Literal)
+		return nil
+	}
+	host := p.cur.Literal
+	if !p.expectPeekOrCur(token.LBRACE) {
+		return nil
+	}
+	p.next() // consume '{'
+	body := p.parseBlock()
+	if !p.expectPeekOrCur(token.RBRACE) {
+		return nil
+	}
+	return &ast.AtHost{Tok: tok, Host: host, Body: body}
 }
 
 func (p *Parser) parseInfix(left ast.Expr) ast.Expr {

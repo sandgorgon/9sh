@@ -51,7 +51,7 @@ func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, er
 	}
 
 	if namespace := env.Namespace(); namespace != nil {
-		return runExternalViaJob(namespace, x.Name, args, in)
+		return runExternalViaJob(namespace, env.JobRoot(), x.Name, args, in)
 	}
 	return runExternalDirect(x.Name, args, in)
 }
@@ -91,15 +91,15 @@ type jobWaitStatus struct {
 // becomes a value.ErrorVal, matching runExternalDirect's
 // exec.Start()-failure handling exactly, so kyu code can't tell which
 // path ran from a bad-command-name failure alone.
-func runExternalViaJob(namespace *ns.Namespace, name string, args []string, in value.Value) (value.Value, error) {
+func runExternalViaJob(namespace *ns.Namespace, jobRoot []string, name string, args []string, in value.Value) (value.Value, error) {
 	ctx := context.Background()
 	root, err := namespace.Attach(ctx, "9sh", "")
 	if err != nil {
 		return nil, err
 	}
-	clone, err := openFile(ctx, root, p9.OREAD, "jobs", "clone")
+	clone, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, "clone")...)
 	if err != nil {
-		return nil, fmt.Errorf("%%%s: %w (is /jobs bound?)", name, err)
+		return nil, fmt.Errorf("%%%s: %w (is %s bound?)", name, err, jobPathStr(jobRoot))
 	}
 	idBytes, err := readAllFile(ctx, clone)
 	if err != nil {
@@ -109,7 +109,7 @@ func runExternalViaJob(namespace *ns.Namespace, name string, args []string, in v
 	id := strings.TrimSpace(string(idBytes))
 
 	argv := append([]string{name}, args...)
-	argvFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "argv")
+	argvFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "argv")...)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func runExternalViaJob(namespace *ns.Namespace, name string, args []string, in v
 	}
 	argvFile.Close()
 
-	ctlFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "ctl")
+	ctlFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "ctl")...)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func runExternalViaJob(namespace *ns.Namespace, name string, args []string, in v
 	// stdin-forwarding goroutine begins draining it — a write attempted
 	// before ctl start would deadlock waiting for a reader that doesn't
 	// exist yet.
-	stdinFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "stdin")
+	stdinFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "stdin")...)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func runExternalViaJob(namespace *ns.Namespace, name string, args []string, in v
 	}
 	stdinFile.Close() // EOF regardless of whether anything was written — see job/job_test.go's note
 
-	waitFile, err := openFile(ctx, root, p9.OREAD, "jobs", id, "wait")
+	waitFile, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, id, "wait")...)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +161,7 @@ func runExternalViaJob(namespace *ns.Namespace, name string, args []string, in v
 		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %s", name, st.Err)}, nil
 	}
 
-	stdoutFile, err := openFile(ctx, root, p9.OREAD, "jobs", id, "stdout")
+	stdoutFile, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, id, "stdout")...)
 	if err != nil {
 		return nil, err
 	}

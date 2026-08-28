@@ -1,10 +1,12 @@
 package eval
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
 	"github.com/sandgorgon/9sh/kyu/value"
+	"github.com/sandgorgon/9sh/remote"
 )
 
 // builtins are kyu's pipe-stage functions. By convention (see
@@ -21,6 +23,31 @@ var builtins = map[string]BuiltinFn{
 	"count":    biCount,
 	"error":    biError,
 	"wait":     biWait,
+	"dial":     biDial,
+}
+
+// biDial connects to a remote 9sh/9P peer over mutual TLS (see package
+// remote's doc comment for the trust model) and returns a MountHandle —
+// bind's job, not dial's, is to actually graft it into the namespace
+// (`bind dial("host:port"), "/n/host"`), matching how namespace verbs stay
+// keywords while everything else, dial included, is an ordinary function.
+// A connection failure is an in-stream ErrorVal, not a hard Go error,
+// matching runExternal's "a bad exec becomes a value flowing through the
+// pipeline" convention — dialing a peer that's down or that refuses this
+// identity is exactly that kind of ordinary, expected failure.
+func biDial(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("dial: expected 1 argument (an address), got %d", len(args))
+	}
+	addr, ok := args[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("dial: expected a string address, got %s", args[0].Kind())
+	}
+	conn, err := remote.Dial(context.Background(), string(addr))
+	if err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("dial: %v", err)}, nil
+	}
+	return value.MountHandle{Addr: string(addr), FS: conn.FS()}, nil
 }
 
 func lastAsList(args []value.Value, fnName string) (*value.List, []value.Value, error) {

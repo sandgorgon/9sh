@@ -27,10 +27,6 @@ func evalBindStmt(st *ast.BindStmt, env *Env) (value.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	srcPaths, err := pathsOf(srcVal)
-	if err != nil {
-		return nil, fmt.Errorf("bind: source: %w", err)
-	}
 	dstVal, err := evalExpr(st.Dst, env)
 	if err != nil {
 		return nil, err
@@ -42,6 +38,27 @@ func evalBindStmt(st *ast.BindStmt, env *Env) (value.Value, error) {
 	disp, err := parseDisposition(st.Disposition)
 	if err != nil {
 		return nil, err
+	}
+
+	// A dial(addr) result is an unbound remote filesystem root, not a path
+	// already reachable in the local namespace — it goes through BindFS
+	// (the same Go-bootstrap-shaped graft /jobs and /local use), not
+	// BindPath, which only ever resolves srcPaths by walking the
+	// namespace that already exists.
+	if mh, ok := srcVal.(value.MountHandle); ok {
+		fs, ok := mh.FS.(server.FileSystem)
+		if !ok {
+			return nil, fmt.Errorf("bind: mount handle for %s has no usable filesystem", mh.Addr)
+		}
+		if err := namespace.BindFS(fs, "", string(dstPath), disp); err != nil {
+			return nil, err
+		}
+		return value.Null{}, nil
+	}
+
+	srcPaths, err := pathsOf(srcVal)
+	if err != nil {
+		return nil, fmt.Errorf("bind: source: %w", err)
 	}
 	if err := namespace.BindPath(context.Background(), srcPaths, string(dstPath), disp); err != nil {
 		return nil, err
@@ -91,6 +108,7 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 		return nil, fmt.Errorf("'&': no namespace attached to this environment (is /jobs bound?)")
 	}
 	ctx := context.Background()
+	jobRoot := env.JobRoot()
 
 	argv := make([]string, len(x.Call.Args)+1)
 	argv[0] = x.Call.Name
@@ -110,9 +128,9 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	clone, err := openFile(ctx, root, p9.OREAD, "jobs", "clone")
+	clone, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, "clone")...)
 	if err != nil {
-		return nil, fmt.Errorf("'&': %w (is /jobs bound?)", err)
+		return nil, fmt.Errorf("'&': %w (is %s bound?)", err, jobPathStr(jobRoot))
 	}
 	idBytes, err := readAllFile(ctx, clone)
 	if err != nil {
@@ -128,13 +146,13 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	// (spawned because Cmd.Stdin here isn't an *os.File) would block
 	// Wait() forever regardless of whether the child even reads stdin;
 	// see job/job_test.go's note on the same issue.
-	stdinFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "stdin")
+	stdinFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "stdin")...)
 	if err != nil {
 		return nil, err
 	}
 	stdinFile.Close()
 
-	argvFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "argv")
+	argvFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "argv")...)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +161,7 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	}
 	argvFile.Close()
 
-	ctlFile, err := openFile(ctx, root, p9.OWRITE, "jobs", id, "ctl")
+	ctlFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "ctl")...)
 	if err != nil {
 		return nil, err
 	}
@@ -152,11 +170,25 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	}
 	ctlFile.Close()
 
-	base, err := walkAll(ctx, root, []string{"jobs", id})
+	base, err := walkAll(ctx, root, jobPath(jobRoot, id))
 	if err != nil {
 		return nil, err
 	}
 	return buildJobRecord(ctx, base)
+}
+
+// jobPath appends parts to a copy of jobRoot — never mutating or aliasing
+// jobRoot's backing array, since it's shared across every job created in
+// the same scope (Env.JobRoot returns the same slice to every caller).
+func jobPath(jobRoot []string, parts ...string) []string {
+	out := make([]string, 0, len(jobRoot)+len(parts))
+	out = append(out, jobRoot...)
+	out = append(out, parts...)
+	return out
+}
+
+func jobPathStr(jobRoot []string) string {
+	return "/" + strings.Join(jobRoot, "/")
 }
 
 func openFile(ctx context.Context, root server.File, mode p9.Mode, parts ...string) (server.File, error) {

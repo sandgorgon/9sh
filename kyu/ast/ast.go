@@ -169,6 +169,22 @@ type Background struct {
 	Call *ExternalCall
 }
 
+// AtHost is `@host { ... }` — runs the block's job creation (both `&` and
+// foreground %cmd) against /n/<host>'s namespace instead of the local one.
+// Per the design doc, this is the whole of "proxy jobs": no separate
+// remote-job protocol exists or is needed, since /n/<host>/jobs/<id>/*
+// already are the remote job's real files once host is bound (see
+// `bind`) — evalAtHost just re-roots job creation for the block's
+// duration (see Env.JobRoot).
+type AtHost struct {
+	Tok  token.Token // '@'
+	Host string
+	Body []Stmt
+}
+
+func (*AtHost) exprNode() {}
+func (*AtHost) node()     {}
+
 func (*Ident) exprNode()        {}
 func (*IntLit) exprNode()       {}
 func (*FloatLit) exprNode()     {}

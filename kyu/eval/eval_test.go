@@ -1,35 +1,59 @@
 package eval
 
 import (
+	"context"
 	"os/exec"
 	"testing"
 
+	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/kyu/value"
+	"github.com/sandgorgon/9sh/ns"
 )
 
 func run(t *testing.T, src string) value.Value {
+	t.Helper()
+	return runEnv(t, src, NewGlobalEnv(nil))
+}
+
+func runErr(t *testing.T, src string) error {
+	t.Helper()
+	return runEnvErr(t, src, NewGlobalEnv(nil))
+}
+
+// jobsEnv is a global env with /jobs bound, the same bootstrap
+// cmd/9sh's main does — for tests exercising bind/background/live fields.
+func jobsEnv(t *testing.T) *Env {
+	t.Helper()
+	namespace := ns.New()
+	if err := namespace.BindFS(job.New(job.NewManager()), "", "/jobs", ns.Replace); err != nil {
+		t.Fatalf("bootstrap bind /jobs: %v", err)
+	}
+	return NewGlobalEnv(namespace)
+}
+
+func runEnv(t *testing.T, src string, env *Env) value.Value {
 	t.Helper()
 	p := parser.New(src)
 	prog := p.ParseProgram()
 	if len(p.Errors()) > 0 {
 		t.Fatalf("src %q: parse errors: %v", src, p.Errors())
 	}
-	v, err := Eval(prog, NewGlobalEnv())
+	v, err := Eval(prog, env)
 	if err != nil {
 		t.Fatalf("src %q: eval error: %v", src, err)
 	}
 	return v
 }
 
-func runErr(t *testing.T, src string) error {
+func runEnvErr(t *testing.T, src string, env *Env) error {
 	t.Helper()
 	p := parser.New(src)
 	prog := p.ParseProgram()
 	if len(p.Errors()) > 0 {
 		t.Fatalf("src %q: parse errors: %v", src, p.Errors())
 	}
-	_, err := Eval(prog, NewGlobalEnv())
+	_, err := Eval(prog, env)
 	if err == nil {
 		t.Fatalf("src %q: expected an eval error, got none", src)
 	}
@@ -225,4 +249,102 @@ func TestExternalCallBadCommand(t *testing.T) {
 	if _, ok := v.(value.ErrorVal); !ok {
 		t.Fatalf("want ErrorVal for a missing command, got %#v", v)
 	}
+}
+
+func skipUnlessOnPath(t *testing.T, name string) {
+	t.Helper()
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("%s not on PATH", name)
+	}
+}
+
+func TestKyuNamespaceUnionExpr(t *testing.T) {
+	v := run(t, `a := /local/bin
+b := /n/host/bin
+a + b`)
+	u, ok := v.(value.NSUnion)
+	if !ok {
+		t.Fatalf("want NSUnion, got %T", v)
+	}
+	if len(u.Paths) != 2 || u.Paths[0] != "/local/bin" || u.Paths[1] != "/n/host/bin" {
+		t.Fatalf("got %v", u)
+	}
+}
+
+func TestBackgroundWithoutNamespaceErrors(t *testing.T) {
+	runErr(t, `%true &`)
+}
+
+func TestBindWithoutNamespaceErrors(t *testing.T) {
+	runErr(t, `bind /a, /b`)
+}
+
+func TestKyuBindGraftsExistingNamespacePath(t *testing.T) {
+	env := jobsEnv(t)
+	runEnv(t, `bind /jobs, /j2`, env)
+
+	namespace := env.Namespace()
+	ctx := context.Background()
+	root, err := namespace.Attach(ctx, "u", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if _, err := walkAll(ctx, root, []string{"j2", "clone"}); err != nil {
+		t.Fatalf("walk /j2/clone after bind: %v", err)
+	}
+}
+
+func TestBackgroundJobLifecycle(t *testing.T) {
+	skipUnlessOnPath(t, "true")
+	env := jobsEnv(t)
+	v := runEnv(t, `j := %true &
+j | wait
+j`, env)
+	rec, ok := v.(*value.Record)
+	if !ok {
+		t.Fatalf("want a job record, got %T", v)
+	}
+	status, ok := rec.Get("status")
+	if !ok {
+		t.Fatal("job record missing status field")
+	}
+	st, ok := status.(*value.Record)
+	if !ok {
+		t.Fatalf("want status to decode as a record, got %#v", status)
+	}
+	state, _ := st.Get("state")
+	if state.(value.String) != "done" {
+		t.Fatalf("state = %v, want done", state)
+	}
+}
+
+func TestBackgroundJobKillViaCtlField(t *testing.T) {
+	skipUnlessOnPath(t, "sleep")
+	env := jobsEnv(t)
+	// "start" returns only once the process has actually been exec'd (or
+	// failed to start) — see job.go's start(), which calls cmd.Start()
+	// synchronously — so there's no race needing a retry/sleep here.
+	runEnv(t, `j := %sleep 5 &`, env)
+	runEnv(t, `j.ctl = "kill"`, env)
+	v := runEnv(t, `j | wait
+j.status`, env)
+	st := v.(*value.Record)
+	state, _ := st.Get("state")
+	if state.(value.String) != "killed" {
+		t.Fatalf("state = %v, want killed", state)
+	}
+}
+
+func TestJobCtlFieldRejectsNonString(t *testing.T) {
+	skipUnlessOnPath(t, "true")
+	env := jobsEnv(t)
+	runEnv(t, `j := %true &`, env)
+	runEnvErr(t, `j.ctl = 5`, env)
+}
+
+func TestJobStatusFieldIsReadOnly(t *testing.T) {
+	skipUnlessOnPath(t, "true")
+	env := jobsEnv(t)
+	runEnv(t, `j := %true &`, env)
+	runEnvErr(t, `j.status = "done"`, env)
 }

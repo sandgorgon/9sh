@@ -63,10 +63,13 @@ func (p *Parser) skipTerminators() {
 }
 
 func (p *Parser) parseStmt() ast.Stmt {
+	if p.cur.Kind == token.BIND {
+		return p.parseBindStmt()
+	}
 	if p.cur.Kind == token.IDENT && p.peek.Kind == token.DEFINE {
 		return p.parseDefineStmt()
 	}
-	expr := p.parseExpr(LOWEST)
+	expr := p.parseValueExpr()
 	if expr == nil {
 		return nil
 	}
@@ -80,7 +83,7 @@ func (p *Parser) parseStmt() ast.Stmt {
 		p.next() // cur: expr's last token -> '='
 		tok := p.cur
 		p.next() // cur: '=' -> start of RHS
-		val := p.parseExpr(LOWEST)
+		val := p.parseValueExpr()
 		return &ast.AssignStmt{Tok: tok, Target: expr, Val: val}
 	}
 	return &ast.ExprStmt{X: expr}
@@ -99,8 +102,73 @@ func (p *Parser) parseDefineStmt() ast.Stmt {
 	p.next() // consume ident
 	tok := p.cur
 	p.next() // consume :=
-	val := p.parseExpr(LOWEST)
+	val := p.parseValueExpr()
 	return &ast.DefineStmt{Tok: tok, Name: name.Literal, Val: val}
+}
+
+// parseValueExpr parses one expression and, if it's immediately followed
+// by '&', wraps it as a Background — kyu's job-backgrounding sugar. This
+// is checked here (at every place a statement's value-producing
+// expression is parsed: a define's RHS, an assignment's RHS, and a bare
+// expression statement) rather than as a general infix/postfix operator,
+// since '&' is a statement-shaped verb ("run this as a job"), not
+// something that composes inside a larger expression.
+func (p *Parser) parseValueExpr() ast.Expr {
+	expr := p.parseExpr(LOWEST)
+	if expr == nil {
+		return nil
+	}
+	if p.peek.Kind != token.AMP {
+		return expr
+	}
+	ext, ok := expr.(*ast.ExternalCall)
+	if !ok {
+		p.errorf("'&' (background) is only supported on an external command call (%%cmd), got %T", expr)
+		return nil
+	}
+	p.next() // cur: expr's last token -> '&'
+	return &ast.Background{Tok: p.cur, Call: ext}
+}
+
+// parseBindStmt parses `bind SRC, DST[, before|after|replace]`. SRC and
+// DST are comma-separated, not bare-whitespace-juxtaposed as the design
+// doc first sketched: the lexer decides '/' vs division from only the
+// preceding token, and a DST path starting with '/' right after SRC ends
+// in an identifier (e.g. a namespace-union `a + b`) would otherwise
+// re-lex as division (`b / dst`) — exactly Phase 1's PATH-vs-division
+// issue one level removed. A comma is never ambiguous with anything, and
+// matches how every other multi-value kyu construct (record/list/call
+// args) already separates elements.
+func (p *Parser) parseBindStmt() ast.Stmt {
+	tok := p.cur
+	p.next() // consume 'bind'
+	src := p.parseExpr(LOWEST)
+	if src == nil {
+		return nil
+	}
+	if !p.expectPeekOrCur(token.COMMA) {
+		return nil
+	}
+	p.next() // consume ',' -> start of DST
+	dst := p.parseExpr(LOWEST)
+	if dst == nil {
+		return nil
+	}
+	disp := "replace"
+	if p.peek.Kind == token.COMMA {
+		p.next() // cur: dst's last token -> ','
+		p.next() // consume ',' -> disposition ident
+		if p.cur.Kind != token.IDENT || !isDispositionWord(p.cur.Literal) {
+			p.errorf("expected a disposition (before/after/replace), got %s(%q)", p.cur.Kind, p.cur.Literal)
+			return nil
+		}
+		disp = p.cur.Literal
+	}
+	return &ast.BindStmt{Tok: tok, Src: src, Dst: dst, Disposition: disp}
+}
+
+func isDispositionWord(s string) bool {
+	return s == "before" || s == "after" || s == "replace"
 }
 
 // parseBlock parses statements up to (not consuming) a closing '}'.
@@ -408,6 +476,20 @@ func (p *Parser) parseListOrTableLit() ast.Expr {
 	return &ast.ListLit{Tok: tok, Elements: elems}
 }
 
+// endsExternalCallArgs reports whether k can never start another %cmd
+// argument — an allowlist-shaped check (list what legitimately continues
+// argument parsing... inverted to what stops it) so a new operator like
+// '&' doesn't silently get swallowed as an argument the way it did before
+// this helper existed.
+func endsExternalCallArgs(k token.Kind) bool {
+	switch k {
+	case token.NEWLINE, token.SEMI, token.EOF, token.PIPE, token.AMP,
+		token.RPAREN, token.RBRACE, token.RBRACKET, token.COMMA:
+		return true
+	}
+	return false
+}
+
 func (p *Parser) parseExternalCall() ast.Expr {
 	tok := p.cur
 	p.next() // consume '%'
@@ -417,9 +499,7 @@ func (p *Parser) parseExternalCall() ast.Expr {
 	}
 	name := p.cur.Literal
 	call := &ast.ExternalCall{Tok: tok, Name: name}
-	for p.peek.Kind != token.NEWLINE && p.peek.Kind != token.SEMI && p.peek.Kind != token.EOF &&
-		p.peek.Kind != token.PIPE && p.peek.Kind != token.RPAREN && p.peek.Kind != token.RBRACE &&
-		p.peek.Kind != token.RBRACKET && p.peek.Kind != token.COMMA {
+	for !endsExternalCallArgs(p.peek.Kind) {
 		p.next()
 		arg := p.parsePrefix()
 		if arg == nil {

@@ -158,6 +158,17 @@ type IfExpr struct {
 	Else []Stmt // nil if no else clause
 }
 
+// Background is `%cmd args... &`: starts an external command as a job
+// and evaluates to a live job record (its fields backed by the job's
+// namespace files) rather than blocking for output like a bare
+// ExternalCall. Scoped to ExternalCall only for now — backgrounding an
+// arbitrary kyu call would mean a native-inproc job, which has no kyu
+// syntax yet (see kyu/eval's job wiring).
+type Background struct {
+	Tok  token.Token // the '&'
+	Call *ExternalCall
+}
+
 func (*Ident) exprNode()        {}
 func (*IntLit) exprNode()       {}
 func (*FloatLit) exprNode()     {}
@@ -178,6 +189,7 @@ func (*BinaryExpr) exprNode()   {}
 func (*UnaryExpr) exprNode()    {}
 func (*ErrCheck) exprNode()     {}
 func (*IfExpr) exprNode()       {}
+func (*Background) exprNode()   {}
 
 func (*Ident) node()        {}
 func (*IntLit) node()       {}
@@ -199,6 +211,7 @@ func (*BinaryExpr) node()   {}
 func (*UnaryExpr) node()    {}
 func (*ErrCheck) node()     {}
 func (*IfExpr) node()       {}
+func (*Background) node()   {}
 
 // ---- statements ----
 
@@ -222,10 +235,24 @@ type AssignStmt struct {
 	Val    Expr
 }
 
+// BindStmt is `bind SRC, DST[, before|after|replace]` — a namespace verb,
+// a real keyword (not an ordinary function) per kyu's design: it mutates
+// the calling process's own namespace. Disposition defaults to "replace"
+// when omitted. Src may be a namespace-union expression (`a + b`),
+// evaluating to an NSUnion rather than a single Path.
+type BindStmt struct {
+	Tok         token.Token
+	Src         Expr
+	Dst         Expr
+	Disposition string // "before" | "after" | "replace"
+}
+
 func (*ExprStmt) stmtNode()   {}
 func (*DefineStmt) stmtNode() {}
 func (*AssignStmt) stmtNode() {}
+func (*BindStmt) stmtNode()   {}
 
 func (*ExprStmt) node()   {}
 func (*DefineStmt) node() {}
 func (*AssignStmt) node() {}
+func (*BindStmt) node()   {}

@@ -20,6 +20,7 @@ var builtins = map[string]BuiltinFn{
 	"first":    biFirst,
 	"count":    biCount,
 	"error":    biError,
+	"wait":     biWait,
 }
 
 func lastAsList(args []value.Value, fnName string) (*value.List, []value.Value, error) {
@@ -295,4 +296,24 @@ func biError(args []value.Value) (value.Value, error) {
 		return nil, fmt.Errorf("error: message argument must be a string, got %s", args[0].Kind())
 	}
 	return value.ErrorVal{Msg: string(s)}, nil
+}
+
+// biWait implements `j | wait`. It's deliberately just a record-field
+// read: a job record's "wait" field is live-backed by the namespace's
+// wait file, whose ReadField blocks until the job is terminal (see
+// kyu/eval/namespace.go's buildJobRecord) — `j | wait` and `j.wait` are
+// two spellings of the same operation, not two mechanisms.
+func biWait(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("wait: expected exactly 1 argument (the job), got %d", len(args))
+	}
+	rec, ok := args[0].(*value.Record)
+	if !ok {
+		return nil, fmt.Errorf("wait: expected a job record, got %s", args[0].Kind())
+	}
+	v, ok := rec.Get("wait")
+	if !ok {
+		return nil, fmt.Errorf("wait: record has no \"wait\" field")
+	}
+	return v, nil
 }

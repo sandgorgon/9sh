@@ -87,12 +87,47 @@ type ErrorVal struct {
 func (ErrorVal) Kind() string     { return "error" }
 func (e ErrorVal) String() string { return "error: " + e.Msg }
 
+// FieldBacking makes a record field live-backed by something outside the
+// record itself — a namespace file, per kyu's core idea that a record and
+// namespace state are the same concept: reading job.status re-reads the
+// backing fresh, writing job.ctl = "stop" writes through. The value
+// package only defines the hook; kyu/eval supplies the concrete
+// namespace-file implementation, keeping this package free of any
+// dependency on the namespace/9P machinery.
+type FieldBacking interface {
+	ReadField() (Value, error)
+	WriteField(Value) error
+}
+
+// NSUnion is a namespace-union expression's value — `ns := /a + /b` — an
+// ordered list of namespace paths to search in order, as `bind`'s source.
+// It's kyu-level syntax sugar over ns.Namespace.BindPath's multi-source
+// form, not a namespace concept of its own: nothing resolves a union
+// until it's actually bound somewhere.
+type NSUnion struct {
+	Paths []Path
+}
+
+func (NSUnion) Kind() string { return "nsunion" }
+func (u NSUnion) String() string {
+	var b strings.Builder
+	for i, p := range u.Paths {
+		if i > 0 {
+			b.WriteString(" + ")
+		}
+		b.WriteString(string(p))
+	}
+	return b.String()
+}
+
 // Record is an ordered field map. Field order is preserved for stable
-// printing/serialization; lookups are O(1) via the index map.
+// printing/serialization; lookups are O(1) via the index map. A field may
+// also be live-backed (see FieldBacking) instead of holding a plain value.
 type Record struct {
-	keys  []string
-	vals  map[string]Value
-	index map[string]int
+	keys    []string
+	vals    map[string]Value
+	index   map[string]int
+	backing map[string]FieldBacking
 }
 
 func NewRecord() *Record {
@@ -123,25 +158,69 @@ func (r *Record) String() string {
 		}
 		b.WriteString(k)
 		b.WriteString(": ")
-		b.WriteString(r.vals[k].String())
+		v, _ := r.Get(k)
+		b.WriteString(v.String())
 	}
 	b.WriteString("}")
 	return b.String()
 }
 
-// Get returns the field's value and whether it was present.
+// Get returns the field's value and whether it was present. A live-backed
+// field is re-read fresh on every call; a failed read surfaces as an
+// ErrorVal (see the type's own doc comment on kyu's in-stream error
+// model), not a Go-level error — Get always succeeds once the field
+// exists.
 func (r *Record) Get(name string) (Value, bool) {
+	if b, ok := r.backing[name]; ok {
+		v, err := b.ReadField()
+		if err != nil {
+			return ErrorVal{Msg: err.Error()}, true
+		}
+		return v, true
+	}
 	v, ok := r.vals[name]
 	return v, ok
 }
 
-// Set adds or overwrites a field, preserving original insertion order on overwrite.
+// Set adds or overwrites a plain (non-backed) field, preserving original
+// insertion order on overwrite. Setting a name that's currently
+// live-backed replaces the backing with a plain value — used by internal
+// construction paths (record literals, select/group-by output) that
+// never target an already-backed record; assignment from kyu source
+// (`rec.field = val`) goes through SetField instead, which writes through
+// a backing rather than silently detaching it.
 func (r *Record) Set(name string, v Value) {
 	if _, ok := r.index[name]; !ok {
 		r.index[name] = len(r.keys)
 		r.keys = append(r.keys, name)
 	}
+	delete(r.backing, name)
 	r.vals[name] = v
+}
+
+// SetField assigns to a field the way kyu's `rec.field = val` does: a
+// live-backed field writes through (and reports a write failure as a real
+// error, since an assignment statement can't silently drop it the way a
+// falsy read can); anything else is a plain Set.
+func (r *Record) SetField(name string, v Value) error {
+	if b, ok := r.backing[name]; ok {
+		return b.WriteField(v)
+	}
+	r.Set(name, v)
+	return nil
+}
+
+// SetBacking makes name a live-backed field.
+func (r *Record) SetBacking(name string, b FieldBacking) {
+	if _, ok := r.index[name]; !ok {
+		r.index[name] = len(r.keys)
+		r.keys = append(r.keys, name)
+	}
+	if r.backing == nil {
+		r.backing = map[string]FieldBacking{}
+	}
+	r.backing[name] = b
+	delete(r.vals, name)
 }
 
 // Keys returns field names in insertion order.
@@ -151,10 +230,17 @@ func (r *Record) Keys() []string {
 	return out
 }
 
-// Clone returns a shallow copy (field values are not deep-copied).
+// Clone returns a shallow copy: plain values are copied as-is, and a
+// live-backed field stays backed by the same FieldBacking (not
+// snapshotted to its current value) — cloning doesn't sever the live
+// connection.
 func (r *Record) Clone() *Record {
 	c := NewRecord()
 	for _, k := range r.keys {
+		if b, ok := r.backing[k]; ok {
+			c.SetBacking(k, b)
+			continue
+		}
 		c.Set(k, r.vals[k])
 	}
 	return c
@@ -242,8 +328,9 @@ func Equal(a, b Value) bool {
 			return false
 		}
 		for _, k := range av.keys {
+			avv, _ := av.Get(k)
 			bvv, ok := bv.Get(k)
-			if !ok || !Equal(av.vals[k], bvv) {
+			if !ok || !Equal(avv, bvv) {
 				return false
 			}
 		}

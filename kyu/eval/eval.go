@@ -7,13 +7,18 @@ import (
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/kyu/value"
+	"github.com/sandgorgon/9sh/ns"
 )
 
 // NewGlobalEnv returns a root Env pre-populated with the built-in
 // pipe-stage functions, so they resolve through ordinary Ident lookup —
 // kyu treats where/select/etc. as plain functions, not keywords.
-func NewGlobalEnv() *Env {
+// namespace may be nil (bind and job-backgrounding then fail with a
+// clear error instead of a nil-pointer panic) for callers — mainly
+// tests — that don't need either.
+func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env := NewEnv(nil)
+	env.ns = namespace
 	for name, fn := range builtins {
 		env.Define(name, &Builtin{Name: name, Fn: fn})
 	}
@@ -50,6 +55,8 @@ func evalStmt(s ast.Stmt, env *Env) (value.Value, error) {
 		return value.Null{}, nil
 	case *ast.AssignStmt:
 		return evalAssign(st, env)
+	case *ast.BindStmt:
+		return evalBindStmt(st, env)
 	default:
 		return nil, fmt.Errorf("eval: unknown statement type %T", s)
 	}
@@ -74,7 +81,9 @@ func evalAssign(st *ast.AssignStmt, env *Env) (value.Value, error) {
 		if !ok {
 			return nil, fmt.Errorf("cannot assign field %q on a %s", tgt.Field, recvVal.Kind())
 		}
-		rec.Set(tgt.Field, v)
+		if err := rec.SetField(tgt.Field, v); err != nil {
+			return nil, fmt.Errorf("cannot assign field %q: %w", tgt.Field, err)
+		}
 	default:
 		return nil, fmt.Errorf("eval: invalid assignment target %T", st.Target)
 	}
@@ -127,6 +136,8 @@ func evalExpr(e ast.Expr, env *Env) (value.Value, error) {
 		return evalErrCheck(x, env)
 	case *ast.IfExpr:
 		return evalIf(x, env)
+	case *ast.Background:
+		return evalBackground(x, env)
 	default:
 		return nil, fmt.Errorf("eval: unknown expression type %T", e)
 	}
@@ -341,7 +352,37 @@ func evalComparison(op token.Kind, l, r value.Value) (value.Value, error) {
 	}
 }
 
+// nsUnion special-cases '+' between two paths (or a union and a path) as
+// namespace-union construction (`ns := /a + /b`) rather than arithmetic —
+// checked before the numeric path in evalArith since Path/NSUnion aren't
+// numbers at all.
+func nsUnion(l, r value.Value) (value.Value, bool) {
+	var paths []value.Path
+	switch lv := l.(type) {
+	case value.Path:
+		paths = append(paths, lv)
+	case value.NSUnion:
+		paths = append(paths, lv.Paths...)
+	default:
+		return nil, false
+	}
+	switch rv := r.(type) {
+	case value.Path:
+		paths = append(paths, rv)
+	case value.NSUnion:
+		paths = append(paths, rv.Paths...)
+	default:
+		return nil, false
+	}
+	return value.NSUnion{Paths: paths}, true
+}
+
 func evalArith(op token.Kind, l, r value.Value) (value.Value, error) {
+	if op == token.PLUS {
+		if u, ok := nsUnion(l, r); ok {
+			return u, nil
+		}
+	}
 	li, liOK := l.(value.Int)
 	ri, riOK := r.(value.Int)
 	if liOK && riOK {

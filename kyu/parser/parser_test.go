@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/sandgorgon/9sh/kyu/ast"
+	"github.com/sandgorgon/9sh/kyu/token"
 )
 
 func parseOK(t *testing.T, src string) *ast.Program {
@@ -195,9 +196,6 @@ func TestExternalCallInPipe(t *testing.T) {
 }
 
 func TestPathLiteral(t *testing.T) {
-	// 'bind' itself is a reserved keyword (lexed ahead for Phase 3's
-	// namespace verbs) and isn't given statement-level parsing yet, so
-	// this only asserts that a Path literal parses cleanly as a value.
 	prog := parseOK(t, `p := /local/bin`)
 	def := prog.Stmts[0].(*ast.DefineStmt)
 	pl, ok := def.Val.(*ast.PathLit)
@@ -245,5 +243,93 @@ func TestDurationLiteral(t *testing.T) {
 	}
 	if d.Nanos != 500_000_000 {
 		t.Errorf("want 500ms in nanos, got %d", d.Nanos)
+	}
+}
+
+func TestBindStmtDefaultsToReplace(t *testing.T) {
+	prog := parseOK(t, `bind /local/bin, /bin`)
+	bs, ok := prog.Stmts[0].(*ast.BindStmt)
+	if !ok {
+		t.Fatalf("want BindStmt, got %T", prog.Stmts[0])
+	}
+	if bs.Disposition != "replace" {
+		t.Errorf("want default disposition replace, got %s", bs.Disposition)
+	}
+	src, ok := bs.Src.(*ast.PathLit)
+	if !ok || src.Val != "/local/bin" {
+		t.Fatalf("want src=/local/bin, got %#v", bs.Src)
+	}
+	dst, ok := bs.Dst.(*ast.PathLit)
+	if !ok || dst.Val != "/bin" {
+		t.Fatalf("want dst=/bin, got %#v", bs.Dst)
+	}
+}
+
+func TestBindStmtExplicitDisposition(t *testing.T) {
+	prog := parseOK(t, `bind /local/bin, /bin, before`)
+	bs := prog.Stmts[0].(*ast.BindStmt)
+	if bs.Disposition != "before" {
+		t.Errorf("want before, got %s", bs.Disposition)
+	}
+}
+
+func TestBindStmtNamespaceUnionSource(t *testing.T) {
+	prog := parseOK(t, `bind a + b, /dst, after`)
+	bs := prog.Stmts[0].(*ast.BindStmt)
+	if bs.Disposition != "after" {
+		t.Errorf("want after, got %s", bs.Disposition)
+	}
+	be, ok := bs.Src.(*ast.BinaryExpr)
+	if !ok {
+		t.Fatalf("want union src to parse as a BinaryExpr(+), got %#v", bs.Src)
+	}
+	if be.Op != token.PLUS {
+		t.Errorf("want '+', got %s", be.Op)
+	}
+	dst, ok := bs.Dst.(*ast.PathLit)
+	if !ok || dst.Val != "/dst" {
+		t.Fatalf("want dst=/dst, got %#v", bs.Dst)
+	}
+}
+
+func TestBindStmtInsideBlock(t *testing.T) {
+	prog := parseOK(t, `if true { bind /a, /b }`)
+	ie := prog.Stmts[0].(*ast.ExprStmt).X.(*ast.IfExpr)
+	if len(ie.Then) != 1 {
+		t.Fatalf("want 1 stmt, got %d", len(ie.Then))
+	}
+	if _, ok := ie.Then[0].(*ast.BindStmt); !ok {
+		t.Fatalf("want BindStmt inside block, got %T", ie.Then[0])
+	}
+}
+
+func TestBackgroundExternalCall(t *testing.T) {
+	prog := parseOK(t, `j := %sleep 30 &`)
+	def := prog.Stmts[0].(*ast.DefineStmt)
+	bg, ok := def.Val.(*ast.Background)
+	if !ok {
+		t.Fatalf("want Background, got %T", def.Val)
+	}
+	if bg.Call.Name != "sleep" {
+		t.Errorf("want command sleep, got %s", bg.Call.Name)
+	}
+	if len(bg.Call.Args) != 1 {
+		t.Fatalf("want 1 arg, got %d", len(bg.Call.Args))
+	}
+}
+
+func TestBackgroundBareStatement(t *testing.T) {
+	prog := parseOK(t, `%sleep 30 &`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	if _, ok := es.X.(*ast.Background); !ok {
+		t.Fatalf("want Background, got %T", es.X)
+	}
+}
+
+func TestBackgroundRejectsNonExternalCall(t *testing.T) {
+	p := New(`j := 5 &`)
+	p.ParseProgram()
+	if len(p.Errors()) == 0 {
+		t.Fatal("backgrounding a non-external-call expression should be a parse error")
 	}
 }

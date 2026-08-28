@@ -22,6 +22,13 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	for name, fn := range builtins {
 		env.Define(name, &Builtin{Name: name, Fn: fn})
 	}
+	// checkout needs the namespace itself (to materialize/write back a
+	// real subtree), which a plain BuiltinFn has no access to — captured
+	// here rather than widening every other builtin's signature for
+	// this one case. See checkout.go's biCheckout doc comment.
+	env.Define("checkout", &Builtin{Name: "checkout", Fn: func(args []value.Value) (value.Value, error) {
+		return biCheckout(namespace, args)
+	}})
 	return env
 }
 

@@ -192,7 +192,7 @@ func (f *nsFile) listLocalDir(ctx context.Context) ([]p9.Stat, error) {
 		if err != nil {
 			continue // a layer that fails to attach is skipped in a listing, not fatal to the whole read
 		}
-		layerEntries, err := readDirEntries(ctx, root)
+		layerEntries, err := ReadDirEntries(ctx, root)
 		if err != nil {
 			continue
 		}
@@ -207,10 +207,13 @@ func (f *nsFile) listLocalDir(ctx context.Context) ([]p9.Stat, error) {
 	return entries, nil
 }
 
-// readDirEntries reads a directory File to completion and decodes its
-// concatenated Stat blobs, matching the same length-prefix convention
-// the p9 client library itself uses to decode a Tread reply in ReadDir.
-func readDirEntries(ctx context.Context, f server.File) ([]p9.Stat, error) {
+// ReadDirEntries reads a directory File to completion and decodes its
+// concatenated Stat blobs, matching the length-prefix convention the p9
+// client library itself uses to decode a Tread reply in its own ReadDir.
+// Exported for any consumer that holds a raw server.File tree directly
+// (kyu's eval package, for checkout's materialize step) rather than a
+// real 9P client connection.
+func ReadDirEntries(ctx context.Context, f server.File) ([]p9.Stat, error) {
 	var buf bytes.Buffer
 	tmp := make([]byte, 8192)
 	var offset int64

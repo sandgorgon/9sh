@@ -201,7 +201,7 @@ func TestDirectoryListingMergesTreeAndLayers(t *testing.T) {
 
 	root, _ := ns.Attach(ctx, "u", "")
 	mix := mustWalk(t, ctx, root, "mix")
-	entries, err := readDirEntries(ctx, mix)
+	entries, err := ReadDirEntries(ctx, mix)
 	if err != nil {
 		t.Fatalf("readDirEntries: %v", err)
 	}

@@ -1,13 +1,15 @@
 // Command 9sh is a minimal kyu REPL/script runner — enough to sanity-check
 // the language against real input as each phase lands. It is not the
-// shell yet: no tui integration, no `checkout` materialize tier, no
-// dotfiles/session history (later phases).
+// shell yet: no tui integration, no dotfiles/session history (later
+// phases).
 package main
 
 import (
 	"bufio"
 	"fmt"
 	"os"
+
+	"github.com/sandgorgon/9p/examples/dirfs"
 
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/eval"
@@ -19,12 +21,20 @@ import (
 
 func main() {
 	namespace := ns.New()
-	// Bootstrap bind: mounting job.FS at /jobs is 9sh's own Go-level
-	// setup, not something kyu's `bind` (which only reshapes what's
-	// already in the namespace) can do — see ns.Namespace.BindFS's doc.
+	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
+	// `bind` (which only reshapes what's already in the namespace) can
+	// do — see ns.Namespace.BindFS's doc.
 	if err := namespace.BindFS(job.New(job.NewManager()), "", "/jobs", ns.Replace); err != nil {
 		fmt.Fprintln(os.Stderr, "9sh: bootstrapping /jobs:", err)
 		os.Exit(1)
+	}
+	// /local exposes the real launch directory — a placeholder default,
+	// not a settled namespace-layout convention — so there's something
+	// checkout-able (and generally browsable) out of the box.
+	if cwd, err := os.Getwd(); err == nil {
+		if fs, err := dirfs.New(cwd); err == nil {
+			namespace.BindFS(fs, "", "/local", ns.Replace)
+		}
 	}
 	env := eval.NewGlobalEnv(namespace)
 

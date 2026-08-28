@@ -1,15 +1,18 @@
-// Command 9sh is a minimal kyu REPL/script runner — enough to sanity-check
-// the language against real input as each phase lands. It is not the
-// shell yet: no tui integration, no dotfiles/session history (later
-// phases).
+// Command 9sh is a minimal kyu REPL/script runner, plus (via -tui) the
+// pane multiplexer — enough to sanity-check each part of the language
+// and its supporting subsystems as they land. Not yet the real shell:
+// the two modes are still separate (no kyu-driven pane creation, no
+// dotfiles/session history — later work).
 package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
+	"github.com/sandgorgon/tui/tui"
 
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/eval"
@@ -17,9 +20,21 @@ import (
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/pane"
 )
 
 func main() {
+	tuiMode := flag.Bool("tui", false, "launch the pane multiplexer instead of the kyu REPL/script runner")
+	flag.Parse()
+
+	if *tuiMode {
+		if err := runTUI(); err != nil {
+			fmt.Fprintln(os.Stderr, "9sh:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	namespace := ns.New()
 	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
 	// `bind` (which only reshapes what's already in the namespace) can
@@ -38,8 +53,8 @@ func main() {
 	}
 	env := eval.NewGlobalEnv(namespace)
 
-	if len(os.Args) > 1 {
-		src, err := os.ReadFile(os.Args[1])
+	if args := flag.Args(); len(args) > 0 {
+		src, err := os.ReadFile(args[0])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -51,6 +66,30 @@ func main() {
 	}
 
 	repl(env)
+}
+
+// mouse reporting isn't on by default — tui.App.Run doesn't enable it
+// itself (not every app wants click-to-focus), the same convention
+// every tui example that wants clicks follows.
+const (
+	enableMouse  = "\x1b[?1000h\x1b[?1006h"
+	disableMouse = "\x1b[?1000l\x1b[?1006l"
+)
+
+// runTUI launches the pane multiplexer: one shell pane to start, more
+// addable via the "+ new pane" control, each independently minimizable
+// via its title bar. See package pane's doc comment for the design
+// rationale (why minimize is click/Enter-driven rather than a global
+// hotkey, and why a pane's process survives being minimized).
+func runTUI() error {
+	m := pane.New(pane.ShellSpec("shell"))
+	app := tui.NewApp(m, 80, 24) // Run resizes to the real terminal size on start
+	defer app.Close()
+
+	fmt.Print(enableMouse)
+	defer fmt.Print(disableMouse)
+
+	return app.Run()
 }
 
 func runSource(src string, env *eval.Env) bool {

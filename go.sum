@@ -1,2 +1,4 @@
 github.com/sandgorgon/9p v0.5.0 h1:nlTLdGaWBMUcSplYddS5Gm28baDiuy1cTSeTQQ103QI=
 github.com/sandgorgon/9p v0.5.0/go.mod h1:2Nb790mCwWAbRdWWtH3hCTCqfq8ETAN8DmPZvuC79is=
+github.com/sandgorgon/tui v0.1.9 h1:dGlJ806mIG1dFJdCz7T0qIeV7k/lLjjv78yc8akkzYE=
+github.com/sandgorgon/tui v0.1.9/go.mod h1:QUNbbETUCwWwSt1Ht6NMmPexXyCa5uKsP1OAVZ03SYo=

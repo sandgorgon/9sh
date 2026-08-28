@@ -12,6 +12,29 @@ import (
 	"github.com/sandgorgon/9sh/kyu/token"
 )
 
+// BracketDepth lexes src and returns its net paren/brace/bracket depth
+// — 0 means src is a syntactically complete-enough unit to attempt
+// parsing (no unclosed delimiter), positive means more input is needed
+// (an interactive REPL should keep accumulating), matching Go/JS-style
+// "did the user press Enter mid-expression" detection. It's a shared
+// utility, not parser-specific state: both cmd/9sh's line REPL and
+// kyu's native tui REPL pane use it to decide when to submit.
+func BracketDepth(src string) int {
+	l := lexer.New(src)
+	depth := 0
+	for {
+		tok := l.Next()
+		switch tok.Kind {
+		case token.LPAREN, token.LBRACE, token.LBRACKET:
+			depth++
+		case token.RPAREN, token.RBRACE, token.RBRACKET:
+			depth--
+		case token.EOF:
+			return depth
+		}
+	}
+}
+
 type Parser struct {
 	l *lexer.Lexer
 

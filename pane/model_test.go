@@ -20,7 +20,7 @@ func skipUnlessOnPath(t *testing.T, name string) {
 // ---- pure Model.Update/View logic — no tui.App needed ----
 
 func TestNewSeedsPanes(t *testing.T) {
-	m := New(ShellSpec("a"), ShellSpec("b"))
+	m := New(nil, ShellSpec("a"), ShellSpec("b"))
 	if len(m.panes) != 2 {
 		t.Fatalf("got %d panes, want 2", len(m.panes))
 	}
@@ -30,7 +30,7 @@ func TestNewSeedsPanes(t *testing.T) {
 }
 
 func TestToggleMinimizeFlipsState(t *testing.T) {
-	m := New(ShellSpec("a"))
+	m := New(nil, ShellSpec("a"))
 	id := m.panes[0].id
 	if m.panes[0].minimized {
 		t.Fatal("new pane should start expanded")
@@ -48,7 +48,7 @@ func TestToggleMinimizeFlipsState(t *testing.T) {
 }
 
 func TestToggleMinimizeUnknownIDIsNoOp(t *testing.T) {
-	m := New(ShellSpec("a"))
+	m := New(nil, ShellSpec("a"))
 	next, cmd := m.Update(toggleMinimizeMsg{id: 999})
 	if cmd != nil {
 		t.Fatal("unknown id should not produce a Cmd")
@@ -60,7 +60,7 @@ func TestToggleMinimizeUnknownIDIsNoOp(t *testing.T) {
 }
 
 func TestAddPaneMsgAppendsPane(t *testing.T) {
-	m := New(ShellSpec("a"))
+	m := New(nil, ShellSpec("a"))
 	next, _ := m.Update(addPaneMsg{spec: ShellSpec("b")})
 	m = next.(Model)
 	if len(m.panes) != 2 {
@@ -72,7 +72,7 @@ func TestAddPaneMsgAppendsPane(t *testing.T) {
 }
 
 func TestPaneExitedMsgMarksExited(t *testing.T) {
-	m := New(ShellSpec("a"))
+	m := New(nil, ShellSpec("a"))
 	id := m.panes[0].id
 	next, _ := m.Update(paneExitedMsg{id: id})
 	m = next.(Model)
@@ -82,7 +82,7 @@ func TestPaneExitedMsgMarksExited(t *testing.T) {
 }
 
 func TestQuitRequestedProducesQuitCmd(t *testing.T) {
-	m := New(ShellSpec("a"))
+	m := New(nil, ShellSpec("a"))
 	_, cmd := m.Update(quitRequestedMsg{})
 	if cmd == nil {
 		t.Fatal("expected a non-nil Cmd")
@@ -120,7 +120,7 @@ func TestClickedRecognizesEnterSpaceAndLeftClick(t *testing.T) {
 func TestMinimizeKeepsProcessAliveAndStatePreserved(t *testing.T) {
 	skipUnlessOnPath(t, "sh")
 	cmd := exec.Command("sh", "-c", "echo READY; read x; echo GOT:$x")
-	m := New(Spec{Title: "test", Command: cmd})
+	m := New(nil, Spec{Title: "test", Command: cmd})
 	id := m.panes[0].id
 
 	app := tui.NewApp(m, 40, 10)
@@ -145,7 +145,7 @@ func TestMinimizeKeepsProcessAliveAndStatePreserved(t *testing.T) {
 func TestExitedPaneShowsIndicatorAfterEvent(t *testing.T) {
 	skipUnlessOnPath(t, "true")
 	cmd := exec.Command("true")
-	m := New(Spec{Title: "test", Command: cmd})
+	m := New(nil, Spec{Title: "test", Command: cmd})
 
 	app := tui.NewApp(m, 40, 10)
 	defer app.Close()

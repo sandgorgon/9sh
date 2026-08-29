@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"testing"
 
@@ -411,5 +412,20 @@ func TestForegroundExternalCallNonzeroExitIsNotAnError(t *testing.T) {
 	}
 	if _, ok := v.(value.Bytes); !ok {
 		t.Fatalf("want value.Bytes, got %T", v)
+	}
+}
+
+func TestHostBuiltin(t *testing.T) {
+	want, err := os.Hostname()
+	if err != nil {
+		t.Skipf("os.Hostname unavailable: %v", err)
+	}
+	v := run(t, `host()`)
+	s, ok := v.(value.String)
+	if !ok {
+		t.Fatalf("host() = %#v, want a string", v)
+	}
+	if string(s) != want {
+		t.Fatalf("host() = %q, want %q", s, want)
 	}
 }

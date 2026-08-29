@@ -19,6 +19,7 @@ import (
 	"github.com/sandgorgon/tui/term"
 	"github.com/sandgorgon/tui/tui"
 
+	"github.com/sandgorgon/9sh/dotfiles"
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/eval"
 	"github.com/sandgorgon/9sh/kyu/parser"
@@ -111,7 +112,12 @@ func bootstrap(listenAddr string) (*eval.Env, *session.Recorder) {
 	}
 
 	recorder := bootstrapSession(mgr)
-	return eval.NewGlobalEnv(namespace), recorder
+	env := eval.NewGlobalEnv(namespace)
+	// Loaded last, once /jobs, /local, -listen, and session history are
+	// all already wired up: common.ky/hosts/<hostname>.ky may reasonably
+	// want to bind, dial, or background jobs of their own.
+	dotfiles.Load(env)
+	return env, recorder
 }
 
 // bootstrapSession sets up ~/.config/9/session and attaches it to mgr's

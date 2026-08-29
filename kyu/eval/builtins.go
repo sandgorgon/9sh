@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/sandgorgon/9sh/kyu/value"
@@ -24,6 +25,23 @@ var builtins = map[string]BuiltinFn{
 	"error":    biError,
 	"wait":     biWait,
 	"dial":     biDial,
+	"host":     biHost,
+}
+
+// biHost returns this machine's hostname — the design doc's own example
+// of why per-host dotfiles overrides (hosts/<hostname>.ky) don't need a
+// templating DSL: a conditional like `if host() == "laptop" { ... }` is
+// just ordinary kyu, usable both there and inside common.ky for
+// lightweight branches that don't warrant a whole separate host file.
+func biHost(args []value.Value) (value.Value, error) {
+	if len(args) != 0 {
+		return nil, fmt.Errorf("host: expected no arguments, got %d", len(args))
+	}
+	h, err := os.Hostname()
+	if err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("host: %v", err)}, nil
+	}
+	return value.String(h), nil
 }
 
 // biDial connects to a remote 9sh/9P peer over mutual TLS (see package

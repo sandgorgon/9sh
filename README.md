@@ -23,7 +23,22 @@ rather than a bolted-on remoting layer.
   session history — 9sh runs fine without it, just without that one
   feature.
 
-## Build
+## Install
+
+Grab a prebuilt binary from the
+[Releases page](https://github.com/sandgorgon/9sh/releases) — each
+release has `.tar.gz`s for `linux/amd64`, `linux/arm64`,
+`darwin/arm64`, and `darwin/amd64`, plus a `.sha256` to verify against:
+
+```
+curl -LO https://github.com/sandgorgon/9sh/releases/download/<tag>/9sh_<tag>_linux_amd64.tar.gz
+tar xzf 9sh_<tag>_linux_amd64.tar.gz
+```
+
+That unpacks a directory with the `9sh` binary, `LICENSE`, and this
+`README.md`. Put the binary somewhere on your `PATH`.
+
+Or build from source:
 
 ```
 go build -o 9sh ./cmd/9sh
@@ -72,20 +87,21 @@ rules/aliases/env defaults — see [Design](#design).
 
 ## Status
 
-Pre-1.0. The full v1 build-order plan (namespace core, jobs, kyu, the
-TUI pane multiplexer, session history, remote namespace/auth, dotfiles
-sync) is implemented and covered by real tests — real 9P traffic over
-Unix sockets and TCP, real subprocess execution, real mutual-TLS
-handshakes between distinct identities, `-race` clean throughout, and
-every phase additionally exercised through the actual built binary, not
-just `go test`.
+Pre-1.0 (`v0.1.0`). The full v1 build-order plan (namespace core, jobs,
+kyu, the TUI pane multiplexer, session history, remote namespace/auth,
+dotfiles sync) is implemented and covered by real tests — real 9P
+traffic over Unix sockets and TCP, real subprocess execution, real
+mutual-TLS handshakes between distinct identities, `-race` clean
+throughout, and every phase additionally exercised through the actual
+built binary, not just `go test`.
 
-What that does *not* mean yet: the TUI pane multiplexer — 9sh's actual
-default entry point in a real terminal — has only ever been driven
-through `tui`'s headless test harness, never by a human at a keyboard.
-Layout, keybindings, minimize/restore feel, and mouse behavior are all
-implemented against the design but unverified interactively. Treat 9sh
-as ready for hands-on testing, not as a finished daily driver.
+The pane multiplexer has now had real hands-on use, not just headless
+`tui.App` tests — several real bugs (invisible keyboard focus on
+launch, blank control-strip/title-bar chrome, an invisible cursor) were
+found and fixed this way, not caught by any automated test. Treat 9sh
+as ready for hands-on testing, not as a finished daily driver — the
+kyu language in particular is young enough that rough edges (e.g. `+`
+doesn't concatenate strings yet) are still expected.
 
 ## Design
 

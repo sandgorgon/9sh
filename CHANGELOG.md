@@ -8,10 +8,12 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-29
+
 The v1 build-order plan (Phases 0-6) is complete: a runnable shell with its
 own language, job control, per-process namespaces, remote namespace/auth
-bridge, and dotfiles sync. No release has been tagged yet — see the
-[README](README.md#status) for what "complete" does and doesn't mean here.
+bridge, and dotfiles sync — see the [README](README.md#status) for what
+"complete" does and doesn't mean here.
 
 ### Added
 
@@ -65,3 +67,28 @@ bridge, and dotfiles sync. No release has been tagged yet — see the
   fatal to starting the shell. Sync itself (`9vcs sync`/`clone`/`offer`)
   is always a manual, user-triggered action against the plain `9vcs`
   CLI — this repo never shells out to it.
+- `-version`, printing the build-time version — matching 9vcs's own
+  `-X main.version=...` release convention.
+
+### Fixed
+
+Found by actually driving a real build interactively (a pty-scripted
+driver first, then a human at the keyboard) rather than only the
+headless `tui.App` test harness — the pane multiplexer, 9sh's actual
+default entry point in a real terminal, had never been touched by
+either before this release:
+
+- Initial keyboard focus landed on the control strip's first button,
+  not the kyu-repl pane's content — typing immediately after launch
+  went nowhere until several Tabs/a click.
+- The control strip and every pane's title bar rendered as blank rows
+  (`tui.Focusable`'s mandatory 1-cell border left zero room for a
+  `layout.Length(1)` row's own content).
+- The kyu-repl pane never drew a cursor at all — `tui.App` unconditionally
+  hides the real terminal cursor; every focus-aware text-entry widget is
+  expected to draw its own.
+- The control strip's background only extended to "quit", not the full
+  pane width.
+
+The control strip also now has its own background color, distinct
+from a pane's title bar.

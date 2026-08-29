@@ -30,6 +30,11 @@ import (
 	"github.com/sandgorgon/9sh/session"
 )
 
+// version is overridden at build time via
+// -ldflags "-X main.version=vX.Y.Z" (see .github/workflows/release.yml),
+// matching 9vcs's own convention — "dev" for a plain `go build`/`go run`.
+var version = "dev"
+
 func main() {
 	os.Exit(run())
 }
@@ -44,7 +49,13 @@ func run() int {
 		"use the line-based REPL even when a real terminal is available (default: launch the pane multiplexer)")
 	listenAddr := flag.String("listen", "",
 		"serve this shell's own namespace over mutual TLS on addr (host:port), so another 9sh can bind it at /n/<host> and run @host{} blocks against it — see package remote")
+	showVersion := flag.Bool("version", false, "print the 9sh version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("9sh " + version)
+		return 0
+	}
 
 	env, recorder := bootstrap(*listenAddr)
 	if recorder != nil {

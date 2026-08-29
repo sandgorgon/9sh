@@ -54,7 +54,7 @@ func equalStrings(a, b []string) bool {
 
 func TestBrowserListsRootAndDescends(t *testing.T) {
 	env := newBrowserTestEnv(t)
-	m := New(env, NamespaceBrowserSpec("browse", env))
+	m := New(env, "", NamespaceBrowserSpec("browse", env))
 	id := m.panes[0].id
 
 	rootMsg := listDirCmd(id, env.Namespace(), "/")()
@@ -102,7 +102,7 @@ func navigateIntoX(t *testing.T, m Model, id int, env *eval.Env) Model {
 
 func TestBrowserFileSelectionIsNoOp(t *testing.T) {
 	env := newBrowserTestEnv(t)
-	m := New(env, NamespaceBrowserSpec("browse", env))
+	m := New(env, "", NamespaceBrowserSpec("browse", env))
 	id := m.panes[0].id
 	m = navigateIntoX(t, m, id, env)
 
@@ -122,7 +122,7 @@ func TestBrowserFileSelectionIsNoOp(t *testing.T) {
 
 func TestBrowserDotDotGoesUp(t *testing.T) {
 	env := newBrowserTestEnv(t)
-	m := New(env, NamespaceBrowserSpec("browse", env))
+	m := New(env, "", NamespaceBrowserSpec("browse", env))
 	id := m.panes[0].id
 	m = navigateIntoX(t, m, id, env)
 
@@ -139,7 +139,7 @@ func TestBrowserDotDotGoesUp(t *testing.T) {
 
 func TestBrowserBackspaceGoesUp(t *testing.T) {
 	env := newBrowserTestEnv(t)
-	m := New(env, NamespaceBrowserSpec("browse", env))
+	m := New(env, "", NamespaceBrowserSpec("browse", env))
 	id := m.panes[0].id
 	m = navigateIntoX(t, m, id, env)
 
@@ -155,7 +155,7 @@ func TestBrowserBackspaceGoesUp(t *testing.T) {
 
 func TestBrowserClickOnFileSelectsWithoutDescending(t *testing.T) {
 	env := newBrowserTestEnv(t)
-	m := New(env, NamespaceBrowserSpec("browse", env))
+	m := New(env, "", NamespaceBrowserSpec("browse", env))
 	id := m.panes[0].id
 	m = navigateIntoX(t, m, id, env)
 
@@ -181,7 +181,7 @@ func TestBrowserClickOnFileSelectsWithoutDescending(t *testing.T) {
 
 func TestBrowserClickOnDirectoryDescends(t *testing.T) {
 	env := newBrowserTestEnv(t)
-	m := New(env, NamespaceBrowserSpec("browse", env))
+	m := New(env, "", NamespaceBrowserSpec("browse", env))
 	id := m.panes[0].id
 	m = navigateIntoX(t, m, id, env)
 
@@ -203,7 +203,7 @@ func TestBrowserClickOnDirectoryDescends(t *testing.T) {
 
 func TestBrowserListErrorSurfacesInState(t *testing.T) {
 	env := newBrowserTestEnv(t)
-	m := New(env, NamespaceBrowserSpec("browse", env))
+	m := New(env, "", NamespaceBrowserSpec("browse", env))
 	id := m.panes[0].id
 
 	next, _ := m.Update(listDirCmd(id, env.Namespace(), "/does-not-exist")())
@@ -223,7 +223,7 @@ func TestBrowserListErrorSurfacesInState(t *testing.T) {
 // the root listing, and the rendered Buffer shows the bound path.
 func TestBrowserPaneIntegration(t *testing.T) {
 	env := newBrowserTestEnv(t)
-	m := New(env, NamespaceBrowserSpec("browse", env))
+	m := New(env, "", NamespaceBrowserSpec("browse", env))
 	app := tui.NewApp(m, 40, 10)
 	defer app.Close()
 

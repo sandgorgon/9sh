@@ -3,16 +3,16 @@
 // vertically, each with an always-visible title-bar row that toggles it
 // between full size and collapsed-to-title-bar.
 //
-// Three pane kinds exist: KindShell hosts a real pty-attached process
+// Five pane kinds exist: KindShell hosts a real pty-attached process
 // (a shell, or anything else exec'able) via widget.Terminal; KindKyuRepl
 // hosts a native kyu REPL (kyurepl.go) evaluating against the same
 // shared *eval.Env as every other entry point into 9sh (see cmd/9sh's
 // bootstrap); KindNamespaceBrowser (browser.go) is a live, navigable
-// view of whatever's bound in that Env's namespace — the first of the
-// namespace-aware "differentiator" panes the project's design notes
-// call for (a job viewer spanning /jobs + /n/<host>/jobs, and a 9vcs-
-// backed session viewer, are follow-ups once their own prerequisite
-// phases exist).
+// view of whatever's bound in that Env's namespace; KindJobViewer
+// (jobviewer.go) spans /jobs plus every /n/<host>/jobs currently
+// bound; KindSessionViewer (sessionviewer.go) reads back 9vcs-backed
+// session history from disk. The latter three are the namespace-aware
+// "differentiator" panes the project's design notes call for.
 //
 // Minimizing is a click/Enter action on a pane's title bar, not a
 // global hotkey: tui.App delivers every key to both Model.Update and
@@ -52,14 +52,17 @@ const (
 	KindShell Kind = iota
 	KindKyuRepl
 	KindNamespaceBrowser
+	KindJobViewer
+	KindSessionViewer
 )
 
 // Spec describes a pane to create, at startup (New) or later (AddPane).
 type Spec struct {
-	Title   string
-	Kind    Kind
-	Command *exec.Cmd // KindShell only
-	Env     *eval.Env // KindKyuRepl and KindNamespaceBrowser
+	Title      string
+	Kind       Kind
+	Command    *exec.Cmd // KindShell only
+	Env        *eval.Env // KindKyuRepl, KindNamespaceBrowser, KindJobViewer
+	SessionDir string    // KindSessionViewer only — see SessionViewerSpec
 }
 
 // ShellSpec is a convenience Spec running the user's $SHELL (/bin/sh if
@@ -79,6 +82,21 @@ func NamespaceBrowserSpec(title string, env *eval.Env) Spec {
 	return Spec{Title: title, Kind: KindNamespaceBrowser, Env: env}
 }
 
+// JobViewerSpec is a live job viewer spanning /jobs and every /n/<host>
+// currently bound in env's namespace — see jobviewer.go.
+func JobViewerSpec(title string, env *eval.Env) Spec {
+	return Spec{Title: title, Kind: KindJobViewer, Env: env}
+}
+
+// SessionViewerSpec is a session-history viewer reading dir (typically
+// ~/.config/9/session, the same directory cmd/9sh's bootstrapSession
+// passes to session.New) — see sessionviewer.go. dir may be empty (no
+// session history was available at startup at all); the pane reports
+// that as its own error rather than a silent empty list.
+func SessionViewerSpec(title, dir string) Spec {
+	return Spec{Title: title, Kind: KindSessionViewer, SessionDir: dir}
+}
+
 func shellPath() string {
 	if s := os.Getenv("SHELL"); s != "" {
 		return s
@@ -95,7 +113,7 @@ type paneState struct {
 	exitErr   error
 
 	command *exec.Cmd // KindShell
-	env     *eval.Env // KindKyuRepl, KindNamespaceBrowser
+	env     *eval.Env // KindKyuRepl, KindNamespaceBrowser, KindJobViewer
 
 	// KindNamespaceBrowser's own business state — List's cursor (and,
 	// by the same convention here, the current path and listing) is
@@ -104,20 +122,39 @@ type paneState struct {
 	browserEntries []string
 	browserCursor  int
 	browserErr     string
+
+	// KindJobViewer's own business state — see jobviewer.go.
+	jobRows   []string
+	jobCursor int
+	jobErr    string
+
+	// KindSessionViewer's own business state — see sessionviewer.go.
+	// sessionDir is copied from Spec.SessionDir at construction (see
+	// withNewPane); it never changes for this pane's lifetime.
+	sessionDir    string
+	sessionRows   []string
+	sessionCursor int
+	sessionErr    string
 }
 
 // Model is the pane multiplexer's tui.Model.
 type Model struct {
-	panes  []*paneState
-	nextID int
-	env    *eval.Env   // shared with every pane's spec that needs one, for the "+" buttons
-	theme  style.Theme // for the control strip / title bar background bars — see barStyle
+	panes      []*paneState
+	nextID     int
+	env        *eval.Env   // shared with every pane's spec that needs one, for the "+" buttons
+	theme      style.Theme // for the control strip / title bar background bars — see barStyle
+	sessionDir string      // for the "+ history" button's SessionViewerSpec — see New
 }
 
 // New builds a Model seeded with the given panes. env is used to build
-// new kyu-repl/namespace-browser panes from the control strip's "+"
-// buttons — pass the same *eval.Env used elsewhere in the process (see
-// cmd/9sh's bootstrap) so kyu state is shared, not duplicated per pane.
+// new kyu-repl/namespace-browser/job-viewer panes from the control
+// strip's "+" buttons — pass the same *eval.Env used elsewhere in the
+// process (see cmd/9sh's bootstrap) so kyu state is shared, not
+// duplicated per pane. sessionDir is likewise for the "+ history"
+// button (see SessionViewerSpec); pass "" if session history isn't
+// available this run (cmd/9sh's bootstrapSession already knows) — the
+// pane reports that itself rather than cmd/9sh needing to skip adding
+// the button at all.
 //
 // The theme is picked once, at startup, from $COLORFGBG (style.
 // DetectAppearance's own doc comment explains why that heuristic and
@@ -127,8 +164,8 @@ type Model struct {
 // terminal theme changes while 9sh is running would need to restart it
 // to pick up a new one — a real, accepted limitation, not something
 // worth polling for.
-func New(env *eval.Env, specs ...Spec) Model {
-	m := Model{env: env, theme: style.Default(style.DetectAppearance(os.Getenv))}
+func New(env *eval.Env, sessionDir string, specs ...Spec) Model {
+	m := Model{env: env, sessionDir: sessionDir, theme: style.Default(style.DetectAppearance(os.Getenv))}
 	for _, s := range specs {
 		m = m.withNewPane(s)
 	}
@@ -140,18 +177,24 @@ func (m Model) withNewPane(s Spec) Model {
 	m.panes = append(m.panes, &paneState{
 		id: m.nextID, title: s.Title, kind: s.Kind,
 		command: s.Command, env: s.Env, browserPath: "/",
+		sessionDir: s.SessionDir,
 	})
 	return m
 }
 
-// Init kicks off the initial namespace listing for any seed panes that
-// are namespace browsers — listDirCmd does real I/O (a namespace Walk/
-// Read), which belongs in a Cmd, not directly in Update/View.
+// Init kicks off the initial namespace/disk listing for any seed panes
+// that need it (namespace browser, job viewer, session viewer) — each
+// does real I/O, which belongs in a Cmd, not directly in Update/View.
 func (m Model) Init() tui.Cmd {
 	var cmds []tui.Cmd
 	for _, p := range m.panes {
-		if p.kind == KindNamespaceBrowser {
+		switch p.kind {
+		case KindNamespaceBrowser:
 			cmds = append(cmds, listDirCmd(p.id, p.env.Namespace(), p.browserPath))
+		case KindJobViewer:
+			cmds = append(cmds, listJobsCmd(p.id, p.env.Namespace()))
+		case KindSessionViewer:
+			cmds = append(cmds, listSessionCmd(p.id, p.sessionDir))
 		}
 	}
 	return tui.Batch(cmds...)
@@ -183,9 +226,14 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		}
 	case addPaneMsg:
 		next := m.withNewPane(mm.spec)
-		if mm.spec.Kind == KindNamespaceBrowser {
-			newPane := next.panes[len(next.panes)-1]
+		newPane := next.panes[len(next.panes)-1]
+		switch mm.spec.Kind {
+		case KindNamespaceBrowser:
 			return next, listDirCmd(newPane.id, mm.spec.Env.Namespace(), newPane.browserPath)
+		case KindJobViewer:
+			return next, listJobsCmd(newPane.id, mm.spec.Env.Namespace())
+		case KindSessionViewer:
+			return next, listSessionCmd(newPane.id, mm.spec.SessionDir)
 		}
 		return next, nil
 	case quitRequestedMsg:
@@ -217,6 +265,42 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 				p.browserErr = mm.err.Error()
 				p.browserEntries = nil
 			}
+		}
+	case jobViewerMoveMsg:
+		if p := m.find(mm.id); p != nil {
+			p.jobCursor = clamp(p.jobCursor+mm.delta, 0, max0(len(p.jobRows)-1))
+		}
+	case jobViewerRefreshRequestedMsg:
+		if p := m.find(mm.id); p != nil {
+			return m, listJobsCmd(p.id, p.env.Namespace())
+		}
+	case jobsListedMsg:
+		if p := m.find(mm.id); p != nil {
+			p.jobErr = ""
+			p.jobRows = mm.rows
+			if mm.err != nil {
+				p.jobErr = mm.err.Error()
+				p.jobRows = nil
+			}
+			p.jobCursor = clamp(p.jobCursor, 0, max0(len(p.jobRows)-1))
+		}
+	case sessionViewerMoveMsg:
+		if p := m.find(mm.id); p != nil {
+			p.sessionCursor = clamp(p.sessionCursor+mm.delta, 0, max0(len(p.sessionRows)-1))
+		}
+	case sessionViewerRefreshRequestedMsg:
+		if p := m.find(mm.id); p != nil {
+			return m, listSessionCmd(p.id, p.sessionDir)
+		}
+	case sessionListedMsg:
+		if p := m.find(mm.id); p != nil {
+			p.sessionErr = ""
+			p.sessionRows = mm.rows
+			if mm.err != nil {
+				p.sessionErr = mm.err.Error()
+				p.sessionRows = nil
+			}
+			p.sessionCursor = clamp(p.sessionCursor, 0, max0(len(p.sessionRows)-1))
 		}
 	}
 	return m, nil
@@ -356,13 +440,15 @@ func (m Model) View() tui.Node {
 // order with no independent override (see InitialFocusAdvances' doc
 // comment for why that matters here). Update this if a button is
 // added or removed above.
-const controlStripFocusables = 4 // + shell, + kyu, + browse, quit
+const controlStripFocusables = 6 // + shell, + kyu, + browse, + jobs, + history, quit
 
 func (m Model) controlStrip() tui.Node {
 	return tui.Box(layout.Horizontal,
 		tui.Child(layout.Length(10), m.addPaneButton("+ shell", ShellSpec("shell"))),
 		tui.Child(layout.Length(8), m.addPaneButton("+ kyu", KyuReplSpec("kyu", m.env))),
 		tui.Child(layout.Length(11), m.addPaneButton("+ browse", NamespaceBrowserSpec("browse", m.env))),
+		tui.Child(layout.Length(9), m.addPaneButton("+ jobs", JobViewerSpec("jobs", m.env))),
+		tui.Child(layout.Length(12), m.addPaneButton("+ history", SessionViewerSpec("history", m.sessionDir))),
 		tui.Child(layout.Length(8), m.quitButton()),
 		// barFill (not tui.Text("", ...), which paints nothing at all
 		// for an empty string — Text's Paint only iterates the string's
@@ -489,6 +575,10 @@ func (m Model) paneNode(p *paneState) tui.Node {
 		content = kyuReplNode(id, p.env)
 	case KindNamespaceBrowser:
 		content = browserNode(p)
+	case KindJobViewer:
+		content = jobViewerNode(p)
+	case KindSessionViewer:
+		content = sessionViewerNode(p)
 	default: // KindShell
 		content = widget.Terminal(widget.TerminalOptions{
 			Command: p.command,

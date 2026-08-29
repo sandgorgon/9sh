@@ -57,7 +57,7 @@ func run() int {
 		return 0
 	}
 
-	env, recorder := bootstrap(*listenAddr)
+	env, recorder, sessionDir := bootstrap(*listenAddr)
 	if recorder != nil {
 		defer recorder.Close()
 	}
@@ -75,7 +75,7 @@ func run() int {
 	}
 
 	if !*forceRepl && term.IsTerminal(os.Stdin) {
-		if err := runTUI(env); err != nil {
+		if err := runTUI(env, sessionDir); err != nil {
 			fmt.Fprintln(os.Stderr, "9sh:", err)
 			return 1
 		}
@@ -93,8 +93,11 @@ func run() int {
 // reached. The returned *session.Recorder is nil if session history
 // isn't available this run (no 9vcs on PATH, no writable home
 // directory, ...) — that's never fatal to starting the shell at all,
-// only to the history feature itself.
-func bootstrap(listenAddr string) (*eval.Env, *session.Recorder) {
+// only to the history feature itself; the returned dir (for
+// pane.SessionViewerSpec, see runTUI) is still worth passing on even
+// then, since it may hold real history from an earlier run when 9vcs
+// *was* available — reading it back is pure disk I/O, no 9vcs needed.
+func bootstrap(listenAddr string) (*eval.Env, *session.Recorder, string) {
 	namespace := ns.New()
 	mgr := job.NewManager()
 	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
@@ -123,13 +126,13 @@ func bootstrap(listenAddr string) (*eval.Env, *session.Recorder) {
 		}
 	}
 
-	recorder := bootstrapSession(mgr)
+	recorder, sessionDir := bootstrapSession(mgr)
 	env := eval.NewGlobalEnv(namespace)
 	// Loaded last, once /jobs, /local, -listen, and session history are
 	// all already wired up: common.ky/hosts/<hostname>.ky may reasonably
 	// want to bind, dial, or background jobs of their own.
 	dotfiles.Load(env)
-	return env, recorder
+	return env, recorder, sessionDir
 }
 
 // bootstrapSession sets up ~/.config/9/session and attaches it to mgr's
@@ -139,12 +142,15 @@ func bootstrap(listenAddr string) (*eval.Env, *session.Recorder) {
 // doc comment). Any failure here (no 9vcs on PATH, no home directory, a
 // 9vcs error) is printed once and otherwise ignored: session history is
 // a feature 9sh can run perfectly well without, not a startup
-// requirement.
-func bootstrapSession(mgr *job.Manager) *session.Recorder {
+// requirement. The returned dir is "" only when os.UserHomeDir itself
+// failed (nothing meaningful to read even for pane.SessionViewerSpec);
+// any other failure (no 9vcs on PATH in particular) still returns the
+// real dir, since reading past history back doesn't need 9vcs at all.
+func bootstrapSession(mgr *job.Manager) (*session.Recorder, string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "9sh: session history disabled:", err)
-		return nil
+		return nil, ""
 	}
 	host, err := os.Hostname()
 	if err != nil {
@@ -154,10 +160,10 @@ func bootstrapSession(mgr *job.Manager) *session.Recorder {
 	rec, err := session.New(dir, host)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "9sh: session history disabled:", err)
-		return nil
+		return nil, dir
 	}
 	rec.Attach(mgr)
-	return rec
+	return rec, dir
 }
 
 // mouse reporting isn't on by default — tui.App.Run doesn't enable it
@@ -170,13 +176,16 @@ const (
 
 // runTUI launches the pane multiplexer as 9sh's primary interactive
 // experience: it starts with one native kyu REPL pane (sharing env
-// with every other mode via bootstrap), with shell and namespace-
-// browser panes addable from the control strip. See package pane's
-// doc comment for the design rationale (why minimize is click/Enter-
-// driven rather than a global hotkey, and why a pane's process
-// survives being minimized).
-func runTUI(env *eval.Env) error {
-	m := pane.New(env, pane.KyuReplSpec("kyu", env))
+// with every other mode via bootstrap), with shell, namespace-browser,
+// job-viewer, and session-viewer panes addable from the control strip.
+// See package pane's doc comment for the design rationale (why
+// minimize is click/Enter-driven rather than a global hotkey, and why
+// a pane's process survives being minimized). sessionDir is passed
+// straight through to pane.New for the "+ history" button; see
+// bootstrapSession for what "" versus a real-but-recorder-less dir
+// means here.
+func runTUI(env *eval.Env, sessionDir string) error {
+	m := pane.New(env, sessionDir, pane.KyuReplSpec("kyu", env))
 	app := tui.NewApp(m, 80, 24) // Run resizes to the real terminal size on start
 	defer app.Close()
 

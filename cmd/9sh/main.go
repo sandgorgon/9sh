@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
+	"github.com/sandgorgon/tui/input"
 	"github.com/sandgorgon/tui/term"
 	"github.com/sandgorgon/tui/tui"
 
@@ -167,6 +168,15 @@ func runTUI(env *eval.Env) error {
 	m := pane.New(env, pane.KyuReplSpec("kyu", env))
 	app := tui.NewApp(m, 80, 24) // Run resizes to the real terminal size on start
 	defer app.Close()
+
+	// Land keyboard focus on the kyu-repl pane's own content before Run
+	// ever reads real input, not tui.App's zero-value default (the
+	// control strip's first button) — see pane.InitialFocusAdvances'
+	// doc comment for why this needs replaying real Tab events rather
+	// than a simpler fix.
+	for range pane.InitialFocusAdvances() {
+		app.HandleInput(input.KeyEvent{Key: input.KeyTab})
+	}
 
 	fmt.Print(enableMouse)
 	defer fmt.Print(disableMouse)

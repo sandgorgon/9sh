@@ -38,6 +38,7 @@ import (
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
 	"github.com/sandgorgon/tui/layout"
+	"github.com/sandgorgon/tui/style"
 	"github.com/sandgorgon/tui/tui"
 	"github.com/sandgorgon/tui/widget"
 
@@ -109,15 +110,25 @@ type paneState struct {
 type Model struct {
 	panes  []*paneState
 	nextID int
-	env    *eval.Env // shared with every pane's spec that needs one, for the "+" buttons
+	env    *eval.Env   // shared with every pane's spec that needs one, for the "+" buttons
+	theme  style.Theme // for the control strip / title bar background bars — see barStyle
 }
 
 // New builds a Model seeded with the given panes. env is used to build
 // new kyu-repl/namespace-browser panes from the control strip's "+"
 // buttons — pass the same *eval.Env used elsewhere in the process (see
 // cmd/9sh's bootstrap) so kyu state is shared, not duplicated per pane.
+//
+// The theme is picked once, at startup, from $COLORFGBG (style.
+// DetectAppearance's own doc comment explains why that heuristic and
+// not a real query — there's no escape sequence every terminal answers
+// for "what's your background color"), defaulting to Dark on anything
+// unparseable. 9sh doesn't re-detect this mid-session; a user whose
+// terminal theme changes while 9sh is running would need to restart it
+// to pick up a new one — a real, accepted limitation, not something
+// worth polling for.
 func New(env *eval.Env, specs ...Spec) Model {
-	m := Model{env: env}
+	m := Model{env: env, theme: style.Default(style.DetectAppearance(os.Getenv))}
 	for _, s := range specs {
 		m = m.withNewPane(s)
 	}
@@ -338,18 +349,72 @@ func (m Model) View() tui.Node {
 	)
 }
 
+// controlStripFocusables is how many Tab-focusable widgets
+// controlStrip contributes, ahead of any pane, in Tab order — kept
+// beside controlStrip's own children by hand and used by
+// InitialFocusAdvances, since tui ties Tab order to document/paint
+// order with no independent override (see InitialFocusAdvances' doc
+// comment for why that matters here). Update this if a button is
+// added or removed above.
+const controlStripFocusables = 4 // + shell, + kyu, + browse, quit
+
 func (m Model) controlStrip() tui.Node {
 	return tui.Box(layout.Horizontal,
-		tui.Child(layout.Length(10), addPaneButton("+ shell", ShellSpec("shell"))),
-		tui.Child(layout.Length(8), addPaneButton("+ kyu", KyuReplSpec("kyu", m.env))),
-		tui.Child(layout.Length(11), addPaneButton("+ browse", NamespaceBrowserSpec("browse", m.env))),
-		tui.Child(layout.Length(8), quitButton()),
-		tui.Child(layout.Fill(1), tui.Text("", cell.Style{})),
+		tui.Child(layout.Length(10), m.addPaneButton("+ shell", ShellSpec("shell"))),
+		tui.Child(layout.Length(8), m.addPaneButton("+ kyu", KyuReplSpec("kyu", m.env))),
+		tui.Child(layout.Length(11), m.addPaneButton("+ browse", NamespaceBrowserSpec("browse", m.env))),
+		tui.Child(layout.Length(8), m.quitButton()),
+		// The trailing filler carries the same unfocused bar background
+		// as the buttons so the strip reads as one continuous bar with
+		// no seam of plain terminal background past the last button —
+		// it's never itself focusable, so it only ever needs the
+		// unfocused variant.
+		tui.Child(layout.Fill(1), tui.Text("", m.barStyle(false))),
 	).Key("control-strip")
 }
 
-func addPaneButton(label string, spec Spec) tui.Node {
-	return tui.Focusable("btn-"+label, tui.Text(" "+label+" ", cell.Style{Attr: cell.AttrBold}),
+// barStyle is the background-filled style for a single-line chrome
+// element (a control-strip button, a pane's title bar): theme.Border
+// (a muted, structural color) unfocused, theme.Focus when focused —
+// see flatFocusableWidget.Paint, which fills its whole cell with this
+// before drawing text on top, that's what actually makes it read as a
+// bar instead of colored text floating on the terminal's own
+// background. Foreground is left at the terminal's own default
+// (cell.Color's zero value) rather than an explicit theme color, so
+// text stays legible regardless of exactly which accent the terminal
+// renders theme.Border/Focus as.
+func (m Model) barStyle(focused bool) cell.Style {
+	bg := m.theme.Border
+	if focused {
+		bg = m.theme.Focus
+	}
+	return cell.Style{Bg: bg, Attr: cell.AttrBold}
+}
+
+// InitialFocusAdvances is how many synthetic Tab presses cmd/9sh's
+// runTUI should feed a freshly constructed tui.App (via HandleInput,
+// before Run ever reads real input) so the shell starts with keyboard
+// focus on the first pane's actual content instead of, as tui.App's
+// zero-value focusIdx would otherwise leave it, the control strip's
+// first button — a real usability bug found by driving a real build
+// under a pty: a few keystrokes typed immediately after launch went
+// nowhere, since nothing was listening for them yet.
+//
+// tui ties Tab order strictly to document/paint order (see
+// reconcile.go's collectFocusables) with no separate "start focus
+// here" hook, and moving the control strip or a pane's title bar
+// later in the tree to fix this would move it later on screen too —
+// so this instead replays N real Tab keypresses through the same
+// public path a user's keyboard would use. Assumes exactly one pane
+// at startup (true of every current cmd/9sh call site: one title bar
+// beyond the control strip's own buttons) — not meant as a general
+// "N panes" formula.
+func InitialFocusAdvances() int {
+	return controlStripFocusables + 1 // + the first pane's own title bar
+}
+
+func (m Model) addPaneButton(label string, spec Spec) tui.Node {
+	return flatFocusable("btn-"+label, " "+label+" ", m.barStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -358,8 +423,8 @@ func addPaneButton(label string, spec Spec) tui.Node {
 		})
 }
 
-func quitButton() tui.Node {
-	return tui.Focusable("quit-btn", tui.Text(" quit ", cell.Style{Attr: cell.AttrBold}),
+func (m Model) quitButton() tui.Node {
+	return flatFocusable("quit-btn", " quit ", m.barStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -393,7 +458,8 @@ func (m Model) paneNode(p *paneState) tui.Node {
 	if p.exited {
 		label += " (exited)"
 	}
-	titleBar := tui.Focusable(paneKey(id, "title"), tui.Text(label, titleStyle(p)),
+	titleBar := flatFocusable(paneKey(id, "title"), label,
+		func(focused bool) cell.Style { return m.titleStyle(p, focused) },
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -436,9 +502,9 @@ func paneKey(id int, part string) string {
 	return fmt.Sprintf("pane-%d-%s", id, part)
 }
 
-func titleStyle(p *paneState) cell.Style {
+func (m Model) titleStyle(p *paneState, focused bool) cell.Style {
 	if p.exited {
-		return cell.Style{Fg: cell.ANSIColor(1), Attr: cell.AttrBold}
+		return cell.Style{Bg: m.theme.Error, Attr: cell.AttrBold}
 	}
-	return cell.Style{Attr: cell.AttrBold, Underline: cell.UnderlineSingle}
+	return m.barStyle(focused)
 }

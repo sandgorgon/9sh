@@ -75,3 +75,32 @@ func (w *flatFocusableWidget) HandleEvent(e input.Event) tui.Cmd {
 
 func (w *flatFocusableWidget) Focusable() bool         { return true }
 func (w *flatFocusableWidget) SetFocused(focused bool) { w.focused = focused }
+
+// barFill paints a plain background-filled Node with no label and no
+// interaction — for the control strip's own trailing space, past its
+// last button, so the bar's background spans the full pane width.
+// tui.Text("", style) looks like it should do this but doesn't: Text's
+// Paint only iterates the string's own runes, so an empty string
+// touches zero cells, leaving that whole region at the terminal's
+// plain background — a real, visible seam past "quit".
+func barFill(style cell.Style) tui.Node {
+	return tui.Component("bar-fill", style, func() tui.Widget {
+		return &barFillWidget{}
+	})
+}
+
+type barFillWidget struct{ style cell.Style }
+
+func (w *barFillWidget) Reconcile(props any) bool {
+	w.style = props.(cell.Style)
+	return true
+}
+
+func (w *barFillWidget) Paint(p *cell.Painter) {
+	width, height := p.Size()
+	p.Fill(0, 0, width, height, ' ', w.style)
+}
+
+func (w *barFillWidget) HandleEvent(input.Event) tui.Cmd { return nil }
+func (w *barFillWidget) Focusable() bool                 { return false }
+func (w *barFillWidget) SetFocused(bool)                 {}

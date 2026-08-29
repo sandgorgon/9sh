@@ -54,8 +54,26 @@ func (w *kyuReplWidget) Paint(p *cell.Painter) {
 
 	visible := append(append([]replLine(nil), w.lines...), w.inputLines()...)
 	start := max0(len(visible) - height)
-	for y, ln := range visible[start:] {
+	shown := visible[start:]
+	for y, ln := range shown {
 		p.Text(0, y, ln.text, ln.style)
+	}
+
+	// tui.App's real terminal cursor is unconditionally hidden (see its
+	// Run loop's hardcoded renderer.Render(..., false)) — every
+	// focusable text-entry widget has to draw its own soft cursor
+	// instead, the same reverse-video-cell technique widget.Terminal
+	// already uses against its embedded VT screen's cursor. This
+	// widget has no cursor movement within the input line (see the
+	// type doc comment: append/backspace only), so the cursor is
+	// always at the end of the last visible line, right past whatever
+	// text is there.
+	if w.focused && len(shown) > 0 {
+		cy := len(shown) - 1
+		cx := len([]rune(shown[cy].text))
+		if cx < width {
+			p.SetCell(cx, cy, ' ', cell.Style{Attr: cell.AttrReverse})
+		}
 	}
 }
 

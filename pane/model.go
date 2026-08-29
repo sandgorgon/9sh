@@ -364,31 +364,47 @@ func (m Model) controlStrip() tui.Node {
 		tui.Child(layout.Length(8), m.addPaneButton("+ kyu", KyuReplSpec("kyu", m.env))),
 		tui.Child(layout.Length(11), m.addPaneButton("+ browse", NamespaceBrowserSpec("browse", m.env))),
 		tui.Child(layout.Length(8), m.quitButton()),
-		// The trailing filler carries the same unfocused bar background
-		// as the buttons so the strip reads as one continuous bar with
-		// no seam of plain terminal background past the last button —
-		// it's never itself focusable, so it only ever needs the
-		// unfocused variant.
-		tui.Child(layout.Fill(1), tui.Text("", m.barStyle(false))),
+		// barFill (not tui.Text("", ...), which paints nothing at all
+		// for an empty string — Text's Paint only iterates the string's
+		// own runes) carries the same background past the last button,
+		// so the strip reads as one continuous bar across the pane's
+		// full width, not just up to "quit". Never itself focusable, so
+		// it only ever needs the unfocused variant.
+		tui.Child(layout.Fill(1), barFill(m.controlStripStyle(false))),
 	).Key("control-strip")
 }
 
-// barStyle is the background-filled style for a single-line chrome
-// element (a control-strip button, a pane's title bar): theme.Border
-// (a muted, structural color) unfocused, theme.Focus when focused —
-// see flatFocusableWidget.Paint, which fills its whole cell with this
-// before drawing text on top, that's what actually makes it read as a
-// bar instead of colored text floating on the terminal's own
-// background. Foreground is left at the terminal's own default
-// (cell.Color's zero value) rather than an explicit theme color, so
-// text stays legible regardless of exactly which accent the terminal
-// renders theme.Border/Focus as.
+// barStyle is the background-filled style for a pane's own title bar:
+// theme.Border (a muted, structural color) unfocused, theme.Focus
+// when focused — see flatFocusableWidget.Paint, which fills its whole
+// cell with this before drawing text on top, that's what actually
+// makes it read as a bar instead of colored text floating on the
+// terminal's own background. Foreground is left at the terminal's own
+// default (cell.Color's zero value) rather than an explicit theme
+// color, so text stays legible regardless of exactly which accent the
+// terminal renders theme.Border/Focus as.
 func (m Model) barStyle(focused bool) cell.Style {
 	bg := m.theme.Border
 	if focused {
 		bg = m.theme.Focus
 	}
 	return cell.Style{Bg: bg, Attr: cell.AttrBold}
+}
+
+// controlStripStyle is the control strip's own bar color — deliberately
+// distinct from barStyle/theme.Border, so the always-visible top-level
+// toolbar reads as a different, more prominent layer of chrome than a
+// per-pane title bar. Uses theme.Primary rather than theme.Focus for
+// the base: in tui/style's own default themes Primary and Focus are
+// literally the same RGB value (both are "the accent color"), so
+// swapping to Focus on focus would be invisible; a reverse-video
+// attribute flip is a real, visible change regardless of that.
+func (m Model) controlStripStyle(focused bool) cell.Style {
+	st := cell.Style{Bg: m.theme.Primary, Attr: cell.AttrBold}
+	if focused {
+		st.Attr |= cell.AttrReverse
+	}
+	return st
 }
 
 // InitialFocusAdvances is how many synthetic Tab presses cmd/9sh's
@@ -414,7 +430,7 @@ func InitialFocusAdvances() int {
 }
 
 func (m Model) addPaneButton(label string, spec Spec) tui.Node {
-	return flatFocusable("btn-"+label, " "+label+" ", m.barStyle,
+	return flatFocusable("btn-"+label, " "+label+" ", m.controlStripStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -424,7 +440,7 @@ func (m Model) addPaneButton(label string, spec Spec) tui.Node {
 }
 
 func (m Model) quitButton() tui.Node {
-	return flatFocusable("quit-btn", " quit ", m.barStyle,
+	return flatFocusable("quit-btn", " quit ", m.controlStripStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil

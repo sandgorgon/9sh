@@ -1,0 +1,6 @@
+# Compiled binary, if built in-place (see README.md's Build section).
+/9sh
+
+# Go build/test artifacts.
+*.test
+*.out

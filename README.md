@@ -81,6 +81,27 @@ protocol:
 `@host { ... }` re-roots job creation at the bound remote's own `/jobs`
 for the block — a "proxy job" is nothing more than that.
 
+`dial` also reaches a local Unix-domain-socket 9P server — no TLS, no
+identity, the socket's own file permissions are the trust boundary:
+
+```
+9sh> h := dial("/run/user/1000/9ed/12345.sock")
+9sh> bind h, /n/9ed
+```
+
+And a 9sh can serve its own namespace the same way, for another local
+9sh (or any 9P-aware app) to dial back into:
+
+```
+$ 9sh -listen-unix /run/user/1000/9sh/main.sock
+```
+
+restricted to connections from your own user (permission bits plus an
+`SO_PEERCRED` check) — see [Local namespace access](#local-namespace-access)
+below. Anything `9sh -listen-unix` spawns as a job can find its way back
+in with zero configuration: the socket path is exported to it as
+`$_9SH_UNIX_SOCK`.
+
 Drop `common.ky` / `hosts/<hostname>.ky` under `~/.config/9/ns` and 9sh
 runs them at startup, against the same environment, for persistent bind
 rules/aliases/env defaults — see [Design](#design).
@@ -169,9 +190,45 @@ Click a pane's content to focus it; click a title bar to minimize/
 restore it; click any control-strip or title-bar button the same way
 you'd press its key. Mouse wheel scrolls a kyu REPL pane's transcript.
 
+## Local namespace access
+
+`dial(addr)` and `-listen`/`-listen-unix` are two ends of the same
+mechanism — reaching a namespace that isn't your own — split by whether
+the other end is on this machine or somewhere else:
+
+| | Same machine | Different machine |
+|---|---|---|
+| **Reach in** (`dial`) | `dial("/path/to.sock")` or `dial("unix:/path")` | `dial("host:port")` |
+| **Serve out** | `-listen-unix path` | `-listen host:port` |
+| **Trust** | this user's UID only | mutual TLS + `9auth` identity, TOFU-pinned |
+
+Cross-machine traffic (`-listen`/`dial("host:port")`) always goes over
+mutual TLS: both sides present their standing `9auth` identity
+(`~/.config/9/identity.{key,cert}`, generated on first use), and an
+unrecognized peer's fingerprint prompts once to trust-and-remember it
+(`~/.config/9/known-peers`) — a later mismatch is always a loud refusal,
+never a silent pass. Only fingerprints listed in
+`~/.config/9/authorized-peers` can attach at all.
+
+Same-machine traffic (`dial` on a path, `-listen-unix`) skips all of
+that by design: a Unix socket's own file permissions are already the
+trust boundary, the same one a local directory bind (`/local`) sits in.
+`-listen-unix` reinforces it two ways — the socket file is `chmod`'d
+`0600` regardless of your umask, and every connection is checked via
+`SO_PEERCRED` against your own UID and dropped on any mismatch, so
+nothing short of your own user (or root) can attach. That access is
+intentionally *not* scoped down to local-only content: a connection is
+trusted to see the whole namespace as assembled, remote binds included
+— the same way connecting to `ssh-agent` lets you use whatever remote
+hosts its loaded keys are already trusted by, not just local ones.
+
+A Unix socket path is capped at 108 bytes by the OS
+(`sockaddr_un.sun_path`); keep it short — somewhere under
+`$XDG_RUNTIME_DIR` is the usual choice.
+
 ## Status
 
-Pre-1.0 (`v0.2.1`). The full v1 build-order plan (namespace core, jobs,
+Pre-1.0 (`v0.3.0`). The full v1 build-order plan (namespace core, jobs,
 kyu, the TUI pane multiplexer, session history, remote namespace/auth,
 dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real
@@ -203,6 +260,12 @@ gained a `propose` permission tier (enough to write/create, short of
 remove/wstat) and `ListenWithRootPerms`, scoping a distinct
 authorized-peers file to one exported root instead of only the single
 global allowlist `Listen` alone still uses.
+
+`dial`/`bind` and a new `-listen-unix` now cover the same-machine half
+of namespace access without any TLS/`9auth` overhead — see
+[Local namespace access](#local-namespace-access) — closing the gap
+where a purely local 9P server or reader had no lighter-weight option
+than the full remote-peer trust machinery.
 
 ## Design
 

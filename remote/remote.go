@@ -1,15 +1,26 @@
-// Package remote implements 9sh's mutual-TLS bridge between 9auth's
-// standing per-install identity and p9's client/server: authenticate once
-// at the TLS layer, and Tattach stays a formality — exactly the design
-// doc's identity/auth bridge. Dial's trust decision (known-peers, TOFU
-// first-connect prompt, loud refusal on a changed fingerprint) mirrors
-// 9vcs's cmd/9vcs/sync.go dialPeer byte-for-byte in spirit, so one trust
-// model covers VCS sync, namespace mounts, and proxy jobs alike, as
-// designed. A verified peer's fingerprint threads through context.Context
-// via server.Server's ConnContext hook into every request the connection
-// ever makes, including Attach — "uname in Tattach stops being a
-// client-asserted string; the server derives identity from the TLS
-// session instead."
+// Package remote implements 9sh's two transports for reaching a namespace
+// that isn't your own, split by whether the other end is on this machine:
+//
+// Cross-machine (Dial on a host:port / Listen) is a mutual-TLS bridge
+// between 9auth's standing per-install identity and p9's client/server:
+// authenticate once at the TLS layer, and Tattach stays a formality —
+// exactly the design doc's identity/auth bridge. Dial's trust decision
+// (known-peers, TOFU first-connect prompt, loud refusal on a changed
+// fingerprint) mirrors 9vcs's cmd/9vcs/sync.go dialPeer byte-for-byte in
+// spirit, so one trust model covers VCS sync, namespace mounts, and proxy
+// jobs alike, as designed. A verified peer's fingerprint threads through
+// context.Context via server.Server's ConnContext hook into every request
+// the connection ever makes, including Attach — "uname in Tattach stops
+// being a client-asserted string; the server derives identity from the
+// TLS session instead."
+//
+// Same-machine (Dial on a Unix-socket path / ListenUnix) skips all of
+// that: a Unix socket's own file permissions are already the trust
+// boundary, the same category a local-directory bind sits in. ListenUnix
+// reinforces it (an explicit chmod 0600 plus an SO_PEERCRED check per
+// connection) rather than relying on filesystem permissions alone — see
+// its own doc comment for the reasoning, including why access is
+// deliberately *not* scoped down to local-only namespace content.
 package remote
 
 import (

@@ -8,6 +8,41 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-30
+
+### Added
+
+- `dial(addr)` now also accepts a local Unix-domain-socket path (a bare
+  absolute path, or one prefixed `unix:`) alongside the existing
+  `host:port` form, for binding a locally-run 9P server (9ed, for
+  example) into the namespace with no TLS handshake and no `9auth`
+  identity involved — the socket's own file permissions are the trust
+  boundary, the same category `dirfs`'s local-directory bind already
+  sits in. `bind`'s `MountHandle` routing is unchanged; the dispatch is
+  entirely inside `remote.Dial`
+  ([sandgorgon/9sh#2](https://github.com/sandgorgon/9sh/issues/2)).
+- New `-listen-unix path` flag (`remote.ListenUnix`): serves this
+  shell's own namespace over a local Unix socket, restricted to this
+  process's own UID (`chmod 0600` plus an `SO_PEERCRED` check on every
+  accepted connection), instead of requiring the full mutual-TLS/`9auth`
+  machinery `-listen` needs for a same-machine consumer — another local
+  9sh, or any 9P-aware app that just wants to open files 9sh has bound.
+  Serves the namespace exactly as assembled, including anything reached
+  through an existing remote `/n/<host>` bind — a same-UID connection is
+  trusted the way ssh-agent/gpg-agent forwarding already is
+  ([sandgorgon/9sh#3](https://github.com/sandgorgon/9sh/issues/3)).
+- When `-listen-unix` is active, its socket path is exported into 9sh's
+  own environment as `_9SH_UNIX_SOCK`, inherited by every job it spawns
+  (mirrors `SSH_AUTH_SOCK`'s discovery pattern) — a job 9sh itself
+  starts can dial straight back into its own parent's namespace with no
+  well-known path or extra configuration.
+
+### Fixed
+
+- Dialing or listening on a Unix-socket path over `sockaddr_un`'s
+  108-byte limit now fails with an actionable error up front, instead
+  of a bare `connect: invalid argument` from the syscall layer.
+
 ## [0.2.1] - 2026-08-30
 
 ### Fixed

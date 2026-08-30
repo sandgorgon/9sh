@@ -3,6 +3,7 @@ package remote
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -486,6 +487,148 @@ func TestUnixSocketPath(t *testing.T) {
 		if ok != c.wantOK || path != c.wantPath {
 			t.Errorf("unixSocketPath(%q) = (%q, %v), want (%q, %v)", c.addr, path, ok, c.wantPath, c.wantOK)
 		}
+	}
+}
+
+// TestListenUnixEndToEnd exercises #3's server side: fs served over
+// ListenUnix, reached back through Dial (which already covers the client
+// half in TestDialUnixEndToEnd) — no TLS, no 9auth, socket permissions
+// plus a same-UID SO_PEERCRED check as the only gate.
+func TestListenUnixEndToEnd(t *testing.T) {
+	fs := memfs.New()
+	if err := writeMemFile(fs, "greeting", []byte("hello from ListenUnix\n")); err != nil {
+		t.Fatalf("seeding memfs: %v", err)
+	}
+
+	sockPath := filepath.Join(t.TempDir(), "9sh.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	l, err := ListenUnix(ctx, sockPath, fs)
+	if err != nil {
+		t.Fatalf("ListenUnix: %v", err)
+	}
+	defer l.Close()
+
+	if st, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("stat socket: %v", err)
+	} else if perm := st.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("socket permissions = %o, want 0600", perm)
+	}
+
+	conn, err := Dial(ctx, sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	root, err := conn.FS().Attach(ctx, "9sh", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	f, err := root.Walk(ctx, "greeting")
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if err := f.Open(ctx, p9.OREAD); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	got, err := readAll(ctx, f)
+	f.Close()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "hello from ListenUnix\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// TestPeerUIDMatchesSelf sanity-checks the SO_PEERCRED plumbing directly:
+// a same-process loopback connection over a Unix socket should report the
+// running process's own UID. (A genuine cross-UID rejection can't be
+// exercised in-process — it needs a second real user — so this is the
+// closest unit-level check available; TestListenUnixEndToEnd covers the
+// same-UID accept path end to end.)
+func TestPeerUIDMatchesSelf(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "peercred.sock")
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer l.Close()
+
+	var serverUID uint32
+	var serverErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, err := l.Accept()
+		if err != nil {
+			serverErr = err
+			return
+		}
+		defer c.Close()
+		uc, ok := c.(*net.UnixConn)
+		if !ok {
+			serverErr = fmt.Errorf("accepted conn is %T, not *net.UnixConn", c)
+			return
+		}
+		serverUID, serverErr = peerUID(uc)
+	}()
+
+	c, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	c.Close()
+	<-done
+
+	if serverErr != nil {
+		t.Fatalf("peerUID: %v", serverErr)
+	}
+	if want := uint32(os.Getuid()); serverUID != want {
+		t.Fatalf("peerUID = %d, want %d (os.Getuid())", serverUID, want)
+	}
+}
+
+// TestListenUnixRecoversStaleSocket checks removeStaleSocket's core
+// promise: a leftover socket file from an earlier, uncleanly-exited
+// ListenUnix (no live listener behind it) doesn't block rebinding the
+// same path.
+func TestListenUnixRecoversStaleSocket(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "stale.sock")
+
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	l.Close() // closes the listener but leaves sockPath's file on disk
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l2, err := ListenUnix(ctx, sockPath, memfs.New())
+	if err != nil {
+		t.Fatalf("ListenUnix over a stale socket: %v", err)
+	}
+	l2.Close()
+}
+
+// TestListenUnixRefusesWhenAlreadyListening checks the other half of
+// removeStaleSocket's dial-first check: a socket with a live listener
+// behind it must never be silently unlinked and stolen.
+func TestListenUnixRefusesWhenAlreadyListening(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "live.sock")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l1, err := ListenUnix(ctx, sockPath, memfs.New())
+	if err != nil {
+		t.Fatalf("first ListenUnix: %v", err)
+	}
+	defer l1.Close()
+
+	if _, err := ListenUnix(ctx, sockPath, memfs.New()); err == nil {
+		t.Fatal("expected a second ListenUnix on the same live path to fail")
 	}
 }
 

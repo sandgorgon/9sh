@@ -50,6 +50,8 @@ func run() int {
 		"use the line-based REPL even when a real terminal is available (default: launch the pane multiplexer)")
 	listenAddr := flag.String("listen", "",
 		"serve this shell's own namespace over mutual TLS on addr (host:port), so another 9sh can bind it at /n/<host> and run @host{} blocks against it — see package remote")
+	listenUnixPath := flag.String("listen-unix", "",
+		"serve this shell's own namespace over a Unix socket at path, restricted to this process's own UID — no TLS/9auth involved, for same-machine consumers (another local 9sh, or any 9P-aware app) — see remote.ListenUnix")
 	showVersion := flag.Bool("version", false, "print the 9sh version and exit")
 	flag.Parse()
 
@@ -58,7 +60,7 @@ func run() int {
 		return 0
 	}
 
-	env, recorder, sessionDir := bootstrap(*listenAddr)
+	env, recorder, sessionDir := bootstrap(*listenAddr, *listenUnixPath)
 	if recorder != nil {
 		defer recorder.Close()
 	}
@@ -98,7 +100,7 @@ func run() int {
 // pane.SessionViewerSpec, see runTUI) is still worth passing on even
 // then, since it may hold real history from an earlier run when 9vcs
 // *was* available — reading it back is pure disk I/O, no 9vcs needed.
-func bootstrap(listenAddr string) (*eval.Env, *session.Recorder, string) {
+func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder, string) {
 	namespace := ns.New()
 	mgr := job.NewManager()
 	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
@@ -123,6 +125,12 @@ func bootstrap(listenAddr string) (*eval.Env, *session.Recorder, string) {
 		// down the listener along with everything else.
 		if _, err := remote.Listen(context.Background(), listenAddr, namespace); err != nil {
 			fmt.Fprintln(os.Stderr, "9sh: -listen:", err)
+			os.Exit(1)
+		}
+	}
+	if listenUnixPath != "" {
+		if _, err := remote.ListenUnix(context.Background(), listenUnixPath, namespace); err != nil {
+			fmt.Fprintln(os.Stderr, "9sh: -listen-unix:", err)
 			os.Exit(1)
 		}
 	}

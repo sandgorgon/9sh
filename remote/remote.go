@@ -16,12 +16,14 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	auth "github.com/sandgorgon/9auth"
 	"github.com/sandgorgon/9p/client"
@@ -222,6 +224,140 @@ func AuthorizedPeersPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "authorized-peers"), nil
+}
+
+// ListenUnix serves fs over a Unix-domain socket at path, restricted to
+// connections from this process's own UID — the mirror image of dialUnix's
+// trust reasoning (issue #2), for the reverse direction (issue #3): purely
+// local namespace access needs no TLS handshake or 9auth identity at all,
+// per authFS's own doc comment ("purely local synthetic namespaces ride a
+// Unix-domain socket, bounded by OS permissions, no TLS/identity
+// overhead").
+//
+// Deliberately unscoped: fs is served exactly as given, remote-sourced
+// binds (anything grafted under /n/<host> via an earlier dial+bind)
+// included. A same-UID connection is trusted to exercise whatever trust
+// relationships this process already holds — the same shape ssh-agent/
+// gpg-agent forwarding already relies on — rather than being narrowed to
+// "local-only" content. Carving out /n/* specifically would be security
+// theater on top of an already-full grant (/jobs alone is live process
+// control: signal/kill/stdin over every job this shell runs) while
+// breaking the tier model's "everything bound behaves uniformly"
+// invariant.
+//
+// Two things make "same-UID" a correctly-enforced boundary rather than an
+// accidental one, since net.Listen("unix", ...) alone gives neither: the
+// socket file is explicitly chmod'd 0600 after bind (its mode otherwise
+// depends on the caller's ambient umask, not a fixed value), and every
+// accepted connection is checked via SO_PEERCRED against os.Getuid(),
+// rejected (never surfaced as a fatal Accept error) on any mismatch —
+// belt-and-suspenders beyond the filesystem permission check, and a real
+// identity to reject on even without a 9auth handshake.
+//
+// Serving continues until ctx is canceled or the listener is otherwise
+// closed.
+func ListenUnix(ctx context.Context, path string, fs server.FileSystem) (net.Listener, error) {
+	if err := removeStaleSocket(path); err != nil {
+		return nil, err
+	}
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("remote: listen %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		l.Close()
+		return nil, fmt.Errorf("remote: chmod %s: %w", path, err)
+	}
+
+	srv := &server.Server{FS: fs}
+	go func() {
+		<-ctx.Done()
+		l.Close()
+	}()
+	go srv.Serve(&peerCredListener{Listener: l})
+	return l, nil
+}
+
+// removeStaleSocket clears a leftover socket file from an earlier,
+// uncleanly-exited ListenUnix so this one can rebind the same path — the
+// same recovery dockerd and most other Unix-socket servers perform.
+// Dialing first (rather than unconditionally unlinking) distinguishes
+// "nothing here," "a dead socket file," and "a live peer already
+// listening": only the dead-socket case is safe to remove automatically.
+// Anything ambiguous (permission denied, path exists but isn't a socket,
+// ...) is surfaced instead of guessed at, since guessing wrong either
+// clobbers a live peer's socket or silently hands this call a
+// non-functional path.
+func removeStaleSocket(path string) error {
+	conn, err := net.Dial("unix", path)
+	if err == nil {
+		conn.Close()
+		return fmt.Errorf("remote: %s: address already in use (another process is listening)", path)
+	}
+	switch {
+	case errors.Is(err, syscall.ENOENT):
+		return nil
+	case errors.Is(err, syscall.ECONNREFUSED):
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			return fmt.Errorf("remote: removing stale socket %s: %w", path, rmErr)
+		}
+		return nil
+	default:
+		return fmt.Errorf("remote: checking existing socket %s: %w", path, err)
+	}
+}
+
+// peerCredListener wraps a Unix-socket net.Listener so only connections
+// from this process's own UID are ever handed to server.Server — see
+// ListenUnix's doc comment. A rejected connection is closed and the
+// accept loop continues; it's never surfaced as an Accept error, which
+// would otherwise (per server.Server.Serve's contract) tear down the
+// whole listener over a single unwelcome connection attempt.
+type peerCredListener struct {
+	net.Listener
+}
+
+func (l *peerCredListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		uc, ok := c.(*net.UnixConn)
+		if !ok {
+			c.Close() // shouldn't happen: this listener only ever accepts unix connections
+			continue
+		}
+		uid, err := peerUID(uc)
+		if err != nil || uid != uint32(os.Getuid()) {
+			c.Close()
+			continue
+		}
+		return c, nil
+	}
+}
+
+// peerUID returns the UID of the process on the other end of c via
+// SO_PEERCRED (Linux-specific — 9sh targets Linux only, per its design
+// doc).
+func peerUID(c *net.UnixConn) (uint32, error) {
+	raw, err := c.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var uid uint32
+	var sockErr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, err := syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+		if err != nil {
+			sockErr = err
+			return
+		}
+		uid = cred.Uid
+	}); err != nil {
+		return 0, err
+	}
+	return uid, sockErr
 }
 
 // Listen starts serving fs over mutual TLS on addr: only peers listed in

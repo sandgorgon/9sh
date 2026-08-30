@@ -8,7 +8,7 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-08-30
+## [0.3.1] - 2026-08-30
 
 ### Added
 
@@ -23,13 +23,14 @@ once a first tagged release is cut.
   ([sandgorgon/9sh#2](https://github.com/sandgorgon/9sh/issues/2)).
 - New `-listen-unix path` flag (`remote.ListenUnix`): serves this
   shell's own namespace over a local Unix socket, restricted to this
-  process's own UID (`chmod 0600` plus an `SO_PEERCRED` check on every
-  accepted connection), instead of requiring the full mutual-TLS/`9auth`
-  machinery `-listen` needs for a same-machine consumer — another local
-  9sh, or any 9P-aware app that just wants to open files 9sh has bound.
-  Serves the namespace exactly as assembled, including anything reached
-  through an existing remote `/n/<host>` bind — a same-UID connection is
-  trusted the way ssh-agent/gpg-agent forwarding already is
+  process's own UID (`chmod 0600`, plus an `SO_PEERCRED` check on every
+  accepted connection on Linux), instead of requiring the full
+  mutual-TLS/`9auth` machinery `-listen` needs for a same-machine
+  consumer — another local 9sh, or any 9P-aware app that just wants to
+  open files 9sh has bound. Serves the namespace exactly as assembled,
+  including anything reached through an existing remote `/n/<host>`
+  bind — a same-UID connection is trusted the way ssh-agent/gpg-agent
+  forwarding already is
   ([sandgorgon/9sh#3](https://github.com/sandgorgon/9sh/issues/3)).
 - When `-listen-unix` is active, its socket path is exported into 9sh's
   own environment as `_9SH_UNIX_SOCK`, inherited by every job it spawns
@@ -42,6 +43,10 @@ once a first tagged release is cut.
 - Dialing or listening on a Unix-socket path over `sockaddr_un`'s
   108-byte limit now fails with an actionable error up front, instead
   of a bare `connect: invalid argument` from the syscall layer.
+- `-listen-unix`'s `SO_PEERCRED` check no longer breaks the
+  `darwin/amd64`/`darwin/arm64` build (Go's `syscall` package doesn't
+  expose it outside Linux); non-Linux platforms fall back to the
+  socket file's own permissions as the trust boundary.
 
 ## [0.2.1] - 2026-08-30
 

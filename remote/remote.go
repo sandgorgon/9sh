@@ -100,6 +100,22 @@ func unixSocketPath(addr string) (path string, ok bool) {
 	return "", false
 }
 
+// maxUnixSocketPathLen is the largest usable AF_UNIX path on Linux:
+// sockaddr_un.sun_path is a fixed 108-byte buffer holding a
+// null-terminated C string, so one byte is reserved for the trailing NUL.
+// Dialing or listening on a longer path fails at the syscall layer with a
+// bare "invalid argument" and no hint why (hit for real verifying #3, with
+// a scratchpad path a few bytes over) — checking up front turns that into
+// an actionable error instead.
+const maxUnixSocketPathLen = 107
+
+func checkUnixSocketPathLen(path string) error {
+	if len(path) > maxUnixSocketPathLen {
+		return fmt.Errorf("remote: socket path %q is %d bytes, over the %d-byte Unix-domain-socket limit (sockaddr_un.sun_path) — use a shorter path, e.g. under $XDG_RUNTIME_DIR", path, len(path), maxUnixSocketPathLen)
+	}
+	return nil
+}
+
 // dialUnix connects to a local Unix-domain-socket 9P server at path with
 // no TLS handshake and no 9auth identity involved: the socket's own file
 // permissions are already the trust boundary, the same category dirfs's
@@ -110,6 +126,9 @@ func unixSocketPath(addr string) (path string, ok bool) {
 // single-machine 9P server has no reason to open a TCP port or link 9auth
 // at all.
 func dialUnix(ctx context.Context, path string) (*Conn, error) {
+	if err := checkUnixSocketPathLen(path); err != nil {
+		return nil, err
+	}
 	var d net.Dialer
 	rawConn, err := d.DialContext(ctx, "unix", path)
 	if err != nil {
@@ -257,6 +276,9 @@ func AuthorizedPeersPath() (string, error) {
 // Serving continues until ctx is canceled or the listener is otherwise
 // closed.
 func ListenUnix(ctx context.Context, path string, fs server.FileSystem) (net.Listener, error) {
+	if err := checkUnixSocketPathLen(path); err != nil {
+		return nil, err
+	}
 	if err := removeStaleSocket(path); err != nil {
 		return nil, err
 	}

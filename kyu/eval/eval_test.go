@@ -395,6 +395,23 @@ func TestForegroundExternalCallRoutesThroughJobsWhenNamespacePresent(t *testing.
 	}
 }
 
+// TestForegroundExternalCallInheritsProcessEnv locks in the os/exec
+// default this repo's cmd/9sh relies on for -listen-unix's _9SH_UNIX_SOCK
+// export (see cmd/9sh/main.go's bootstrap): a job whose kyu script never
+// calls SetEnv leaves Cmd.Env nil, which os/exec defines as "inherit the
+// current process's environment" -- so anything 9sh itself has in its own
+// environment (a namespace socket path, PATH, etc.) reaches every %cmd
+// job for free, with no per-job wiring.
+func TestForegroundExternalCallInheritsProcessEnv(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	t.Setenv("NINESH_TEST_INHERITED_VAR", "inherited-value")
+	env := jobsEnv(t)
+	v := runEnv(t, `%sh "-c" "echo -n $NINESH_TEST_INHERITED_VAR"`, env)
+	if string(v.(value.Bytes)) != "inherited-value" {
+		t.Fatalf("stdout = %q, want %q", v, "inherited-value")
+	}
+}
+
 func TestForegroundExternalCallStdinRoutedThroughJob(t *testing.T) {
 	skipUnlessOnPath(t, "cat")
 	env := jobsEnv(t)

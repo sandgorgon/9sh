@@ -471,6 +471,33 @@ func TestDialUnixSchemePrefix(t *testing.T) {
 	conn.Close()
 }
 
+// TestCheckUnixSocketPathLenRejectsOverlongPath checks the actionable
+// error added after a deeply-nested scratchpad path produced a bare
+// "connect: invalid argument" during #3's hands-on verification, with no
+// indication the real cause was sockaddr_un.sun_path's 108-byte limit.
+func TestCheckUnixSocketPathLenRejectsOverlongPath(t *testing.T) {
+	ok := strings.Repeat("a", maxUnixSocketPathLen)
+	if err := checkUnixSocketPathLen(ok); err != nil {
+		t.Fatalf("path at the limit (%d bytes) should be accepted: %v", len(ok), err)
+	}
+
+	tooLong := ok + "a"
+	err := checkUnixSocketPathLen(tooLong)
+	if err == nil {
+		t.Fatalf("expected a path one byte over the limit (%d bytes) to be rejected", len(tooLong))
+	}
+	if !strings.Contains(err.Error(), "108") && !strings.Contains(err.Error(), "sockaddr_un") {
+		t.Fatalf("expected the error to explain the sockaddr_un limit, got: %v", err)
+	}
+
+	if _, err := dialUnix(context.Background(), tooLong); err == nil {
+		t.Fatal("expected dialUnix to reject an overlong path before ever touching the syscall layer")
+	}
+	if _, err := ListenUnix(context.Background(), tooLong, memfs.New()); err == nil {
+		t.Fatal("expected ListenUnix to reject an overlong path before ever touching the syscall layer")
+	}
+}
+
 func TestUnixSocketPath(t *testing.T) {
 	cases := []struct {
 		addr     string

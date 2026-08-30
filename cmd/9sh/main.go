@@ -133,6 +133,22 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 			fmt.Fprintln(os.Stderr, "9sh: -listen-unix:", err)
 			os.Exit(1)
 		}
+		// Exported into this process's own environment (not set per-job)
+		// so every subprocess job inherits it via os/exec's ordinary
+		// "nil Cmd.Env means inherit the current environment" default —
+		// mirrors SSH_AUTH_SOCK: a job 9sh itself spawns (e.g. 9ed) can
+		// dial straight back into its own parent's namespace with zero
+		// configuration, no well-known path needed. A job whose kyu
+		// script explicitly sets its own env opts out of this the same
+		// way it opts out of the rest of the inherited environment.
+		//
+		// Named with a leading underscore, not "9SH_...": a POSIX shell
+		// variable name can't start with a digit, so "9SH_UNIX_SOCK"
+		// would be unreferenceable as $9SH_UNIX_SOCK from any spawned
+		// sh/bash job (bash parses "$9" as a positional parameter,
+		// leaving "SH_UNIX_SOCK" as trailing literal text) — caught
+		// before shipping by checking the name actually expands in sh.
+		os.Setenv("_9SH_UNIX_SOCK", listenUnixPath)
 	}
 
 	recorder, sessionDir := bootstrapSession(mgr)

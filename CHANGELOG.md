@@ -8,6 +8,18 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-30
+
+### Fixed
+
+- kyu: `ast.DefineStmt` now carries `NameTok`, the identifier's own
+  token, alongside the existing `':='`-stamped `Tok` — the one
+  statement kind that previously had no AST field a caller could use
+  to recover its true source start (every other statement kind
+  already exposed this via `Tok` itself or via its `Target` expr).
+  Matters for any tool doing position-accurate reconstruction from a
+  kyu `Program` (editors, formatters, linters, source maps).
+
 ## [0.2.0] - 2026-08-30
 
 ### Added

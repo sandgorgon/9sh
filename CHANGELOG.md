@@ -15,19 +15,38 @@ once a first tagged release is cut.
   viewer ("+ history", reading `~/.config/9/session` back).
 - kyu: `+` now concatenates two strings. Still errors on a string plus
   any other kind — no implicit stringification.
-- Pane management: close (`x`), split down/right (`d`/`r`), and resize
-  (`+`/`-`) on any pane's title bar. Panes are now arranged in a real
-  layout tree rather than a single vertical stack.
-- F1-F9 jump keyboard focus directly to pane 1-9's title bar (each
-  title bar shows its own `[F#]` label once assigned). The title-bar
-  hint text was shortened from "(x close, d/r split, +/- resize)" to
-  "(x/d/r/+/-)" to keep room for the new label, especially once
-  horizontal splits leave less width per pane.
-- `d`/`r` now start a two-step split: pick direction, then pick the new
-  sibling's kind (`s`=shell, `k`=kyu, `b`=browse, `j`=jobs,
-  `h`=history — any other key cancels) — a split-created pane is no
-  longer always a kyu-repl.
-- A themed divider bar between split panes.
+- Pane management, substantially reworked. Panes are arranged in a
+  real 2D layout tree, not a single vertical stack:
+  - Any title bar: `x` closes, `d`/`r` start a two-step split (pick
+    direction, then the new sibling's kind — `s`=shell, `k`=kyu,
+    `b`=browse, `j`=jobs, `h`=history, any other key cancels), `z`
+    zooms/un-zooms that pane to fill the whole content area (every
+    other pane's process keeps running, just out of view), `+`/`-`
+    resizes along the split axis down to one visible content line
+    (smaller than that, minimize instead), click/Enter minimizes
+    (vertical-axis siblings only — see Fixed), F1-F9 jump keyboard
+    focus straight to pane 1-9.
+  - The control strip's "+" buttons now split the last pane in
+    document order (alternating direction each time) instead of
+    always appending a flat root-level row, so repeated clicks tile in
+    both dimensions the same way a manual split does.
+  - Every expanded pane draws its own complete box-drawing frame —
+    `┌─ title ─┐` / `│ content │` / `└────────┘`, title embedded in
+    the top border line — instead of a bare title-bar row.
+  - A "theme" control-strip button flips between light/dark at
+    runtime, no restart needed.
+  - A "help" control-strip button opens a built-in, scrollable
+    keybinding reference (a modal — Esc, `?`, `q`, or a click outside
+    it closes).
+- kyu REPL pane: real line editing, not just append/backspace —
+  cursor movement (character- and word-wise: `←`/`→`, Ctrl+`←`/`→`),
+  Home/End (Ctrl+A/Ctrl+E), Ctrl+W/Ctrl+U/Ctrl+K (kill word backward /
+  to line start / to line end), Up/Down history recall (only outside a
+  multi-line continuation), bracketed-paste support, scrolling the
+  transcript independently of the input line (PageUp/PageDown, mouse
+  wheel), and copying (Ctrl+C for the whole transcript, Alt+C for just
+  what's currently visible — see [README](README.md) for why Alt, not
+  Ctrl+Shift).
 
 ### Fixed
 
@@ -36,6 +55,25 @@ once a first tagged release is cut.
   title sideways with nothing readable. Its title bar drops the
   `▾`/`▸` chevron to reflect this; a pane in a vertical stack (the
   default) is unaffected.
+- The kyu REPL pane's soft cursor was invisible on some terminal color
+  schemes (bare reverse-video against the terminal's own unset default
+  colors doesn't reliably read as a block). Now an explicit, theme-
+  independent block color.
+- The control strip's own background color used to be the *same* RGB
+  value as a *focused* pane's title bar in both default themes — so a
+  focused pane's title bar was visually indistinguishable from the
+  always-visible strip above it. Now a genuinely distinct color.
+- `-` resize used to be a no-op from the very first press: every new
+  pane started already at resize's own floor. Panes now start with
+  real headroom to shrink, down to a real one-content-line minimum
+  (going smaller than that is minimize's job now, not `-`).
+- Real stale-content ghosting on window resize (maximize, restore from
+  minimized, etc. in a real terminal): `tui`'s renderer reset its own
+  bookkeeping of "what the terminal shows" to blank on a size change,
+  but never actually erased the real terminal, so leftover pixels from
+  a differently-sized earlier frame could stay visible wherever the
+  new layout didn't happen to repaint over them — see
+  [sandgorgon/tui#9](https://github.com/sandgorgon/tui/issues/9).
 
 ### Changed
 
@@ -53,6 +91,8 @@ once a first tagged release is cut.
   `Run()` honoring an `Update`-triggered `tui.FocusMsg`/`SetFocusCmd`
   ([sandgorgon/tui#7](https://github.com/sandgorgon/tui/issues/7)) —
   together, the API the F1-F9 pane-jump feature above is built on.
+- Bumped `github.com/sandgorgon/tui` to v0.1.13, fixing the resize
+  ghosting noted above.
 
 ## [0.1.0] - 2026-08-29
 

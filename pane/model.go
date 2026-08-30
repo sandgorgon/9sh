@@ -215,12 +215,20 @@ type Model struct {
 	// zoomedID is the id of the pane currently filling the whole
 	// content area (0 = no zoom) — see toggleZoomMsg and childConstraint.
 	// Every other pane stays mounted in the tree (never removed from
-	// View()'s output), just collapsed to Length(1) — the same
+	// View()'s output), just collapsed to Length(0) — the same
 	// preserve-retained-state-by-collapsing-not-removing approach
 	// per-pane minimize already established, applied to every sibling
 	// off the zoomed pane's path at once, deliberately not limited to
 	// panes sitting along a Vertical axis the way minimize is.
 	zoomedID int
+
+	// helpOpen is whether the built-in help screen (see help.go) is
+	// currently shown, as a widget.Modal overlay in View() — toggled by
+	// the control strip's "help" button (toggleHelpMsg) or closed from
+	// inside the modal itself (closeHelpMsg; see helpWidget.HandleEvent
+	// for why Esc/'?'/'q' are safe to claim there but not as a global
+	// hotkey elsewhere in this package).
+	helpOpen bool
 }
 
 // New builds a Model seeded with the given panes. env is used to build
@@ -619,6 +627,8 @@ type paneExitedMsg struct {
 type addPaneMsg struct{ spec Spec }
 type quitRequestedMsg struct{}
 type toggleThemeMsg struct{}
+type toggleHelpMsg struct{}
+type closeHelpMsg struct{}
 
 // toggleZoomMsg zooms id to fill the whole content area, or un-zooms
 // it back to the normal split layout if it's already the zoomed pane
@@ -706,6 +716,10 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		return m, tui.Quit()
 	case toggleThemeMsg:
 		m.theme = style.Default(otherAppearance(m.theme.Appearance))
+	case toggleHelpMsg:
+		m.helpOpen = !m.helpOpen
+	case closeHelpMsg:
+		m.helpOpen = false
 	case toggleZoomMsg:
 		if m.zoomedID == mm.id {
 			m.zoomedID = 0
@@ -905,6 +919,19 @@ func (m Model) View() tui.Node {
 		// and is never itself a leaf, so this only ever matters for
 		// root's direct children — matching reality, they can minimize.
 		tui.Child(layout.Fill(1), m.renderSplit(m.root, numbers, true)),
+		// Length(0): a widget.Modal's own assigned Rect is never used
+		// (real drawing happens via PaintOverlay, a separate full-buffer
+		// pass — see Modal's own doc comment), so this deliberately
+		// takes no space in the normal Box flow; its Node just needs to
+		// exist somewhere in the tree every frame for App to find it.
+		tui.Child(layout.Length(0), widget.Modal(helpNode(), widget.ModalOptions{
+			Theme:          m.theme,
+			Title:          "Help",
+			Open:           m.helpOpen,
+			Width:          78,
+			Height:         24,
+			OnOutsideClick: func() tui.Msg { return closeHelpMsg{} },
+		})),
 	)
 }
 
@@ -1044,7 +1071,7 @@ func splitKey(id int) string { return fmt.Sprintf("split-%d", id) }
 // order with no independent override (see InitialFocusAdvances' doc
 // comment for why that matters here). Update this if a button is
 // added or removed above.
-const controlStripFocusables = 7 // + shell, + kyu, + browse, + jobs, + history, theme, quit
+const controlStripFocusables = 8 // + shell, + kyu, + browse, + jobs, + history, help, theme, quit
 
 func (m Model) controlStrip() tui.Node {
 	return tui.Box(layout.Horizontal,
@@ -1053,6 +1080,7 @@ func (m Model) controlStrip() tui.Node {
 		tui.Child(layout.Length(11), m.addPaneButton("+ browse", NamespaceBrowserSpec("browse", m.env))),
 		tui.Child(layout.Length(9), m.addPaneButton("+ jobs", JobViewerSpec("jobs", m.env))),
 		tui.Child(layout.Length(12), m.addPaneButton("+ history", SessionViewerSpec("history", m.sessionDir))),
+		tui.Child(layout.Length(8), m.helpButton()),
 		tui.Child(layout.Length(9), m.themeButton()),
 		tui.Child(layout.Length(8), m.quitButton()),
 		// barFill (not tui.Text("", ...), which paints nothing at all
@@ -1143,6 +1171,29 @@ func (m Model) addPaneButton(label string, spec Spec) tui.Node {
 // while 9sh is running would need to restart it to pick up a new
 // one"): this doesn't change what 9sh detects from $COLORFGBG, it lets
 // the user override that detection live instead.
+// helpButton toggles the built-in help screen (see help.go) — a
+// control-strip button rather than a global hotkey like '?' on
+// purpose: '?' and every other plausible mnemonic key is a real,
+// legitimately typeable character inside a kyu-repl pane's input, a
+// shell's command line, or a namespace path in the browser, so
+// claiming it globally (the same way tui.App delivers every key to
+// both Update and the focused widget at once, with no way to suppress
+// the latter — see this file's own top doc comment on F1-F9 for the
+// one deliberate exception) would silently eat that character
+// whenever any such pane has focus. Once the modal is actually open,
+// though, widget.Modal claims focus exclusively for its own content
+// (see FocusScope), so Esc/'?'/'q' *are* safe to bind there — see
+// helpWidget.HandleEvent.
+func (m Model) helpButton() tui.Node {
+	return flatFocusable("help-btn", " help ", ' ', m.controlStripStyle,
+		func(e input.Event) tui.Msg {
+			if !clicked(e) {
+				return nil
+			}
+			return toggleHelpMsg{}
+		})
+}
+
 func (m Model) themeButton() tui.Node {
 	return flatFocusable("theme-btn", " theme ", ' ', m.controlStripStyle,
 		func(e input.Event) tui.Msg {

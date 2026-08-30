@@ -168,10 +168,16 @@ func bootstrapSession(mgr *job.Manager) (*session.Recorder, string) {
 
 // mouse reporting isn't on by default — tui.App.Run doesn't enable it
 // itself (not every app wants click-to-focus), the same convention
-// every tui example that wants clicks follows.
+// every tui example that wants clicks follows. Bracketed paste (mode
+// 2004) is the same story — tui's own input.Decoder already parses it
+// into a PasteEvent (see kyu-repl's HandleEvent, the first consumer),
+// it just isn't turned on for the caller automatically.
 const (
 	enableMouse  = "\x1b[?1000h\x1b[?1006h"
 	disableMouse = "\x1b[?1000l\x1b[?1006l"
+
+	enablePaste  = "\x1b[?2004h"
+	disablePaste = "\x1b[?2004l"
 )
 
 // runTUI launches the pane multiplexer as 9sh's primary interactive
@@ -200,6 +206,8 @@ func runTUI(env *eval.Env, sessionDir string) error {
 
 	fmt.Print(enableMouse)
 	defer fmt.Print(disableMouse)
+	fmt.Print(enablePaste)
+	defer fmt.Print(disablePaste)
 
 	return app.Run()
 }

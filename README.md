@@ -85,6 +85,90 @@ Drop `common.ky` / `hosts/<hostname>.ky` under `~/.config/9/ns` and 9sh
 runs them at startup, against the same environment, for persistent bind
 rules/aliases/env defaults — see [Design](#design).
 
+## Using the pane multiplexer
+
+Run `9sh` with no arguments in a real terminal and you land in the pane
+multiplexer — 9sh's primary, default way to work, not a fallback. It
+starts with one kyu REPL pane; everything else is built up from there.
+The same reference is built into 9sh itself: click **help** in the
+control strip (or Tab/Shift-Tab to it and press Enter) any time.
+
+### The control strip
+
+The always-visible top row:
+
+| Button | Does |
+|---|---|
+| `+ shell` / `+ kyu` / `+ browse` / `+ jobs` / `+ history` | Add a pane of that kind |
+| `help` | Open the built-in keybinding reference |
+| `theme` | Flip light/dark, live, no restart |
+| `quit` | Quit 9sh |
+
+`+` always splits the last pane in document order (see below), not
+"whatever's focused" — `tui`, the TUI toolkit 9sh is built on, doesn't
+give application code a way to ask "what currently has focus," only to
+set it, so this is a deliberate, deterministic choice, not a
+limitation you're expected to work around.
+
+### Every pane's title bar
+
+| Key | Does |
+|---|---|
+| `x` | Close this pane |
+| `d` / `r` | Split down / right — then pick the new sibling's kind: `s`=shell, `k`=kyu, `b`=browse, `j`=jobs, `h`=history (anything else cancels) |
+| `z` | Zoom this pane to fill the whole content area, or un-zoom it back — every other pane's process keeps running the whole time, just out of view |
+| `+` / `-` | Resize along the split axis, down to one visible content line — smaller than that, minimize instead |
+| click / Enter | Minimize/restore (only along a vertical split — collapsing a horizontal sibling's *width* to one column would garble its title sideways, so those can't minimize; the chevron drops accordingly) |
+| `F1`-`F9` | Jump keyboard focus straight to pane 1-9 (each title bar shows its own `[F#]` once assigned) |
+
+Repeated `+` clicks and `d`/`r` splits both build a genuine 2D tiling
+tree (alternating direction on `+`, your choice on `d`/`r`) — there's
+no single-axis "everything stacks one way" limitation.
+
+### Inside a kyu REPL pane
+
+Once the pane's *content* has focus (not just its title bar — Tab or
+click into it):
+
+| Key | Does |
+|---|---|
+| `Enter` | Submit, or keep editing if brackets are still open |
+| `←`/`→`, Ctrl+`←`/`→` | Move the cursor by character / by word |
+| `Home`/`End`, Ctrl+A/Ctrl+E | Jump to the start/end of the current line |
+| `Backspace`/`Delete` | Delete before/after the cursor |
+| Ctrl+W | Delete the word before the cursor |
+| Ctrl+U / Ctrl+K | Delete to line start / delete to line end |
+| `↑`/`↓` | Recall previous/next submitted input (only outside a multi-line continuation) |
+| `PageUp`/`PageDown`, mouse wheel | Scroll the transcript, independent of the input line |
+| Ctrl+C | Copy the whole transcript |
+| Alt+C | Copy only what's currently visible on screen |
+| paste | Inserts at the cursor |
+
+Ctrl+C is "copy all," not the Ctrl+Shift+C you might expect from a
+desktop terminal: most terminal emulators (this one's own standing
+test target, gnome-terminal/VTE, included) send the identical byte for
+Ctrl+C and Ctrl+Shift+C on a plain letter key — only a kitty-keyboard-
+protocol-aware terminal can tell them apart, which isn't something to
+assume. Alt+C for "just the visible part" sidesteps that ambiguity
+entirely.
+
+No undo/redo, and no multi-line-aware history recall (Up/Down inside
+an open multi-line continuation navigate lines, not history) —
+deliberate scope cuts for a REPL input line, not a general text
+editor.
+
+### Inside a shell pane
+
+Once the pane's content has focus, Tab reaches the hosted shell
+directly — real completion, not pane navigation. **Ctrl+\\** releases
+focus back to navigating panes/title bars/the control strip.
+
+### Mouse
+
+Click a pane's content to focus it; click a title bar to minimize/
+restore it; click any control-strip or title-bar button the same way
+you'd press its key. Mouse wheel scrolls a kyu REPL pane's transcript.
+
 ## Status
 
 Pre-1.0 (`v0.1.0`). The full v1 build-order plan (namespace core, jobs,
@@ -95,14 +179,27 @@ mutual-TLS handshakes between distinct identities, `-race` clean
 throughout, and every phase additionally exercised through the actual
 built binary, not just `go test`.
 
-The pane multiplexer has now had real hands-on use, not just headless
-`tui.App` tests — several real bugs (invisible keyboard focus on
-launch, blank control-strip/title-bar chrome, an invisible cursor) were
-found and fixed this way, not caught by any automated test. Two more
-namespace-aware panes (a job viewer, a session-history viewer) have
-landed since. Treat 9sh as ready for hands-on testing, not as a
-finished daily driver — the kyu language in particular is young enough
-that rough edges are still expected.
+The pane multiplexer has had substantial real hands-on use, not just
+headless `tui.App` tests — several real bugs (invisible keyboard focus
+on launch, blank control-strip/title-bar chrome, an invisible cursor,
+stale content surviving a window resize, a resize floor with no room
+to actually shrink) were found and fixed this way, not caught by any
+automated test. Pane management has grown well past the original v1
+scope: a real 2D tiling tree (not a single-axis stack), maximize/zoom,
+per-pane box-drawing frames, a runtime theme toggle, and a full kyu
+REPL line editor (cursor movement, history recall, kill commands,
+paste, independent scrolling, clipboard copy) are all in place, plus a
+built-in help screen — see [Using the pane multiplexer](#using-the-pane-multiplexer).
+Two more namespace-aware panes (a job viewer, a session-history viewer)
+round out the design doc's original differentiator list.
+
+Getting close to usable as an actual daily driver, not just ready for
+hands-on testing — but the kyu language itself is still young enough
+that rough edges are expected there, and a few backlog items remain
+open: proxy-job (`@host{}`) session recording has no local-side linking
+record yet, and the remote-namespace ACL model is collapsed to one
+global allowlist rather than the design doc's original per-root
+scheme.
 
 ## Design
 

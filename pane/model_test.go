@@ -1,6 +1,7 @@
 package pane
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -712,6 +713,82 @@ func TestPaneTitleShowsFKeyLabel(t *testing.T) {
 	}
 }
 
+// TestKyuReplPgUpScrollsTranscript drives the real input/render path
+// (not just kyuReplWidget's own HandleEvent/scrollOffset field, which
+// TestKyuReplPgUpPgDownAdjustScrollOffset in kyurepl_test.go already
+// covers as a pure unit test) to confirm scrolling actually changes
+// what Paint shows — an off-by-one in Paint's own start/end slicing
+// wouldn't be caught by the field-level test alone. Submits enough
+// distinct-marker lines to overflow a deliberately tiny content area,
+// then checks that PgUp swaps the latest marker out of view for an
+// earlier one, and enough PgDowns bring it back. Markers are string
+// literals ("m1".."m9"), not bare digits: value.String's own String()
+// returns unquoted content with no other formatting, and critically
+// every line already contains a literal '9' via the "9sh>" prompt
+// itself — a bare-digit marker would false-positive-match that on
+// every single line, not just the one actually being checked for.
+func TestKyuReplPgUpScrollsTranscript(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("kyu", nil))
+	app := tui.NewApp(m, 40, 6) // small enough that a handful of lines overflow it
+	defer app.Close()
+
+	for range controlStripFocusables + 1 { // +1: title bar -> content, see InitialFocusAdvances
+		app.HandleInput(input.KeyEvent{Key: input.KeyTab})
+	}
+	for n := 1; n <= 9; n++ {
+		marker := fmt.Sprintf(`"m%d"`, n)
+		for _, r := range marker {
+			for _, cmd := range app.HandleInput(input.KeyEvent{Rune: r}) {
+				if cmd != nil {
+					app.Dispatch(cmd())
+				}
+			}
+		}
+		for _, cmd := range app.HandleInput(input.KeyEvent{Key: input.KeyEnter}) {
+			if cmd != nil {
+				app.Dispatch(cmd())
+			}
+		}
+	}
+	forceRenders(app, 1)
+	if buf := app.Buffer().String(); !strings.Contains(buf, "m9") {
+		t.Fatalf("expected the latest marker (m9, echoed input or result) visible before scrolling:\n%s", buf)
+	}
+
+	// Hammer PgUp well past enough to reach the very top (start clamps
+	// at 0 — see childConstraint/Paint's own max0 reasoning) rather
+	// than relying on one press moving exactly far enough: both m9's
+	// echoed-input line and its result line contain the "m9" marker,
+	// so a single page isn't guaranteed to clear both out of view.
+	for range 10 {
+		for _, cmd := range app.HandleInput(input.KeyEvent{Key: input.KeyPgUp}) {
+			if cmd != nil {
+				app.Dispatch(cmd())
+			}
+		}
+	}
+	forceRenders(app, 1)
+	buf := app.Buffer().String()
+	if strings.Contains(buf, "m9") {
+		t.Fatalf("expected the latest marker (m9) scrolled out of view after PgUp:\n%s", buf)
+	}
+	if !strings.Contains(buf, "m1") {
+		t.Fatalf("expected the earliest marker (m1) visible at the top after PgUp:\n%s", buf)
+	}
+
+	for range 15 { // more than enough PgDowns to reach the bottom again
+		for _, cmd := range app.HandleInput(input.KeyEvent{Key: input.KeyPgDown}) {
+			if cmd != nil {
+				app.Dispatch(cmd())
+			}
+		}
+	}
+	forceRenders(app, 1)
+	if buf := app.Buffer().String(); !strings.Contains(buf, "m9") {
+		t.Fatalf("expected the latest marker (m9) visible again after scrolling back down:\n%s", buf)
+	}
+}
+
 // TestSplittingLiveShellPanePreservesItsProcess pins down the fix for
 // sandgorgon/tui#3 (picked up via the v0.1.10 bump): splitting a pane
 // wraps it one level deeper in the tree, which used to look like a
@@ -871,6 +948,68 @@ func TestZoomingAPaneKeepsSiblingProcessAlive(t *testing.T) {
 
 	if strings.Contains(app.Buffer().String(), "failed to start") {
 		t.Fatal("the shell pane was disposed and recreated across zoom/un-zoom — its running process was killed")
+	}
+}
+
+func TestToggleHelpMsgOpensAndCloses(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	if m.helpOpen {
+		t.Fatal("help should start closed")
+	}
+
+	next, _ := m.Update(toggleHelpMsg{})
+	m = next.(Model)
+	if !m.helpOpen {
+		t.Fatal("expected help open after one toggleHelpMsg")
+	}
+
+	next, _ = m.Update(toggleHelpMsg{})
+	m = next.(Model)
+	if m.helpOpen {
+		t.Fatal("expected help closed after a second toggleHelpMsg")
+	}
+}
+
+func TestCloseHelpMsgClosesRegardlessOfState(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	next, _ := m.Update(toggleHelpMsg{})
+	m = next.(Model)
+	if !m.helpOpen {
+		t.Fatal("setup: expected help open")
+	}
+	next, _ = m.Update(closeHelpMsg{})
+	m = next.(Model)
+	if m.helpOpen {
+		t.Fatal("expected help closed after closeHelpMsg")
+	}
+}
+
+// TestHelpButtonShowsHelpContentOnScreen drives the real input/render
+// path (click-equivalent Enter on the help button, via the actual
+// control-strip focus order) rather than just Update, confirming the
+// modal's content genuinely reaches the screen — a wiring mistake in
+// View() (e.g. the wrong Open expression, or the Modal Node missing
+// from the tree some frame) wouldn't be caught by the Update-only
+// tests above.
+func TestHelpButtonShowsHelpContentOnScreen(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	app := tui.NewApp(m, 80, 24)
+	defer app.Close()
+
+	// Tab to the "help" button: starts at index 0 (the first add-pane
+	// button), and 5 add-pane buttons precede "help" in the control
+	// strip (see controlStrip's own child order), so 5 Tabs land there.
+	for range 5 {
+		app.HandleInput(input.KeyEvent{Key: input.KeyTab})
+	}
+	for _, cmd := range app.HandleInput(input.KeyEvent{Key: input.KeyEnter}) {
+		if cmd != nil {
+			app.Dispatch(cmd())
+		}
+	}
+	forceRenders(app, 1)
+	if buf := app.Buffer().String(); !strings.Contains(buf, "pane multiplexer help") {
+		t.Fatalf("expected help content on screen after activating the help button:\n%s", buf)
 	}
 }
 

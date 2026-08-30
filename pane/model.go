@@ -19,7 +19,18 @@
 // the focused widget at once, with no way to suppress the latter — a
 // hotkey pressed while a Terminal pane is focused would be forwarded
 // straight into the hosted shell right alongside whatever Update did
-// with it. Panes are arranged in a layout tree (see splitNode), not a
+// with it. F1-F9 (jump keyboard focus straight to pane N, see
+// paneOrder and Update's input.KeyEvent case) are a deliberate
+// exception to that rule: they're the one case where a real global
+// hotkey is worth the same forwarding-into-the-hosted-shell tradeoff,
+// chosen specifically because F-keys are far less likely than a plain
+// letter/digit to collide with anything a real shell or its readline
+// bindings already use. This needed sandgorgon/tui#5 and #7 (App.
+// SetFocus/FocusIndex, then Run() honoring an Update-triggered
+// tui.FocusMsg) to become possible at all — Model.Update has no access
+// to the live *tui.App, so before those landed there was no path from
+// "Update saw the hotkey" to "focus actually moved". Panes are
+// arranged in a layout tree (see splitNode), not a
 // flat list; every node in that tree — interior split or pane leaf —
 // keeps an explicit, stable key at every level: reconcile.go's key
 // matching is scoped per-parent, so an unkeyed ancestor whose position
@@ -399,6 +410,44 @@ func adjustWeight(n *splitNode, targetPaneID int, delta int) bool {
 	return false
 }
 
+// paneOrder returns every pane id in the same depth-first, left-to-
+// right document order tui's own reconciler visits the tree in
+// (matching renderSplit's traversal exactly, since both walk
+// n.children in the same stored order) — this is the order Tab
+// visits panes in, and so also the order F1-F9's pane numbering and
+// Update's input.KeyEvent case rely on.
+func (m Model) paneOrder() []int {
+	var order []int
+	var walk func(n *splitNode)
+	walk = func(n *splitNode) {
+		if n == nil {
+			return
+		}
+		if n.paneID != 0 {
+			order = append(order, n.paneID)
+			return
+		}
+		for _, c := range n.children {
+			walk(c.node)
+		}
+	}
+	walk(m.root)
+	return order
+}
+
+// fKeyPaneNumber reports the 1-indexed pane number an F-key requests
+// (F1 -> 1, ... F9 -> 9), or false for any other key. Capped at F9/9
+// panes on purpose: beyond that, a dedicated F-key per pane stops
+// being a usable mnemonic anyway (real F-key rows only go to F12, and
+// F10-F12 are already claimed by some terminals/window managers) —
+// panes past the 9th just don't get a jump hotkey or a "[F#]" label.
+func fKeyPaneNumber(k input.Key) (int, bool) {
+	if k >= input.KeyF1 && k <= input.KeyF9 {
+		return int(k-input.KeyF1) + 1, true
+	}
+	return 0, false
+}
+
 // Init kicks off the initial namespace/disk listing for any seed panes
 // that need it (namespace browser, job viewer, session viewer) — each
 // does real I/O, which belongs in a Cmd, not directly in Update/View.
@@ -441,6 +490,23 @@ func AddPane(s Spec) tui.Msg { return addPaneMsg{spec: s} }
 
 func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 	switch mm := msg.(type) {
+	case input.KeyEvent:
+		// Every input.Event reaches Update via App.HandleInput's
+		// unconditional Dispatch, regardless of which widget currently
+		// has focus (see this file's own doc comment on why F1-F9
+		// specifically are safe to treat as a real global hotkey here).
+		// n is 1-indexed to match the F-key number shown in each title
+		// bar's "[F#]" prefix (paneNode); paneOrder()'s Nth entry sits
+		// at focus index controlStripFocusables + (N-1)*2, since every
+		// pane contributes exactly two consecutive focusables (its
+		// title bar, then its content) in that same document order —
+		// see controlStripFocusables' own doc comment for the "+2 per
+		// pane" half of this arithmetic.
+		if n, ok := fKeyPaneNumber(mm.Key); ok {
+			if order := m.paneOrder(); n <= len(order) {
+				return m, tui.SetFocusCmd(controlStripFocusables + (n-1)*2)
+			}
+		}
 	case closePaneMsg:
 		return m.closePane(mm.id)
 	case splitPaneMsg:
@@ -649,9 +715,17 @@ func listDirCmd(id int, namespace *ns.Namespace, path string) tui.Cmd {
 // ---- view ----
 
 func (m Model) View() tui.Node {
+	// numbers is computed once per frame from the same paneOrder() Update
+	// relies on for F1-F9 (see its input.KeyEvent case) — one source of
+	// truth for "which pane is number N", not two traversals that could
+	// drift apart.
+	numbers := make(map[int]int, len(m.panes))
+	for i, id := range m.paneOrder() {
+		numbers[id] = i + 1
+	}
 	return tui.Box(layout.Vertical,
 		tui.Child(layout.Length(1), m.controlStrip()),
-		tui.Child(layout.Fill(1), m.renderSplit(m.root)),
+		tui.Child(layout.Fill(1), m.renderSplit(m.root, numbers)),
 	)
 }
 
@@ -659,7 +733,9 @@ func (m Model) View() tui.Node {
 // Node (already stably keyed by paneNode itself); an interior split
 // becomes a Box along n.dir, one child per entry in n.children, keyed
 // by n's own id — see splitNode's doc comment on why every level needs
-// its own stable key, not just the leaves.
+// its own stable key, not just the leaves. numbers is View()'s
+// once-per-frame pane-number map, threaded down so paneNode can show a
+// "[F#]" label without each leaf re-walking the whole tree itself.
 //
 // A minimized leaf's constraint is decided here, by its parent, rather
 // than inside paneNode — matching exactly how the pre-tree View() loop
@@ -668,9 +744,9 @@ func (m Model) View() tui.Node {
 // this way is a known rough edge (right for a vertical stack, less
 // meaningful sideways) — tracked as follow-up work once horizontal
 // splits actually exist, not fixed here.
-func (m Model) renderSplit(n *splitNode) tui.Node {
+func (m Model) renderSplit(n *splitNode, numbers map[int]int) tui.Node {
 	if n.paneID != 0 {
-		return m.paneNode(m.find(n.paneID))
+		return m.paneNode(m.find(n.paneID), numbers[n.paneID])
 	}
 	children := make([]tui.BoxChild, len(n.children))
 	for i, c := range n.children {
@@ -680,7 +756,7 @@ func (m Model) renderSplit(n *splitNode) tui.Node {
 				constraint = layout.Length(1)
 			}
 		}
-		children[i] = tui.Child(constraint, m.renderSplit(c.node))
+		children[i] = tui.Child(constraint, m.renderSplit(c.node, numbers))
 	}
 	return tui.Box(n.dir, children...).Key(splitKey(n.id))
 }
@@ -803,7 +879,7 @@ func clicked(e input.Event) bool {
 	return false
 }
 
-func (m Model) paneNode(p *paneState) tui.Node {
+func (m Model) paneNode(p *paneState, number int) tui.Node {
 	id := p.id
 
 	chevron := "▾ "
@@ -811,10 +887,20 @@ func (m Model) paneNode(p *paneState) tui.Node {
 		chevron = "▸ "
 	}
 	label := chevron + paneLabel(p)
+	if number >= 1 && number <= 9 {
+		// Matches fKeyPaneNumber's own F1-F9 cap — a pane past the 9th
+		// just doesn't get a jump hotkey or a label for one.
+		label = fmt.Sprintf("[F%d] ", number) + label
+	}
 	if p.exited {
 		label += " (exited)"
 	}
-	label += "  (x close, d/r split, +/- resize)"
+	// Kept terse on purpose, not "(x close, d/r split, +/- resize)": once
+	// a title bar is one of several side by side after a horizontal
+	// split, or carries an "[F#]" jump-hotkey prefix, the available width
+	// per pane shrinks fast — see TestSplitKeysOnTitleBar's 60-col/2-pane
+	// case, which is exactly narrow enough to clip the old, longer hint.
+	label += "  (x/d/r/+/-)"
 	titleBar := flatFocusable(paneKey(id, "title"), label,
 		func(focused bool) cell.Style { return m.titleStyle(p, focused) },
 		// Every key here is scoped to the title bar specifically, never

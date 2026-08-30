@@ -277,7 +277,10 @@ func TestResizeAdjustsWeightAndClamps(t *testing.T) {
 // TestTitleBarXKeyClosesPane, to confirm 'r' on a title bar actually
 // splits via app.HandleInput (not just a direct Update call) — the new
 // sibling's own title bar (with the same close/split/resize hint text)
-// should now be on screen too.
+// should now be on screen too. 60 cols split into two 30-col halves is
+// deliberately narrow enough to have once clipped the hint text
+// mid-word before it was shortened — see paneNode's own comment on
+// why the hint is "(x/d/r/+/-)" rather than the old spelled-out form.
 func TestSplitKeysOnTitleBar(t *testing.T) {
 	m := New(nil, "", KyuReplSpec("kyu", nil))
 
@@ -295,8 +298,91 @@ func TestSplitKeysOnTitleBar(t *testing.T) {
 	forceRenders(app, 2)
 
 	buf := app.Buffer().String()
-	if n := strings.Count(buf, "x close, d/r split"); n != 2 {
+	if n := strings.Count(buf, "x/d/r/+/-"); n != 2 {
 		t.Fatalf("expected 2 title bars after splitting, found %d:\n%s", n, buf)
+	}
+}
+
+// TestFKeyRequestsFocusAtComputedIndex is a direct Update-level test:
+// with 3 panes, F2 should ask to focus the second pane's title bar —
+// controlStripFocusables buttons, then 2 focusables (title, content)
+// per pane ahead of it, matching paneOrder()'s document order and
+// tui's own App.focusables ordering (see Update's input.KeyEvent case
+// for the arithmetic this pins down).
+func TestFKeyRequestsFocusAtComputedIndex(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("a", nil), KyuReplSpec("b", nil), KyuReplSpec("c", nil))
+
+	_, cmd := m.Update(input.KeyEvent{Key: input.KeyF2})
+	if cmd == nil {
+		t.Fatal("expected a non-nil Cmd requesting a focus change")
+	}
+	fm, ok := cmd().(tui.FocusMsg)
+	if !ok {
+		t.Fatalf("expected tui.FocusMsg, got %T", cmd())
+	}
+	want := controlStripFocusables + 2 // pane b's title bar
+	if fm.Index != want {
+		t.Fatalf("got focus index %d, want %d", fm.Index, want)
+	}
+}
+
+// TestFKeyPastPaneCountIsNoop confirms F9 with only one pane open
+// doesn't return a Cmd at all — fKeyPaneNumber recognizes the key, but
+// paneOrder() is too short, so there's nothing to jump to.
+func TestFKeyPastPaneCountIsNoop(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("a", nil))
+	_, cmd := m.Update(input.KeyEvent{Key: input.KeyF9})
+	if cmd != nil {
+		t.Fatalf("expected a nil Cmd, got one that produces %v", cmd())
+	}
+}
+
+// TestFKeyJumpsFocusEndToEnd drives the real input path (mirroring
+// TestSplitKeysOnTitleBar): confirms a real F2 KeyEvent traveling
+// through App.HandleInput's actual event pipeline (not a direct
+// Update call) still produces a Cmd yielding the right tui.FocusMsg.
+//
+// This does *not* prove tui actually moves live focus in response —
+// FocusMsg's special-casing (like QuitMsg's and ClipboardMsg's) lives
+// inside Run()'s own event loop, not in Dispatch, so App.FocusIndex()
+// never changes here even after "delivering" the Cmd's Msg via
+// Dispatch — confirmed by tracing tui/app.go directly: Run() reads
+// this Msg off its own private msgCh and calls a.SetFocus itself
+// before Dispatch ever sees it, and there's no headless harness for
+// Run() (the tui#7 PR's own test plan notes the same limitation for
+// QuitMsg/ClipboardMsg — this project's headless tests can't drive
+// Run() at all, only Dispatch/HandleInput). Real end-to-end
+// confirmation that F2 moves live focus is a tmux/real-terminal check,
+// not something a Go test can assert.
+func TestFKeyJumpsFocusEndToEnd(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("a", nil), KyuReplSpec("b", nil))
+	app := tui.NewApp(m, 80, 16)
+	defer app.Close()
+
+	cmds := app.HandleInput(input.KeyEvent{Key: input.KeyF2})
+	if len(cmds) != 1 || cmds[0] == nil {
+		t.Fatalf("expected exactly one non-nil Cmd, got %v", cmds)
+	}
+	fm, ok := cmds[0]().(tui.FocusMsg)
+	if !ok {
+		t.Fatalf("expected tui.FocusMsg, got %T", cmds[0]())
+	}
+	want := controlStripFocusables + 2 // pane b's title bar
+	if fm.Index != want {
+		t.Fatalf("got focus index %d, want %d", fm.Index, want)
+	}
+}
+
+// TestPaneTitleShowsFKeyLabel confirms the "[F#]" hint painted in
+// paneNode actually reaches the screen for the first 9 panes.
+func TestPaneTitleShowsFKeyLabel(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("a", nil), KyuReplSpec("b", nil))
+	app := tui.NewApp(m, 80, 16)
+	defer app.Close()
+
+	buf := app.Buffer().String()
+	if !strings.Contains(buf, "[F1]") || !strings.Contains(buf, "[F2]") {
+		t.Fatalf("expected both [F1] and [F2] labels on screen:\n%s", buf)
 	}
 }
 

@@ -18,6 +18,11 @@ once a first tagged release is cut.
 - Pane management: close (`x`), split down/right (`d`/`r`), and resize
   (`+`/`-`) on any pane's title bar. Panes are now arranged in a real
   layout tree rather than a single vertical stack.
+- F1-F9 jump keyboard focus directly to pane 1-9's title bar (each
+  title bar shows its own `[F#]` label once assigned). The title-bar
+  hint text was shortened from "(x close, d/r split, +/- resize)" to
+  "(x/d/r/+/-)" to keep room for the new label, especially once
+  horizontal splits leave less width per pane.
 
 ### Changed
 
@@ -29,6 +34,12 @@ once a first tagged release is cut.
   kills and restarts it.
 - Bumped `github.com/sandgorgon/9p` to v0.6.0 (adds a `-net` flag to
   `cmd/9pc`; no change to anything 9sh imports).
+- Bumped `github.com/sandgorgon/tui` further, to v0.1.12, picking up
+  `App.FocusIndex()`/`SetFocus(int)`
+  ([sandgorgon/tui#5](https://github.com/sandgorgon/tui/issues/5)) and
+  `Run()` honoring an `Update`-triggered `tui.FocusMsg`/`SetFocusCmd`
+  ([sandgorgon/tui#7](https://github.com/sandgorgon/tui/issues/7)) —
+  together, the API the F1-F9 pane-jump feature above is built on.
 
 ## [0.1.0] - 2026-08-29
 

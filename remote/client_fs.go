@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	p9 "github.com/sandgorgon/9p"
 	"github.com/sandgorgon/9p/client"
@@ -14,9 +13,10 @@ import (
 // clientFS adapts a dialed *client.Client into a server.FileSystem, so
 // ns.Namespace.BindFS can graft a remote peer's namespace exactly like any
 // other backend — the "Native tier" from the design doc's architecture
-// section, just reached over the wire instead of in-process.
+// section, just reached over the wire instead of in-process. Only root is
+// needed here: clientFile does all its own work through Fid/File methods
+// (see its doc comment), with no separate *client.Client reference at all.
 type clientFS struct {
-	c    *client.Client
 	root *client.Fid // the client's attach root
 }
 
@@ -25,8 +25,8 @@ type clientFS struct {
 // one included) gets its own independent fid, cloned from fs.root, so
 // Closing any single clientFile (including a root-positioned one from an
 // earlier Attach) can never invalidate fs.root as the shared anchor other
-// clientFiles still use for their own path-based re-walks (Open/Create/
-// ".."). See clientFile's doc comment.
+// clientFiles still use for their own path-based re-walks (Walk/"..").
+// See clientFile's doc comment.
 func (fs *clientFS) Attach(ctx context.Context, uname, aname string) (server.File, error) {
 	rootClone, err := fs.root.WalkContext(ctx) // zero names: clone, per Fid.WalkContext's own doc
 	if err != nil {
@@ -36,37 +36,29 @@ func (fs *clientFS) Attach(ctx context.Context, uname, aname string) (server.Fil
 	if err != nil {
 		return nil, fmt.Errorf("remote: attach: stat: %w", err)
 	}
-	return &clientFile{c: fs.c, root: fs.root, fid: rootClone, st: st}, nil
+	return &clientFile{root: fs.root, fid: rootClone, st: st}, nil
 }
 
 // clientFile adapts one node of a remote attach tree into a local
 // server.File.
 //
-// p9's client package intentionally exposes two disjoint handle types —
-// *client.Fid (Walk/Stat/WStat/Remove/Create: cheap metadata operations,
-// no I/O) and *client.File (Read/Write/Seek: obtained only via
-// Client.Open/Create against a path string from the attach root) — with no
-// public way to convert one into the other. This adapter stays entirely
-// within that exported surface: Walk keeps a *client.Fid (no wire I/O
-// needed for pure metadata/traversal), while Open/Create re-walk from the
-// attach root by path string to obtain a *client.File. That re-walk on
-// Open is a real, known inefficiency versus reusing the Fid Walk already
-// produced — an accepted v1 simplification, not a correctness gap.
-// Filed upstream as sandgorgon/9p#4 (Fid.OpenFile/CreateFile, returning a
-// *File built from a Fid the caller already holds instead of re-walking);
-// once that lands, Open/Create here can call it directly on f.fid instead
-// of going through c.OpenContext/c.CreateContext by path string.
+// Open and Create reuse f.fid directly via Fid.OpenFile/CreateFile
+// (github.com/sandgorgon/9p v0.7.0+) rather than discarding it and
+// re-walking from the attach root by path string through
+// Client.Open/Create — one real Twalk round-trip saved per open, and for
+// Create, one full extra walk-for-metadata avoided entirely (see Create's
+// own doc comment). Filed as sandgorgon/9p#4, fixed in
+// github.com/sandgorgon/9p#5 — this adapter no longer needs joinPath or
+// the *client.Client at all for I/O, only for the one remaining
+// Client-level operation, Attach's root clone (see clientFS).
 type clientFile struct {
-	c    *client.Client
 	root *client.Fid // shared anchor for path-based re-walks; never Closed by any clientFile — see clientFS.Attach
-	fid  *client.Fid // this node's own independent metadata handle; Closed by Close()
+	fid  *client.Fid // this node's own handle — metadata before Open/Create, and (once one succeeds) the same fid *client.File wraps for I/O; see Open/Create/Close
 	path []string    // relative to the attach root; nil = root itself
 	st   p9.Stat
 
-	open *client.File // non-nil once Open/Create has succeeded
+	open *client.File // non-nil once Open/Create has succeeded; always wraps fid itself, never a second independent fid — see Close
 }
-
-func joinPath(parts []string) string { return strings.Join(parts, "/") }
 
 func (f *clientFile) Qid() p9.Qid { return f.st.Qid }
 
@@ -103,11 +95,14 @@ func (f *clientFile) walkTo(ctx context.Context, path []string) (server.File, er
 	if err != nil {
 		return nil, err
 	}
-	return &clientFile{c: f.c, root: f.root, fid: fid, path: path, st: st}, nil
+	return &clientFile{root: f.root, fid: fid, path: path, st: st}, nil
 }
 
+// Open opens f.fid itself for I/O (Fid.OpenFile) rather than discarding it
+// and re-walking the path from the attach root — f.open ends up wrapping
+// the exact same fid f.fid already names, not a second one; see Close.
 func (f *clientFile) Open(ctx context.Context, mode p9.Mode) error {
-	of, err := f.c.OpenContext(ctx, joinPath(f.path), mode)
+	of, err := f.fid.OpenFileContext(ctx, mode)
 	if err != nil {
 		return err
 	}
@@ -118,22 +113,30 @@ func (f *clientFile) Open(ctx context.Context, mode p9.Mode) error {
 	return nil
 }
 
+// Create clones f.fid first — Fid.CreateFile creates name under the fid
+// it's called on and then repositions that same fid onto the new child
+// (matching Tcreate's wire semantics), so calling it directly on f.fid
+// would silently repoint this directory's own handle at the child it just
+// created. Cloning (a cheap zero-element Walk) keeps f usable as the
+// directory it already is, and still costs one fewer round trip overall
+// than the old path-string approach: that walked to the parent, created,
+// then walked the whole new path again from the root purely to get a
+// metadata fid for the returned node — clone+create is two round trips
+// total, not three, and the resulting fid already serves both metadata
+// and I/O for the new child.
 func (f *clientFile) Create(ctx context.Context, name string, perm, mode p9.Mode) (server.File, error) {
-	newPath := append(append([]string{}, f.path...), name)
-	of, err := f.c.CreateContext(ctx, joinPath(newPath), perm, mode)
+	dirClone, err := f.fid.WalkContext(ctx)
 	if err != nil {
+		return nil, err
+	}
+	of, err := dirClone.CreateFileContext(ctx, name, perm, mode)
+	if err != nil {
+		dirClone.ClunkContext(ctx)
 		return nil, err
 	}
 	st, _ := of.Stat()
-	// Client.Create only hands back I/O, not a Fid — walk to the new path
-	// separately so the returned File also supports Stat/WStat/Remove/
-	// further Walk like any other node.
-	fid, err := f.root.WalkContext(ctx, newPath...)
-	if err != nil {
-		of.Close()
-		return nil, err
-	}
-	return &clientFile{c: f.c, root: f.root, fid: fid, path: newPath, st: st, open: of}, nil
+	newPath := append(append([]string{}, f.path...), name)
+	return &clientFile{root: f.root, fid: dirClone, path: newPath, st: st, open: of}, nil
 }
 
 // Read seeks the open *client.File to offset and uses its plain io.Reader
@@ -165,15 +168,17 @@ func (f *clientFile) Remove(ctx context.Context) error {
 	return f.fid.RemoveContext(ctx)
 }
 
+// Close clunks f's fid exactly once. Unlike before Open/Create switched to
+// Fid.OpenFile/CreateFile, f.open (once set) always wraps f.fid itself,
+// not a second independent fid — File.Close already clunks it, so a
+// separate f.fid.ClunkContext here would double-clunk the same fid and
+// surface a spurious "unknown fid" error from the second one.
 func (f *clientFile) Close() error {
-	var err error
 	if f.open != nil {
-		err = f.open.Close()
+		return f.open.Close()
 	}
 	if f.fid != nil {
-		if cerr := f.fid.ClunkContext(context.Background()); err == nil {
-			err = cerr
-		}
+		return f.fid.ClunkContext(context.Background())
 	}
-	return err
+	return nil
 }

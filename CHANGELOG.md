@@ -92,6 +92,15 @@ once a first tagged release is cut.
 
 ### Changed
 
+- Bumped `github.com/sandgorgon/9p` to v0.7.0, which adds
+  `Fid.OpenFile`/`Fid.CreateFile`
+  ([sandgorgon/9p#4](https://github.com/sandgorgon/9p/issues/4)).
+  `remote/client_fs.go`'s `clientFile` now uses them directly instead
+  of discarding its own fid and re-walking the whole path from the
+  attach root by string just to obtain an I/O-capable `*client.File`
+  — one real `Twalk` round-trip saved per `Open`, and for `Create`,
+  one entire extra walk-for-metadata avoided outright (a plain fid
+  clone plus one `Tcreate`, not walk-create-walk).
 - Bumped `github.com/sandgorgon/tui` to v0.1.10, which fixes
   [sandgorgon/tui#3](https://github.com/sandgorgon/tui/issues/3) — the
   reconciler now preserves a keyed subtree's retained state (a live

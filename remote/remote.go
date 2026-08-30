@@ -117,7 +117,7 @@ func dial(ctx context.Context, id *auth.Identity, knownPeersPath string, known a
 		c.Close()
 		return nil, fmt.Errorf("remote: attaching to %s: %w (the peer may have rejected this connection — check its authorized-peers)", addr, err)
 	}
-	return &Conn{client: c, fp: peerFP, fs: &clientFS{c: c, root: rootFid}}, nil
+	return &Conn{client: c, fp: peerFP, fs: &clientFS{root: rootFid}}, nil
 }
 
 // verifyPeer decides whether to trust addr's presented fingerprint,

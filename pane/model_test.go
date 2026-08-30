@@ -30,6 +30,27 @@ func TestNewSeedsPanes(t *testing.T) {
 	}
 }
 
+// TestControlStripColorDistinctFromPaneTitles guards against the
+// regression reported 2026-08-30: controlStripStyle used to base
+// itself on theme.Primary, which is literally the same RGB value as
+// theme.Focus in tui/style's own default themes — so a focused pane's
+// title bar/top border came out visually identical to the always-
+// visible control strip above it. Checks both theme.Border (an
+// unfocused pane title) and theme.Focus (a focused one), unfocused and
+// focused, against both of the control strip's own states.
+func TestControlStripColorDistinctFromPaneTitles(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	for _, csFocused := range []bool{false, true} {
+		csBg := m.controlStripStyle(csFocused).Bg
+		if csBg == m.theme.Border {
+			t.Errorf("controlStripStyle(%v).Bg matches theme.Border (an unfocused pane title's color)", csFocused)
+		}
+		if csBg == m.theme.Focus {
+			t.Errorf("controlStripStyle(%v).Bg matches theme.Focus (a focused pane title's color)", csFocused)
+		}
+	}
+}
+
 func TestToggleMinimizeFlipsState(t *testing.T) {
 	m := New(nil, "", ShellSpec("a"))
 	id := m.panes[0].id
@@ -69,6 +90,68 @@ func TestAddPaneMsgAppendsPane(t *testing.T) {
 	}
 	if m.panes[1].title != "b" {
 		t.Fatalf("new pane title = %q, want b", m.panes[1].title)
+	}
+}
+
+// TestAddPaneMsgSplitsLastPaneInsteadOfAppendingRow guards the
+// addPaneMsg rewrite: a control-strip "+" now splits the last pane in
+// document order (see addPaneTarget) rather than appending another
+// root-level row, and alternates direction each time (see
+// Model.nextSplitDir) so repeated additions actually tile in two
+// dimensions instead of only ever deepening root's own Vertical axis.
+func TestAddPaneMsgSplitsLastPaneInsteadOfAppendingRow(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	idA := m.panes[0].id
+
+	// New's own doc comment: nextSplitDir starts Horizontal, so the
+	// first "+" should split A to the right.
+	next, _ := m.Update(addPaneMsg{spec: ShellSpec("b")})
+	m = next.(Model)
+	idB := m.panes[1].id
+
+	if len(m.root.children) != 1 {
+		t.Fatalf("root has %d children, want 1 (still no new root-level row)", len(m.root.children))
+	}
+	row := m.root.children[0].node
+	if row.paneID != 0 {
+		t.Fatal("root's sole child should now be an interior split, not still a bare leaf")
+	}
+	if row.dir != layout.Horizontal {
+		t.Fatalf("first + split direction = %v, want Horizontal", row.dir)
+	}
+	if len(row.children) != 2 || row.children[0].node.paneID != idA || row.children[1].node.paneID != idB {
+		t.Fatalf("first + split children = %+v, want [%d, %d]", row.children, idA, idB)
+	}
+
+	// Second "+" should alternate to Vertical, and split off the last
+	// pane in document order (B), not the root or A.
+	next, _ = m.Update(addPaneMsg{spec: ShellSpec("c")})
+	m = next.(Model)
+	idC := m.panes[2].id
+
+	if len(m.root.children) != 1 {
+		t.Fatalf("root has %d children after second +, want 1", len(m.root.children))
+	}
+	row = m.root.children[0].node
+	if row.dir != layout.Horizontal || len(row.children) != 2 {
+		t.Fatalf("outer split changed shape after second +: dir=%v children=%d, want unchanged Horizontal/2", row.dir, len(row.children))
+	}
+	if row.children[0].node.paneID != idA {
+		t.Fatalf("A should still be the outer split's first child, unmoved by the second +")
+	}
+	inner := row.children[1].node
+	if inner.paneID != 0 {
+		t.Fatal("B's slot should now be an interior split, not still a bare leaf")
+	}
+	if inner.dir != layout.Vertical {
+		t.Fatalf("second + split direction = %v, want Vertical (alternated from the first)", inner.dir)
+	}
+	if len(inner.children) != 2 || inner.children[0].node.paneID != idB || inner.children[1].node.paneID != idC {
+		t.Fatalf("second + split children = %+v, want [%d, %d]", inner.children, idB, idC)
+	}
+
+	if order := m.paneOrder(); len(order) != 3 || order[0] != idA || order[1] != idB || order[2] != idC {
+		t.Fatalf("paneOrder() = %v, want [%d, %d, %d]", order, idA, idB, idC)
 	}
 }
 
@@ -239,16 +322,22 @@ func TestSplitPaneAddsSiblingInTree(t *testing.T) {
 	}
 }
 
-// TestHorizontalSplitPaintsADivider drives a real horizontal split
-// through the actual View()/renderSplit render path and checks the
-// frame buffer directly for the divider's themed background — Buffer's
-// text-only rendering (strings.Count etc., as most other pane tests
-// use) can't see a divider at all, since it paints a plain space, not
-// a distinguishing glyph. Scans a content row (below the title bars,
-// which also use theme.Border when unfocused and would otherwise be
-// indistinguishable from the divider) for exactly one column carrying
-// theme.Border as its background.
-func TestHorizontalSplitPaintsADivider(t *testing.T) {
+// TestHorizontalSplitPaintsPerPaneBorders drives a real horizontal
+// split through the actual View()/renderSplit/paneNode render path and
+// checks the frame buffer directly for each pane's own box-drawing
+// frame (see paneNode's own doc comment on why every expanded pane
+// draws a complete, independent border rather than the two panes
+// sharing one divider line) — Buffer's text-only rendering (strings.
+// Count etc., as most other pane tests use) can see the glyph but not
+// the background alone, and the glyph alone isn't enough either: it's
+// the same '│' widget.Terminal and other content could plausibly
+// contain, so both together (background AND glyph, at the same cell)
+// is what actually distinguishes a border cell from a coincidence.
+// Scans a content row (below the title/top-border row) for '│'
+// columns: two panes side by side, each drawing its own left+right
+// border, means 4 — not 1 shared divider, as an earlier design had it.
+// See TestVerticalSplitPaintsPerPaneBorders for the other axis.
+func TestHorizontalSplitPaintsPerPaneBorders(t *testing.T) {
 	m := New(nil, "", KyuReplSpec("kyu", nil))
 	id := m.panes[0].id
 
@@ -260,15 +349,76 @@ func TestHorizontalSplitPaintsADivider(t *testing.T) {
 	forceRenders(app, 1)
 
 	buf := app.Buffer()
-	const contentRow = 5 // well below the control strip + title bar rows
-	dividerCols := 0
+	const contentRow = 5 // well below the control strip + top-border row
+	sideCols := 0
 	for x := range 40 {
-		if buf.At(x, contentRow).Style.Bg == m.theme.Border {
-			dividerCols++
+		c := buf.At(x, contentRow)
+		if c.Style.Bg == m.theme.Border && c.Rune == '│' {
+			sideCols++
 		}
 	}
-	if dividerCols != 1 {
-		t.Fatalf("got %d divider-styled columns at row %d, want 1", dividerCols, contentRow)
+	if sideCols != 4 {
+		t.Fatalf("got %d border-styled '│' columns at row %d, want 4 (2 panes x left+right each)", sideCols, contentRow)
+	}
+
+	const topBorderRow = 1 // row 0 is the control strip
+	topLeftCorners := 0
+	for x := range 40 {
+		c := buf.At(x, topBorderRow)
+		if c.Style.Bg == m.theme.Border && c.Rune == '┌' {
+			topLeftCorners++
+		}
+	}
+	if topLeftCorners != 2 {
+		t.Fatalf("got %d '┌' corners at row %d, want 2 (one per pane)", topLeftCorners, topBorderRow)
+	}
+}
+
+// TestVerticalSplitPaintsPerPaneBorders is
+// TestHorizontalSplitPaintsPerPaneBorders's counterpart for the other
+// split axis: two panes stacked top-to-bottom should each still draw
+// a complete frame — a '─' rule cell somewhere past the corners/title
+// (column 20, an arbitrary interior column both panes' frames span),
+// and both a '┌' and a '└' somewhere down column 0 (the upper pane's
+// top-left and the lower pane's bottom-left, at minimum).
+func TestVerticalSplitPaintsPerPaneBorders(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("kyu", nil))
+	id := m.panes[0].id
+
+	next, _ := m.Update(splitPaneMsg{id: id, dir: layout.Vertical, spec: KyuReplSpec("kyu2", nil)})
+	m = next.(Model)
+
+	app := tui.NewApp(m, 40, 14)
+	defer app.Close()
+	forceRenders(app, 1)
+
+	buf := app.Buffer()
+	foundRule := false
+	for y := range 14 {
+		if buf.At(20, y).Style.Bg == m.theme.Border && buf.At(20, y).Rune == '─' {
+			foundRule = true
+			break
+		}
+	}
+	if !foundRule {
+		t.Fatalf("expected at least one '─' border cell at column 20:\n%s", buf.String())
+	}
+
+	foundTL, foundBL := false, false
+	for y := range 14 {
+		c := buf.At(0, y)
+		if c.Style.Bg != m.theme.Border {
+			continue
+		}
+		switch c.Rune {
+		case '┌':
+			foundTL = true
+		case '└':
+			foundBL = true
+		}
+	}
+	if !foundTL || !foundBL {
+		t.Fatalf("expected both '┌' and '└' somewhere in column 0: foundTL=%v foundBL=%v", foundTL, foundBL)
 	}
 }
 
@@ -294,8 +444,8 @@ func TestResizeAdjustsWeightAndClamps(t *testing.T) {
 	next, _ = m.Update(resizePaneMsg{id: id, delta: 3})
 	m = next.(Model)
 	row = m.root.children[0].node
-	if row.children[0].weight != 4 {
-		t.Fatalf("weight after +3 = %d, want 4 (started at 1)", row.children[0].weight)
+	if want := defaultPaneWeight + 3; row.children[0].weight != want {
+		t.Fatalf("weight after +3 = %d, want %d (started at defaultPaneWeight=%d)", row.children[0].weight, want, defaultPaneWeight)
 	}
 
 	next, _ = m.Update(resizePaneMsg{id: id, delta: -10})
@@ -306,15 +456,66 @@ func TestResizeAdjustsWeightAndClamps(t *testing.T) {
 	}
 }
 
+// TestResizeFloorSwitchesToAbsoluteMinCells guards the follow-up to
+// the bug above (reported 2026-08-30, same session): plain Fill(weight)
+// has no floor of its own once weight bottoms out at 1 — a sibling
+// growing via its own '+' could still squeeze a weight-1 pane to
+// nothing. childConstraint should switch to layout.Min(paneMinCells)
+// exactly when weight hits that floor (not before, and not for
+// minimize/zoom's own separate Length(1)/Length(0) collapses, which
+// this test doesn't touch), guaranteeing at least one content line/
+// column stays visible — going smaller than that is minimize's job,
+// not more '-' presses.
+func TestResizeFloorSwitchesToAbsoluteMinCells(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+
+	// node must be non-nil (childConstraint dereferences c.node.paneID)
+	// — paneID 0 marks an interior split, which is fine here since this
+	// test only exercises the weight-based Fill/Min branch, not the
+	// leaf-specific minimize check above it.
+	node := &splitNode{}
+	if got := m.childConstraint(splitChild{weight: 2, node: node}, true); got != layout.Fill(2) {
+		t.Errorf("childConstraint at weight 2 = %v, want Fill(2)", got)
+	}
+	if got := m.childConstraint(splitChild{weight: 1, node: node}, true); got != layout.Min(paneMinCells) {
+		t.Errorf("childConstraint at weight 1 (the resize floor) = %v, want Min(%d)", got, paneMinCells)
+	}
+}
+
+// TestResizingASmallerPaneBelowItsStartingWeightWorks guards the bug
+// reported 2026-08-30: every new pane used to start at weight 1, which
+// is also resizePane's own floor — so pressing '-' on a fresh pane was
+// a no-op from the very first press, since there was never any room to
+// shrink below "the original size" at all. defaultPaneWeight fixes
+// this by starting well above that floor; this pins down that a single
+// '-' press on a freshly split pane actually decreases its weight, not
+// just that repeated presses eventually clamp correctly (already
+// covered above).
+func TestResizingASmallerPaneBelowItsStartingWeightWorks(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	id := m.panes[0].id
+	next, _ := m.Update(splitPaneMsg{id: id, dir: layout.Horizontal, spec: KyuReplSpec("kyu", nil)})
+	m = next.(Model)
+	row := m.root.children[0].node
+	startWeight := row.children[0].weight
+
+	next, _ = m.Update(resizePaneMsg{id: id, delta: -1})
+	m = next.(Model)
+	row = m.root.children[0].node
+	if row.children[0].weight >= startWeight {
+		t.Fatalf("weight after one '-' = %d, want less than the starting weight %d", row.children[0].weight, startWeight)
+	}
+}
+
 // TestSplitKeysOnTitleBar drives the real input path, mirroring
 // TestTitleBarXKeyClosesPane, to confirm the two-step 'r' then 'k'
 // split flow actually works via app.HandleInput (not just direct
 // Update calls) — the new sibling's own title bar (with the same
-// close/split/resize hint text) should now be on screen too. 60 cols
-// split into two 30-col halves is deliberately narrow enough to have
-// once clipped the hint text mid-word before it was shortened — see
-// paneNode's own comment on why the hint is "(x/d/r/+/-)" rather than
-// the old spelled-out form.
+// close/split/zoom/resize hint text) should now be on screen too. 60
+// cols split into two 30-col halves is deliberately narrow enough to
+// have once clipped the hint text mid-word before it was shortened —
+// see paneNode's own comment on why the hint is "(x/d/r/z/+/-)" rather
+// than the old spelled-out form.
 func TestSplitKeysOnTitleBar(t *testing.T) {
 	m := New(nil, "", KyuReplSpec("kyu", nil))
 
@@ -341,7 +542,7 @@ func TestSplitKeysOnTitleBar(t *testing.T) {
 	forceRenders(app, 2)
 
 	buf := app.Buffer().String()
-	if n := strings.Count(buf, "x/d/r/+/-"); n != 2 {
+	if n := strings.Count(buf, "x/d/r/z/+/-"); n != 2 {
 		t.Fatalf("expected 2 title bars after splitting, found %d:\n%s", n, buf)
 	}
 }
@@ -552,6 +753,127 @@ func TestPaneExitedMsgMarksExited(t *testing.T) {
 	}
 }
 
+func TestToggleThemeMsgFlipsAppearance(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	start := m.theme.Appearance
+
+	next, cmd := m.Update(toggleThemeMsg{})
+	if cmd != nil {
+		t.Fatal("toggling the theme should not produce a Cmd")
+	}
+	m = next.(Model)
+	if m.theme.Appearance == start {
+		t.Fatalf("theme.Appearance unchanged after one toggle (still %v)", start)
+	}
+
+	next, _ = m.Update(toggleThemeMsg{})
+	m = next.(Model)
+	if m.theme.Appearance != start {
+		t.Fatalf("theme.Appearance = %v after a second toggle, want back to %v", m.theme.Appearance, start)
+	}
+}
+
+func TestToggleZoomMsgSetsAndClearsZoomedID(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	m, _ = m.splitPane(m.panes[0].id, layout.Horizontal, ShellSpec("b"))
+	idA, idB := m.panes[0].id, m.panes[1].id
+
+	next, cmd := m.Update(toggleZoomMsg{id: idA})
+	if cmd != nil {
+		t.Fatal("toggling zoom should not produce a Cmd")
+	}
+	m = next.(Model)
+	if m.zoomedID != idA {
+		t.Fatalf("zoomedID = %d after zooming A, want %d", m.zoomedID, idA)
+	}
+
+	// Zooming a *different* pane while one's already zoomed should
+	// switch, not toggle it off.
+	next, _ = m.Update(toggleZoomMsg{id: idB})
+	m = next.(Model)
+	if m.zoomedID != idB {
+		t.Fatalf("zoomedID = %d after zooming B, want %d (should switch, not clear)", m.zoomedID, idB)
+	}
+
+	// Toggling the *currently* zoomed pane again un-zooms.
+	next, _ = m.Update(toggleZoomMsg{id: idB})
+	m = next.(Model)
+	if m.zoomedID != 0 {
+		t.Fatalf("zoomedID = %d after re-toggling B, want 0 (un-zoomed)", m.zoomedID)
+	}
+}
+
+func TestClosingZoomedPaneClearsZoom(t *testing.T) {
+	m := New(nil, "", ShellSpec("a"))
+	m, _ = m.splitPane(m.panes[0].id, layout.Horizontal, ShellSpec("b"))
+	idB := m.panes[1].id
+
+	next, _ := m.Update(toggleZoomMsg{id: idB})
+	m = next.(Model)
+	if m.zoomedID != idB {
+		t.Fatal("setup: expected B to be zoomed")
+	}
+
+	next, _ = m.Update(closePaneMsg{id: idB})
+	m = next.(Model)
+	if m.zoomedID != 0 {
+		t.Fatalf("zoomedID = %d after closing the zoomed pane, want 0", m.zoomedID)
+	}
+}
+
+// TestZoomingAPaneKeepsSiblingProcessAlive is zoom's counterpart to
+// TestMinimizeKeepsProcessAliveAndStatePreserved: collapsing every
+// pane off the zoomed one's path to Length(1) (see childConstraint)
+// must not discard their retained widget state — a live pty in
+// particular — the same preserve-by-collapsing-not-removing guarantee
+// minimize already established, now exercised for zoom's own subtree-
+// wide collapse instead of a single pane's own axis-limited one.
+//
+// Builds the App from a single pane and splits via Dispatch
+// afterward, matching TestSplittingLiveShellPanePreservesItsProcess's
+// established pattern — not incidental: a live-shell pane that's
+// already part of an interior split from NewApp's very first frame
+// (i.e., built via Model.splitPane before ever constructing the App)
+// hits a separate, pre-existing pty-sizing quirk unrelated to zoom
+// (its content got stuck after a single echoed character) that no
+// existing test happened to exercise before this one tried to. Worth
+// its own investigation someday, but out of scope here — this test
+// only needs to check zoom's own collapse-preserves-state guarantee,
+// which the Dispatch-after-NewApp construction verifies just as well
+// without tripping over that separate issue.
+func TestZoomingAPaneKeepsSiblingProcessAlive(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	cmd := exec.Command("sh", "-c", "echo READY; read x; echo GOT:$x")
+	m := New(nil, "", Spec{Title: "shell", Command: cmd})
+	shellID := m.panes[0].id
+
+	app := tui.NewApp(m, 40, 10)
+	defer app.Close()
+
+	waitForText(t, app, "READY", 3*time.Second)
+
+	app.Dispatch(splitPaneMsg{id: shellID, dir: layout.Horizontal, spec: KyuReplSpec("kyu", nil)})
+	forceRenders(app, 3)
+	// Model.nextID is a simple monotonic counter (see New/withNewPane/
+	// splitPane) with no App-level accessor for "the pane a Dispatch
+	// just created" — shellID is the only id handed out before this
+	// split, so the new sibling's is deterministically the next one.
+	kyuID := shellID + 1
+
+	app.Dispatch(toggleZoomMsg{id: kyuID})
+	forceRenders(app, 3)
+	if strings.Contains(app.Buffer().String(), "READY") {
+		t.Fatal("the shell pane should be collapsed out of view while a sibling is zoomed")
+	}
+
+	app.Dispatch(toggleZoomMsg{id: kyuID})
+	waitForText(t, app, "READY", 3*time.Second)
+
+	if strings.Contains(app.Buffer().String(), "failed to start") {
+		t.Fatal("the shell pane was disposed and recreated across zoom/un-zoom — its running process was killed")
+	}
+}
+
 func TestQuitRequestedProducesQuitCmd(t *testing.T) {
 	m := New(nil, "", ShellSpec("a"))
 	_, cmd := m.Update(quitRequestedMsg{})
@@ -648,13 +970,12 @@ func TestHorizontalSplitPaneCannotMinimize(t *testing.T) {
 }
 
 // TestAddingSecondPaneKeepsFirstPaneAlive is the tree-restructuring
-// counterpart to TestMinimizeKeepsProcessAliveAndStatePreserved:
-// appending a new top-level row must not discard an existing pane's
-// retained widget state (its live pty in particular). See
-// appendTopLevelRow's doc comment for exactly why this could break —
-// m.root has to keep its own identity stable across the append, or
-// the first pane's parent would effectively change from reconcile's
-// point of view even though the pane's own key doesn't.
+// counterpart to TestMinimizeKeepsProcessAliveAndStatePreserved: a
+// control-strip "+" addition splits the existing pane (see
+// addPaneTarget/splitPane) and must not discard its retained widget
+// state (its live pty in particular) in the process — the same
+// reparent-preserves-state guarantee TestSplittingLiveShellPanePreservesItsProcess
+// pins down for a title-bar split, exercised here through "+" instead.
 func TestAddingSecondPaneKeepsFirstPaneAlive(t *testing.T) {
 	skipUnlessOnPath(t, "sh")
 	cmd := exec.Command("sh", "-c", "echo READY; read x; echo GOT:$x")

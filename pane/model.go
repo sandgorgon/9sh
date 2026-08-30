@@ -1,7 +1,7 @@
 // Package pane is a minimizable multi-pane multiplexer built on tui's
-// retained widget.Terminal and 9sh's own native widgets, stacked
-// vertically, each with an always-visible title-bar row that toggles it
-// between full size and collapsed-to-title-bar.
+// retained widget.Terminal and 9sh's own native widgets, arranged in a
+// 2D split tree (see splitNode), each with an always-visible title-bar
+// row that toggles it between full size and collapsed-to-title-bar.
 //
 // Five pane kinds exist: KindShell hosts a real pty-attached process
 // (a shell, or anything else exec'able) via widget.Terminal; KindKyuRepl
@@ -203,6 +203,24 @@ type Model struct {
 	env         *eval.Env   // shared with every pane's spec that needs one, for the "+" buttons
 	theme       style.Theme // for the control strip / title bar background bars — see barStyle
 	sessionDir  string      // for the "+ history" button's SessionViewerSpec — see New
+
+	// nextSplitDir is the direction the next control-strip "+" addition
+	// splits along — see addPaneMsg's handling in Update. Alternated
+	// after every use (Horizontal, Vertical, Horizontal, ...) so
+	// repeated "+" clicks grow the tree in both dimensions instead of
+	// only ever deepening one axis, the same 2D tiling a title-bar d/r
+	// split already gives, now for "+" too.
+	nextSplitDir layout.Direction
+
+	// zoomedID is the id of the pane currently filling the whole
+	// content area (0 = no zoom) — see toggleZoomMsg and childConstraint.
+	// Every other pane stays mounted in the tree (never removed from
+	// View()'s output), just collapsed to Length(1) — the same
+	// preserve-retained-state-by-collapsing-not-removing approach
+	// per-pane minimize already established, applied to every sibling
+	// off the zoomed pane's path at once, deliberately not limited to
+	// panes sitting along a Vertical axis the way minimize is.
+	zoomedID int
 }
 
 // New builds a Model seeded with the given panes. env is used to build
@@ -219,20 +237,25 @@ type Model struct {
 // DetectAppearance's own doc comment explains why that heuristic and
 // not a real query — there's no escape sequence every terminal answers
 // for "what's your background color"), defaulting to Dark on anything
-// unparseable. 9sh doesn't re-detect this mid-session; a user whose
+// unparseable. 9sh doesn't re-detect this mid-session (a user whose
 // terminal theme changes while 9sh is running would need to restart it
-// to pick up a new one — a real, accepted limitation, not something
-// worth polling for.
+// to pick up the new autodetection result — not worth polling for) but
+// the control strip's "theme" button (see themeButton/toggleThemeMsg)
+// does let the user flip Dark/Light by hand, live, without a restart.
 func New(env *eval.Env, sessionDir string, specs ...Spec) Model {
-	m := Model{env: env, sessionDir: sessionDir, theme: style.Default(style.DetectAppearance(os.Getenv))}
+	m := Model{env: env, sessionDir: sessionDir, theme: style.Default(style.DetectAppearance(os.Getenv)), nextSplitDir: layout.Horizontal}
 	// root is created once, up front, as an (initially empty) Vertical
-	// split — never replaced or re-wrapped afterward. Every pane, first
-	// or hundredth, is added the same way: append a new leaf to root's
-	// own children. This is what appendTopLevelRow's doc comment is
-	// about — root's identity has to be stable from the very first
-	// frame, or promoting a lone leaf into a wrapping split later would
-	// change that leaf's parent and discard its retained state (a live
-	// Terminal's pty included).
+	// split — never replaced or re-wrapped afterward. The seed panes
+	// passed in here (specs) are appended straight to it, since there's
+	// nothing yet to split off of; every pane added later, whether via
+	// a title-bar d/r split or a control-strip "+" (see addPaneMsg in
+	// Update), goes through splitPane instead, reparenting into a fresh
+	// interior split rather than appending another root sibling. This
+	// is what appendTopLevelRow's doc comment is about — root's
+	// identity has to be stable from the very first frame, or promoting
+	// a lone leaf into a wrapping split later would change that leaf's
+	// parent and discard its retained state (a live Terminal's pty
+	// included).
 	m.nextSplitID++
 	m.root = &splitNode{id: m.nextSplitID, dir: layout.Vertical}
 	for _, s := range specs {
@@ -279,9 +302,12 @@ func initialLoadCmd(newPane *paneState, spec Spec) tui.Cmd {
 }
 
 // appendTopLevelRow adds leaf as a new full-width row at the bottom of
-// the pane stack — every pane's insertion point today (splitting an
-// existing pane instead is future work, not yet wired to any control-
-// strip button). Always appends to m.root's existing children slice,
+// the pane stack — used only for New's seed panes (specs), which have
+// nothing yet to split off of. Every pane added afterward, whether via
+// a title-bar d/r split or a control-strip "+" (see addPaneMsg in
+// Update), goes through splitPane instead, so this stays a
+// construction-time-only path, not a general "add a pane" one. Always
+// appends to m.root's existing children slice,
 // never replaces or re-wraps m.root itself: m.root's identity is fixed
 // once, in New, specifically so this never has to "promote" an
 // existing lone child into a new wrapping split node — doing so would
@@ -292,7 +318,7 @@ func initialLoadCmd(newPane *paneState, spec Spec) tui.Cmd {
 // instead — see tui/reconcile.go's reconcileChildren doc comment on
 // why reordering/inserting/removing *siblings* is safe.
 func (m *Model) appendTopLevelRow(leaf *splitNode) {
-	m.root.children = append(m.root.children, splitChild{weight: 1, node: leaf})
+	m.root.children = append(m.root.children, splitChild{weight: defaultPaneWeight, node: leaf})
 }
 
 // closePane removes id's pane entirely — from both the flat store and
@@ -314,6 +340,14 @@ func (m Model) closePane(id int) (Model, tui.Cmd) {
 	}
 	m.panes = panes
 	m.root = removeLeafFromTree(m.root, id)
+	if m.zoomedID == id {
+		// Closing the zoomed pane itself must un-zoom — otherwise
+		// zoomedID would reference a pane that no longer exists, and
+		// childConstraint's subtreeContainsPane check would never match
+		// anything, collapsing every remaining pane to Length(1) with
+		// nothing left to fill the freed space.
+		m.zoomedID = 0
+	}
 	if len(m.root.children) == 0 {
 		return m, tui.Quit()
 	}
@@ -390,9 +424,9 @@ func (m Model) splitPane(id int, dir layout.Direction, spec Spec) (Model, *paneS
 // splitLeaf walks n looking for the direct child whose leaf is
 // targetPaneID, and if found, replaces that child's node in place with
 // a new interior split (id newSplitID, direction dir) containing the
-// original node and newLeaf, each weighted 1 — preserving the outer
-// splitChild's own weight in its parent unchanged. Reports whether the
-// target was found (and thus split).
+// original node and newLeaf, each starting at defaultPaneWeight —
+// preserving the outer splitChild's own weight in its parent unchanged.
+// Reports whether the target was found (and thus split).
 func splitLeaf(n *splitNode, targetPaneID int, dir layout.Direction, newLeaf *splitNode, newSplitID int) bool {
 	if n == nil || n.paneID != 0 {
 		return false
@@ -403,8 +437,8 @@ func splitLeaf(n *splitNode, targetPaneID int, dir layout.Direction, newLeaf *sp
 				id:  newSplitID,
 				dir: dir,
 				children: []splitChild{
-					{weight: 1, node: c.node},
-					{weight: 1, node: newLeaf},
+					{weight: defaultPaneWeight, node: c.node},
+					{weight: defaultPaneWeight, node: newLeaf},
 				},
 			}
 			n.children[i] = splitChild{weight: c.weight, node: wrapped}
@@ -416,6 +450,20 @@ func splitLeaf(n *splitNode, targetPaneID int, dir layout.Direction, newLeaf *sp
 	}
 	return false
 }
+
+// defaultPaneWeight is every new pane's starting weight — deliberately
+// not 1 (a real, reported bug 2026-08-30): 1 is also resizePane's own
+// floor (layout.Fill needs a positive weight to mean anything, and
+// tui's own layout.Split floors Fill's weight at 1 internally too —
+// see layout.go's Split, "case kindFill: w := c.value; if w <= 0 { w =
+// 1 }" — so even bypassing resizePane's own clamp couldn't shrink a
+// pane past that). A pane starting at the resize floor means '-'
+// (which decrements toward that same floor) is a no-op from the very
+// first press — there was never any room to shrink below "the
+// original size" in the first place. Starting well above the floor
+// instead gives '-' real headroom before it hits that limit, and '+'
+// symmetric room to grow.
+const defaultPaneWeight = 4
 
 // resizePane adjusts id's own weight within its direct parent's
 // children by delta, clamped to a minimum of 1 (layout.Fill needs a
@@ -468,6 +516,41 @@ func (m Model) paneOrder() []int {
 	}
 	walk(m.root)
 	return order
+}
+
+// addPaneTarget reports which pane a control-strip "+" should split —
+// the last pane in paneOrder()'s document order, or false if there are
+// none at all. "Last in document order" rather than "whatever's
+// focused" is a deliberate simplification, not a placeholder for a
+// better answer: tui.Model.Update has no way to learn which widget
+// currently has focus (SetFocusCmd only ever sets it — see
+// sandgorgon/tui#5/#7 and this file's own top doc comment on F1-F9 for
+// the same gap, hit and worked around the same way there). Splitting
+// off the last pane instead needs no such visibility and is fully
+// deterministic from Model's own state, at the cost of "+" not
+// necessarily landing next to whatever the user was just looking at.
+func addPaneTarget(m Model) (int, bool) {
+	order := m.paneOrder()
+	if len(order) == 0 {
+		return 0, false
+	}
+	return order[len(order)-1], true
+}
+
+// otherDirection flips Horizontal<->Vertical — see Model.nextSplitDir.
+func otherDirection(d layout.Direction) layout.Direction {
+	if d == layout.Horizontal {
+		return layout.Vertical
+	}
+	return layout.Horizontal
+}
+
+// otherAppearance flips Dark<->Light — see toggleThemeMsg.
+func otherAppearance(a style.Appearance) style.Appearance {
+	if a == style.Dark {
+		return style.Light
+	}
+	return style.Dark
 }
 
 // fKeyPaneNumber reports the 1-indexed pane number an F-key requests
@@ -535,10 +618,18 @@ type paneExitedMsg struct {
 }
 type addPaneMsg struct{ spec Spec }
 type quitRequestedMsg struct{}
+type toggleThemeMsg struct{}
 
-// AddPane returns a Msg that adds a new pane — usable from outside this
-// package (e.g. a future kyu-level "open a pane" integration) via
-// whatever Cmd/message-injection path the host App exposes.
+// toggleZoomMsg zooms id to fill the whole content area, or un-zooms
+// it back to the normal split layout if it's already the zoomed pane
+// — see Model.zoomedID.
+type toggleZoomMsg struct{ id int }
+
+// AddPane returns a Msg that adds a new pane, splitting off the last
+// pane in document order (see addPaneTarget) rather than appending a
+// root-level row — usable from outside this package (e.g. a future
+// kyu-level "open a pane" integration) via whatever Cmd/message-
+// injection path the host App exposes.
 func AddPane(s Spec) tui.Msg { return addPaneMsg{spec: s} }
 
 func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
@@ -589,11 +680,38 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 			p.exitErr = mm.err
 		}
 	case addPaneMsg:
-		next := m.withNewPane(mm.spec)
-		newPane := next.panes[len(next.panes)-1]
+		// Splits the last pane in document order rather than appending
+		// another root-level row — see addPaneTarget's doc comment for
+		// why "last in paneOrder()" and not "whatever's focused" (tui
+		// gives Update no way to learn current focus at all, only to
+		// set it — see this file's own top doc comment on F1-F9 for the
+		// same constraint hit before). Falls back to withNewPane only if
+		// there's truly no existing pane to split off of, which
+		// shouldn't happen in practice (New always seeds at least one)
+		// but keeps this total rather than silently dropping the pane.
+		target, ok := addPaneTarget(m)
+		if !ok {
+			next := m.withNewPane(mm.spec)
+			newPane := next.panes[len(next.panes)-1]
+			return next, initialLoadCmd(newPane, mm.spec)
+		}
+		dir := m.nextSplitDir
+		next, newPane := m.splitPane(target, dir, mm.spec)
+		next.nextSplitDir = otherDirection(dir)
+		if newPane == nil {
+			return next, nil
+		}
 		return next, initialLoadCmd(newPane, mm.spec)
 	case quitRequestedMsg:
 		return m, tui.Quit()
+	case toggleThemeMsg:
+		m.theme = style.Default(otherAppearance(m.theme.Appearance))
+	case toggleZoomMsg:
+		if m.zoomedID == mm.id {
+			m.zoomedID = 0
+		} else if m.find(mm.id) != nil {
+			m.zoomedID = mm.id
+		}
 	case browserMoveMsg:
 		if p := m.find(mm.id); p != nil {
 			p.browserCursor = clamp(p.browserCursor+mm.delta, 0, max0(len(p.browserEntries)-1))
@@ -791,20 +909,14 @@ func (m Model) View() tui.Node {
 }
 
 // renderSplit renders n recursively: a leaf becomes that pane's own
-// Node (already stably keyed by paneNode itself); an interior split
-// becomes a Box along n.dir, one child per entry in n.children plus a
-// thin divider between each consecutive pair, keyed by n's own id —
-// see splitNode's doc comment on why every level needs its own stable
-// key, not just the leaves. numbers is View()'s once-per-frame
-// pane-number map, threaded down so paneNode can show a "[F#]" label
-// without each leaf re-walking the whole tree itself.
-//
-// Dividers are plain filled bars (see flatfocus.go's divider), not
-// focusable and not draggable this round — resize is keyboard-only
-// (+/- on a title bar). Each needs its own key distinct from its
-// siblings' (dividerKey), unlike barFill's single shared literal key,
-// since more than one can exist in the very same parent Box once a
-// split has more than two children.
+// Node (already stably keyed by paneNode itself, which now also draws
+// that pane's own box-drawing frame — see its doc comment); an
+// interior split becomes a Box along n.dir, one child per entry in
+// n.children, keyed by n's own id — see splitNode's doc comment on why
+// every level needs its own stable key, not just the leaves. numbers
+// is View()'s once-per-frame pane-number map, threaded down so
+// paneNode can show a "[F#]" label without each leaf re-walking the
+// whole tree itself.
 //
 // canMinimize is whether n itself (if it turns out to be a leaf) sits
 // along a Vertical split axis — minimize collapses a pane's Length(1)
@@ -828,26 +940,102 @@ func (m Model) renderSplit(n *splitNode, numbers map[int]int, canMinimize bool) 
 		return m.paneNode(m.find(n.paneID), numbers[n.paneID], canMinimize)
 	}
 	childCanMinimize := n.dir == layout.Vertical
-	dividerStyle := cell.Style{Bg: m.theme.Border}
+	// No divider node inserted between children here (there was one,
+	// briefly, 2026-08-29 — see git history if it's ever worth
+	// resurrecting): every expanded pane now draws its own complete
+	// box-drawing frame (see paneNode), so a separate inter-pane
+	// divider line would just be a third, redundant line squeezed
+	// between two panes' own borders.
 	var children []tui.BoxChild
-	for i, c := range n.children {
-		if i > 0 {
-			children = append(children, tui.Child(layout.Length(1), divider(dividerKey(n.id, i), dividerStyle)))
-		}
-		constraint := layout.Fill(c.weight)
-		if c.node.paneID != 0 && childCanMinimize {
-			if p := m.find(c.node.paneID); p != nil && p.minimized {
-				constraint = layout.Length(1)
-			}
-		}
-		children = append(children, tui.Child(constraint, m.renderSplit(c.node, numbers, childCanMinimize)))
+	for _, c := range n.children {
+		children = append(children, tui.Child(m.childConstraint(c, childCanMinimize), m.renderSplit(c.node, numbers, childCanMinimize)))
 	}
 	return tui.Box(n.dir, children...).Key(splitKey(n.id))
 }
 
-func splitKey(id int) string { return fmt.Sprintf("split-%d", id) }
+// childConstraint decides how much of the parent split's axis c gets.
+// Zoom (see toggleZoomMsg) takes priority over ordinary per-pane
+// minimize when a pane is zoomed: every subtree that doesn't contain
+// the zoomed pane collapses to Length(1) regardless of split axis or
+// its own minimized state (unlike minimize, which only ever collapses
+// along a Vertical axis — see renderSplit's own doc comment on why —
+// zoom deliberately isn't axis-limited, since the point is to get a
+// sibling out of the way as much as possible, not to keep it legibly
+// glanceable), and the path down to the zoomed pane always gets
+// Fill(1) so it actually reaches full size. Ordinary weighted/
+// minimize-aware sizing only applies when nothing is zoomed.
+func (m Model) childConstraint(c splitChild, canMinimize bool) layout.Constraint {
+	if m.zoomedID != 0 {
+		if subtreeContainsPane(c.node, m.zoomedID) {
+			return layout.Fill(1)
+		}
+		// Length(0), not minimize's Length(1): zoom's whole point is to
+		// fully hide a sibling, not leave it glanceable, and this
+		// matters for more than aesthetics — see widget.Terminal.Paint's
+		// width<=0||height<=0 early return, which is *why* minimize
+		// (collapsing a pane's outer box to Length(1) with a title bar
+		// that eats that one row, leaving content exactly 0 rows) never
+		// destructively resizes a live pty. A Length(1) collapse along
+		// zoom's own axis instead can leave the *other* dimension >0
+		// (e.g. a Horizontal-split sibling: width=1, height untouched),
+		// which misses that guard and genuinely (if correctly, matching
+		// real terminal resize semantics) truncates content that
+		// growing back afterward can't restore unless the hosted
+		// program redraws itself — confirmed the hard way, via
+		// TestZoomingAPaneKeepsSiblingProcessAlive initially failing
+		// with exactly that symptom before this was Length(0).
+		return layout.Length(0)
+	}
+	if c.node.paneID != 0 && canMinimize {
+		if p := m.find(c.node.paneID); p != nil && p.minimized {
+			return layout.Length(1)
+		}
+	}
+	if c.weight <= 1 {
+		// '-' resize floor (see resizePane/defaultPaneWeight): plain
+		// Fill(1) has no absolute floor of its own — a sibling growing
+		// enough via its own '+' could still squeeze this pane arbitrarily
+		// small, well past readable. layout.Min(paneMinCells) behaves
+		// identically to Fill(1) for the proportional-sharing part (per
+		// its own doc comment), so this is a seamless transition, not a
+		// jump — it just adds the hard floor Fill never had. Below
+		// paneMinCells the answer is minimize (Length(1), title only),
+		// not more '-' presses (reported 2026-08-30) — see paneMinCells's
+		// own doc comment for why 3 is the right number.
+		return layout.Min(paneMinCells)
+	}
+	return layout.Fill(c.weight)
+}
 
-func dividerKey(splitID, idx int) string { return fmt.Sprintf("split-%d-div-%d", splitID, idx) }
+// paneMinCells is '-' resize's absolute floor, in cells, along
+// whichever axis is being squeezed — see childConstraint. An expanded
+// pane's own frame (see paneNode) always spends 1 cell on a border/
+// title row or column at each end, so the smallest size that still
+// shows any actual content — one line, or one column, of it — is 1
+// (top border/title) + 1 (content) + 1 (bottom border) along a
+// Vertical squeeze, or symmetrically 1 (left border) + 1 (content) + 1
+// (right border) along a Horizontal one. The same number works for
+// both axes only because the frame is 1 cell thick on every side.
+const paneMinCells = 3
+
+// subtreeContainsPane reports whether paneID appears anywhere in n's
+// subtree — see childConstraint.
+func subtreeContainsPane(n *splitNode, paneID int) bool {
+	if n == nil {
+		return false
+	}
+	if n.paneID != 0 {
+		return n.paneID == paneID
+	}
+	for _, c := range n.children {
+		if subtreeContainsPane(c.node, paneID) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitKey(id int) string { return fmt.Sprintf("split-%d", id) }
 
 // controlStripFocusables is how many Tab-focusable widgets
 // controlStrip contributes, ahead of any pane, in Tab order — kept
@@ -856,7 +1044,7 @@ func dividerKey(splitID, idx int) string { return fmt.Sprintf("split-%d-div-%d",
 // order with no independent override (see InitialFocusAdvances' doc
 // comment for why that matters here). Update this if a button is
 // added or removed above.
-const controlStripFocusables = 6 // + shell, + kyu, + browse, + jobs, + history, quit
+const controlStripFocusables = 7 // + shell, + kyu, + browse, + jobs, + history, theme, quit
 
 func (m Model) controlStrip() tui.Node {
 	return tui.Box(layout.Horizontal,
@@ -865,6 +1053,7 @@ func (m Model) controlStrip() tui.Node {
 		tui.Child(layout.Length(11), m.addPaneButton("+ browse", NamespaceBrowserSpec("browse", m.env))),
 		tui.Child(layout.Length(9), m.addPaneButton("+ jobs", JobViewerSpec("jobs", m.env))),
 		tui.Child(layout.Length(12), m.addPaneButton("+ history", SessionViewerSpec("history", m.sessionDir))),
+		tui.Child(layout.Length(9), m.themeButton()),
 		tui.Child(layout.Length(8), m.quitButton()),
 		// barFill (not tui.Text("", ...), which paints nothing at all
 		// for an empty string — Text's Paint only iterates the string's
@@ -894,15 +1083,22 @@ func (m Model) barStyle(focused bool) cell.Style {
 }
 
 // controlStripStyle is the control strip's own bar color — deliberately
-// distinct from barStyle/theme.Border, so the always-visible top-level
-// toolbar reads as a different, more prominent layer of chrome than a
-// per-pane title bar. Uses theme.Primary rather than theme.Focus for
-// the base: in tui/style's own default themes Primary and Focus are
-// literally the same RGB value (both are "the accent color"), so
-// swapping to Focus on focus would be invisible; a reverse-video
-// attribute flip is a real, visible change regardless of that.
+// distinct from both barStyle/theme.Border (an unfocused pane title/
+// border) and theme.Focus (a focused one), so the always-visible
+// top-level toolbar reads as a different, more prominent layer of
+// chrome than any pane title, focused or not. Originally used
+// theme.Primary for the base, which fixed the Border collision but not
+// a second one: in tui/style's own default themes Primary and Focus
+// are literally the same RGB value (both are "the accent color"), so a
+// focused pane's title bar came out visually identical to the always-
+// visible strip above it (reported 2026-08-30). theme.Secondary is a
+// genuinely distinct hue from both Border and Focus/Primary, closing
+// that gap; the reverse-video attribute flip on focus is unrelated and
+// stays regardless — it's what makes the strip's *own* focused/
+// unfocused states distinguishable from each other, a separate
+// concern from distinguishing the strip from a pane title.
 func (m Model) controlStripStyle(focused bool) cell.Style {
-	st := cell.Style{Bg: m.theme.Primary, Attr: cell.AttrBold}
+	st := cell.Style{Bg: m.theme.Secondary, Attr: cell.AttrBold}
 	if focused {
 		st.Attr |= cell.AttrReverse
 	}
@@ -932,7 +1128,7 @@ func InitialFocusAdvances() int {
 }
 
 func (m Model) addPaneButton(label string, spec Spec) tui.Node {
-	return flatFocusable("btn-"+label, " "+label+" ", m.controlStripStyle,
+	return flatFocusable("btn-"+label, " "+label+" ", ' ', m.controlStripStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -941,8 +1137,24 @@ func (m Model) addPaneButton(label string, spec Spec) tui.Node {
 		})
 }
 
+// themeButton flips between tui/style's default Dark/Light themes at
+// runtime — closes the gap New's own doc comment used to note as a
+// real, accepted limitation ("a user whose terminal theme changes
+// while 9sh is running would need to restart it to pick up a new
+// one"): this doesn't change what 9sh detects from $COLORFGBG, it lets
+// the user override that detection live instead.
+func (m Model) themeButton() tui.Node {
+	return flatFocusable("theme-btn", " theme ", ' ', m.controlStripStyle,
+		func(e input.Event) tui.Msg {
+			if !clicked(e) {
+				return nil
+			}
+			return toggleThemeMsg{}
+		})
+}
+
 func (m Model) quitButton() tui.Node {
-	return flatFocusable("quit-btn", " quit ", m.controlStripStyle,
+	return flatFocusable("quit-btn", " quit ", ' ', m.controlStripStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -988,6 +1200,9 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 		// just doesn't get a jump hotkey or a label for one.
 		label = fmt.Sprintf("[F%d] ", number) + label
 	}
+	if m.zoomedID == id {
+		label += " [zoomed]"
+	}
 	if p.exited {
 		label += " (exited)"
 	}
@@ -995,18 +1210,31 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 		// Overrides the normal hint entirely while awaiting the second
 		// keypress of the two-step split flow — see splitKindKey for what
 		// each letter means; anything else (including this same title
-		// bar's own x/+/-, deliberately) cancels via cancelSplitMsg.
+		// bar's own x/d/r/z/+/-, deliberately) cancels via cancelSplitMsg.
 		label += "  split: s=shell k=kyu b=browse j=jobs h=history (else cancel)"
 	} else {
-		// Kept terse, not "(x close, d/r split, +/- resize)": once a
-		// title bar is one of several side by side after a horizontal
-		// split, or carries an "[F#]" jump-hotkey prefix, the available
-		// width per pane shrinks fast — see TestSplitKeysOnTitleBar's
-		// 60-col/2-pane case, which is exactly narrow enough to clip the
-		// old, longer hint.
-		label += "  (x/d/r/+/-)"
+		// Kept terse, not "(x close, d/r split, z zoom, +/- resize)":
+		// once a title bar is one of several side by side after a
+		// horizontal split, or carries an "[F#]" jump-hotkey prefix, the
+		// available width per pane shrinks fast — see
+		// TestSplitKeysOnTitleBar's 60-col/2-pane case, which is exactly
+		// narrow enough to clip a longer hint.
+		label += "  (x/d/r/z/+/-)"
 	}
-	titleBar := flatFocusable(paneKey(id, "title"), label,
+	// collapsed matches exactly the condition renderSplit uses to give
+	// this pane's own outer slot Length(1) — a full border needs at
+	// least 2 rows, and a minimized pane only ever gets 1, so these are
+	// two genuinely different renderings (a flat single-row strip vs. a
+	// bordered box), not one shrunk version of the other. The title
+	// bar's own fill rune tracks this too: ' ' for the flat strip
+	// (unchanged from before borders existed), '─' when it doubles as a
+	// bordered pane's top border line.
+	collapsed := canMinimize && p.minimized
+	titleFill := ' '
+	if !collapsed {
+		titleFill = '─'
+	}
+	titleBar := flatFocusable(paneKey(id, "title"), label, titleFill,
 		func(focused bool) cell.Style { return m.titleStyle(p, focused) },
 		// Every key here is scoped to the title bar specifically, never
 		// a global hotkey, for the same reason minimize already was:
@@ -1030,6 +1258,8 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 					return beginSplitMsg{id: id, dir: layout.Vertical} // split down, then pick a kind
 				case 'r':
 					return beginSplitMsg{id: id, dir: layout.Horizontal} // split right, then pick a kind
+				case 'z':
+					return toggleZoomMsg{id: id}
 				case '+', '=':
 					return resizePaneMsg{id: id, delta: 1}
 				case '-':
@@ -1064,9 +1294,44 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 		}).Key(paneKey(id, "term"))
 	}
 
+	if collapsed {
+		return tui.Box(layout.Vertical,
+			tui.Child(layout.Length(1), titleBar),
+			tui.Child(layout.Fill(1), content),
+		).Key(paneKey(id, "box"))
+	}
+
+	// Expanded: a full box-drawing frame (┌─ title ─┐ / │ content │ /
+	// └────────┘), title text embedded in the top border line (titleBar
+	// itself, filled with '─' above) rather than a separate row — see
+	// this file's top doc comment on why per-pane framing was chosen
+	// over a shared-grid-with-junctions design (tui has no post-paint
+	// compositing hook to pick correct ┬┴├┤┼ glyphs at nested split
+	// boundaries; each pane owning its complete, independent frame
+	// needs nothing beyond ordinary Box composition). Reuses divider's
+	// same rune-filled-rect widget for the corners and the plain
+	// (non-interactive) sides/bottom — the same widget this package
+	// already used for the inter-pane divider before every pane grew
+	// its own border and that divider became redundant (removed from
+	// renderSplit; see its own doc comment).
+	borderStyle := cell.Style{Bg: m.theme.Border}
+	corner := func(part string, r rune) tui.Node { return divider(paneKey(id, part), borderStyle, r) }
 	return tui.Box(layout.Vertical,
-		tui.Child(layout.Length(1), titleBar),
-		tui.Child(layout.Fill(1), content),
+		tui.Child(layout.Length(1), tui.Box(layout.Horizontal,
+			tui.Child(layout.Length(1), corner("tl", '┌')),
+			tui.Child(layout.Fill(1), titleBar),
+			tui.Child(layout.Length(1), corner("tr", '┐')),
+		).Key(paneKey(id, "topborder"))),
+		tui.Child(layout.Fill(1), tui.Box(layout.Horizontal,
+			tui.Child(layout.Length(1), divider(paneKey(id, "left"), borderStyle, '│')),
+			tui.Child(layout.Fill(1), content),
+			tui.Child(layout.Length(1), divider(paneKey(id, "right"), borderStyle, '│')),
+		).Key(paneKey(id, "middle"))),
+		tui.Child(layout.Length(1), tui.Box(layout.Horizontal,
+			tui.Child(layout.Length(1), corner("bl", '└')),
+			tui.Child(layout.Fill(1), divider(paneKey(id, "bottom"), borderStyle, '─')),
+			tui.Child(layout.Length(1), corner("br", '┘')),
+		).Key(paneKey(id, "botborder"))),
 	).Key(paneKey(id, "box"))
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,7 @@ func TestDialListenEndToEnd(t *testing.T) {
 	prompt := strings.NewReader("yes\n")
 	knownPeersPath := filepath.Join(t.TempDir(), "known-peers")
 
-	conn, err := dial(ctx, clientID, knownPeersPath, knownPeers, addr, prompt)
+	conn, err := dialTCP(ctx, clientID, knownPeersPath, knownPeers, addr, prompt)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestListenRejectsUnauthorizedPeer(t *testing.T) {
 	addr := l.Addr().String()
 
 	knownPeersPath := filepath.Join(t.TempDir(), "known-peers")
-	_, err = dial(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
+	_, err = dialTCP(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
 	if err == nil {
 		t.Fatal("expected dial to an unauthorized-peer listener to fail")
 	}
@@ -154,7 +155,7 @@ func TestDialRefusesChangedFingerprint(t *testing.T) {
 	// real one — simulating a changed/impersonated peer.
 	known := auth.KnownPeers{addr: "0000000000000000000000000000000000000000000000000000000000000000"}
 	knownPeersPath := filepath.Join(t.TempDir(), "known-peers")
-	_, err = dial(ctx, clientID, knownPeersPath, known, addr, strings.NewReader("yes\n"))
+	_, err = dialTCP(ctx, clientID, knownPeersPath, known, addr, strings.NewReader("yes\n"))
 	if err == nil {
 		t.Fatal("expected dial to refuse a changed fingerprint")
 	}
@@ -179,7 +180,7 @@ func TestAuthFSDeniesWriteWithoutPermission(t *testing.T) {
 	addr := l.Addr().String()
 
 	knownPeersPath := filepath.Join(t.TempDir(), "known-peers")
-	conn, err := dial(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
+	conn, err := dialTCP(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestAuthFSProposePermitsWriteButNotDestructive(t *testing.T) {
 	addr := l.Addr().String()
 
 	knownPeersPath := filepath.Join(t.TempDir(), "known-peers")
-	conn, err := dial(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
+	conn, err := dialTCP(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -325,7 +326,7 @@ func TestListenWithRootPermsScopesPerRoot(t *testing.T) {
 	addr := l.Addr().String()
 
 	knownPeersPath := filepath.Join(t.TempDir(), "known-peers")
-	conn, err := dial(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
+	conn, err := dialTCP(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -387,6 +388,104 @@ func TestListenWithRootPermsScopesPerRoot(t *testing.T) {
 	}
 	if _, err := nested.Create(ctx, "ok", 0644, p9.OWRITE); err != nil {
 		t.Fatalf("expected Create under elevated/nested to be permitted (inherits the root override): %v", err)
+	}
+}
+
+// TestDialUnixEndToEnd exercises the whole path issue #9sh#2 asked for:
+// a plain, unauthenticated 9P server on a Unix socket (exactly what a
+// program like 9ed serves) reached through Dial with no TLS handshake and
+// no 9auth identity involved at all — the socket's own permissions are
+// the only trust boundary, same category as dirfs's local-directory bind.
+func TestDialUnixEndToEnd(t *testing.T) {
+	fs := memfs.New()
+	if err := writeMemFile(fs, "greeting", []byte("hello from unix socket\n")); err != nil {
+		t.Fatalf("seeding memfs: %v", err)
+	}
+
+	sockPath := filepath.Join(t.TempDir(), "9p.sock")
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer l.Close()
+	srv := &server.Server{FS: fs}
+	go srv.Serve(l)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn, err := Dial(ctx, sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	if fp := conn.Fingerprint(); fp != "" {
+		t.Fatalf("expected no fingerprint for an unauthenticated unix-socket dial, got %q", fp)
+	}
+
+	root, err := conn.FS().Attach(ctx, "9sh", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	f, err := root.Walk(ctx, "greeting")
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if err := f.Open(ctx, p9.OREAD); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	got, err := readAll(ctx, f)
+	f.Close()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "hello from unix socket\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// TestDialUnixSchemePrefix checks the "unix:"-prefixed form works
+// identically to a bare absolute path — both should reach dialUnix, never
+// dialTCP (which would otherwise try to resolve "unix:/..." as a
+// host:port and fail confusingly).
+func TestDialUnixSchemePrefix(t *testing.T) {
+	fs := memfs.New()
+	sockPath := filepath.Join(t.TempDir(), "9p.sock")
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer l.Close()
+	srv := &server.Server{FS: fs}
+	go srv.Serve(l)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn, err := Dial(ctx, "unix:"+sockPath)
+	if err != nil {
+		t.Fatalf("Dial with unix: prefix: %v", err)
+	}
+	conn.Close()
+}
+
+func TestUnixSocketPath(t *testing.T) {
+	cases := []struct {
+		addr     string
+		wantPath string
+		wantOK   bool
+	}{
+		{"127.0.0.1:1234", "", false},
+		{"host.example.com:9999", "", false},
+		{"/run/user/1000/9ed/12345.sock", "/run/user/1000/9ed/12345.sock", true},
+		{"unix:/run/user/1000/9ed/12345.sock", "/run/user/1000/9ed/12345.sock", true},
+	}
+	for _, c := range cases {
+		path, ok := unixSocketPath(c.addr)
+		if ok != c.wantOK || path != c.wantPath {
+			t.Errorf("unixSocketPath(%q) = (%q, %v), want (%q, %v)", c.addr, path, ok, c.wantPath, c.wantOK)
+		}
 	}
 }
 

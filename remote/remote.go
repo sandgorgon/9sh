@@ -55,12 +55,22 @@ func (c *Conn) Fingerprint() string { return c.fp }
 
 func (c *Conn) Close() error { return c.client.Close() }
 
-// Dial connects to addr over mutual TLS using this install's 9auth
-// identity, verifying the peer against ~/.config/9/known-peers with TOFU
-// semantics (a genuinely new address prompts once on stderr/stdin; a known
-// address whose presented fingerprint no longer matches is always a loud
-// refusal, never a silent pass), then attaches to its root.
+// Dial connects to addr and attaches to its root. Two address shapes are
+// recognized, dispatched by shape alone — no separate builtin or call site
+// needs to know which: a bare "host:port" dials over mutual TLS using this
+// install's 9auth identity, verifying the peer against
+// ~/.config/9/known-peers with TOFU semantics (a genuinely new address
+// prompts once on stderr/stdin; a known address whose presented
+// fingerprint no longer matches is always a loud refusal, never a silent
+// pass); an absolute path or a "unix:"-prefixed path dials a local
+// Unix-domain-socket 9P server instead, with no TLS/9auth involved at all
+// — see dialUnix's doc comment for why that's the right trust tier. The
+// two shapes can never collide: a TCP address never starts with "/" and
+// never carries a "unix:" prefix.
 func Dial(ctx context.Context, addr string) (*Conn, error) {
+	if path, ok := unixSocketPath(addr); ok {
+		return dialUnix(ctx, path)
+	}
 	id, err := auth.Load()
 	if err != nil {
 		return nil, err
@@ -73,15 +83,55 @@ func Dial(ctx context.Context, addr string) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dial(ctx, id, knownPeersPath, known, addr, os.Stdin)
+	return dialTCP(ctx, id, knownPeersPath, known, addr, os.Stdin)
 }
 
-// dial is Dial's logic against explicit, already-resolved inputs — split
-// out so tests can exercise two distinct identities and known-peers stores
-// in one process (auth.Load reads from process-wide env-derived paths,
-// which can't safely vary per goroutine) and inject a canned prompt
-// response instead of a real terminal.
-func dial(ctx context.Context, id *auth.Identity, knownPeersPath string, known auth.KnownPeers, addr string, prompt io.Reader) (*Conn, error) {
+// unixSocketPath reports whether addr names a Unix-domain socket rather
+// than a TCP host:port, returning the filesystem path to dial if so.
+func unixSocketPath(addr string) (path string, ok bool) {
+	if rest, found := strings.CutPrefix(addr, "unix:"); found {
+		return rest, true
+	}
+	if strings.HasPrefix(addr, "/") {
+		return addr, true
+	}
+	return "", false
+}
+
+// dialUnix connects to a local Unix-domain-socket 9P server at path with
+// no TLS handshake and no 9auth identity involved: the socket's own file
+// permissions are already the trust boundary, the same category dirfs's
+// plain local-directory bind (cmd/9sh/main.go's bootstrap) sits in — a
+// locally-run 9P server reached over a Unix socket has nothing more to
+// authenticate than a local directory does. Matches 9p's own resolution of
+// "no unix-socket transport" (9p#3) and 9pc's reasoning for why a local
+// single-machine 9P server has no reason to open a TCP port or link 9auth
+// at all.
+func dialUnix(ctx context.Context, path string) (*Conn, error) {
+	var d net.Dialer
+	rawConn, err := d.DialContext(ctx, "unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("remote: dial %s: %w", path, err)
+	}
+	c, err := client.NewClient(rawConn)
+	if err != nil {
+		rawConn.Close()
+		return nil, err
+	}
+	rootFid, err := c.AttachContext(ctx, "9sh", "")
+	if err != nil {
+		c.Close()
+		return nil, fmt.Errorf("remote: attaching to %s: %w", path, err)
+	}
+	return &Conn{client: c, fs: &clientFS{root: rootFid}}, nil
+}
+
+// dialTCP is Dial's TCP+TLS logic against explicit, already-resolved
+// inputs — split out so tests can exercise two distinct identities and
+// known-peers stores in one process (auth.Load reads from process-wide
+// env-derived paths, which can't safely vary per goroutine) and inject a
+// canned prompt response instead of a real terminal.
+func dialTCP(ctx context.Context, id *auth.Identity, knownPeersPath string, known auth.KnownPeers, addr string, prompt io.Reader) (*Conn, error) {
 	var verifyErr error
 	var peerFP string
 	accept := func(presented string) bool {

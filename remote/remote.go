@@ -277,12 +277,18 @@ func AuthorizedPeersPath() (string, error) {
 //
 // Two things make "same-UID" a correctly-enforced boundary rather than an
 // accidental one, since net.Listen("unix", ...) alone gives neither: the
-// socket file is explicitly chmod'd 0600 after bind (its mode otherwise
-// depends on the caller's ambient umask, not a fixed value), and every
-// accepted connection is checked via SO_PEERCRED against os.Getuid(),
-// rejected (never surfaced as a fatal Accept error) on any mismatch —
+// socket file is explicitly chmod'd 0600 after bind on every platform
+// (its mode otherwise depends on the caller's ambient umask, not a fixed
+// value), and on Linux every accepted connection is additionally checked
+// via SO_PEERCRED against os.Getuid() (peercred_linux.go), rejected
+// (never surfaced as a fatal Accept error) on any mismatch —
 // belt-and-suspenders beyond the filesystem permission check, and a real
-// identity to reject on even without a 9auth handshake.
+// identity to reject on even without a 9auth handshake. There's no
+// portable stdlib equivalent to SO_PEERCRED, so elsewhere (darwin, ...)
+// this second check is a no-op and the 0600 permission check alone is
+// the boundary (peercred_other.go) — the same trust level every other
+// platform-agnostic local bind (dirfs's /local, for one) already relies
+// on throughout this codebase.
 //
 // Serving continues until ctx is canceled or the listener is otherwise
 // closed.
@@ -368,29 +374,6 @@ func (l *peerCredListener) Accept() (net.Conn, error) {
 		}
 		return c, nil
 	}
-}
-
-// peerUID returns the UID of the process on the other end of c via
-// SO_PEERCRED (Linux-specific — 9sh targets Linux only, per its design
-// doc).
-func peerUID(c *net.UnixConn) (uint32, error) {
-	raw, err := c.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-	var uid uint32
-	var sockErr error
-	if err := raw.Control(func(fd uintptr) {
-		cred, err := syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
-		if err != nil {
-			sockErr = err
-			return
-		}
-		uid = cred.Uid
-	}); err != nil {
-		return 0, err
-	}
-	return uid, sockErr
 }
 
 // Listen starts serving fs over mutual TLS on addr: only peers listed in

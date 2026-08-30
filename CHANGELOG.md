@@ -29,6 +29,14 @@ once a first tagged release is cut.
   longer always a kyu-repl.
 - A themed divider bar between split panes.
 
+### Fixed
+
+- A pane that's a child of a horizontal split can no longer be
+  minimized — collapsing its width to one column used to garble the
+  title sideways with nothing readable. Its title bar drops the
+  `▾`/`▸` chevron to reflect this; a pane in a vertical stack (the
+  default) is unaffected.
+
 ### Changed
 
 - Bumped `github.com/sandgorgon/tui` to v0.1.10, which fixes

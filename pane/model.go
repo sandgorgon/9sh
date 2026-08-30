@@ -783,7 +783,10 @@ func (m Model) View() tui.Node {
 	}
 	return tui.Box(layout.Vertical,
 		tui.Child(layout.Length(1), m.controlStrip()),
-		tui.Child(layout.Fill(1), m.renderSplit(m.root, numbers)),
+		// true: m.root is always a Vertical split (New's own doc comment)
+		// and is never itself a leaf, so this only ever matters for
+		// root's direct children — matching reality, they can minimize.
+		tui.Child(layout.Fill(1), m.renderSplit(m.root, numbers, true)),
 	)
 }
 
@@ -803,17 +806,28 @@ func (m Model) View() tui.Node {
 // since more than one can exist in the very same parent Box once a
 // split has more than two children.
 //
-// A minimized leaf's constraint is decided here, by its parent, rather
-// than inside paneNode — matching exactly how the pre-tree View() loop
-// already computed each top-level pane's Fill(1)/Length(1) constraint
-// itself. Collapsing a horizontally-split pane's width to Length(1)
-// this way is a known rough edge (right for a vertical stack, less
-// meaningful sideways) — tracked as follow-up work once horizontal
-// splits actually exist, not fixed here.
-func (m Model) renderSplit(n *splitNode, numbers map[int]int) tui.Node {
+// canMinimize is whether n itself (if it turns out to be a leaf) sits
+// along a Vertical split axis — minimize collapses a pane's Length(1)
+// along whichever axis n.dir is; that's a sensible "show just the
+// title row" for a vertical stack, but collapsing a horizontally-split
+// pane's *width* to one column just garbles its title sideways with no
+// readable result. So a horizontally-split pane simply can't be
+// minimized at all: this is threaded down to paneNode (which disables
+// the toggle entirely and drops the chevron when canMinimize is false)
+// as well as gating the constraint decided right here — both need to
+// agree, or a pane already minimized before being wrapped into a
+// horizontal split would visually collapse anyway despite paneNode
+// refusing to let it be (re-)minimized going forward. p.minimized
+// itself is deliberately left untouched either way (not forced back to
+// false) — purely cosmetic here, and would resume applying if this
+// pane ever left the horizontal split (no such "unsplit" operation
+// exists today, but no reason to lose the stored intent for one that
+// might).
+func (m Model) renderSplit(n *splitNode, numbers map[int]int, canMinimize bool) tui.Node {
 	if n.paneID != 0 {
-		return m.paneNode(m.find(n.paneID), numbers[n.paneID])
+		return m.paneNode(m.find(n.paneID), numbers[n.paneID], canMinimize)
 	}
+	childCanMinimize := n.dir == layout.Vertical
 	dividerStyle := cell.Style{Bg: m.theme.Border}
 	var children []tui.BoxChild
 	for i, c := range n.children {
@@ -821,12 +835,12 @@ func (m Model) renderSplit(n *splitNode, numbers map[int]int) tui.Node {
 			children = append(children, tui.Child(layout.Length(1), divider(dividerKey(n.id, i), dividerStyle)))
 		}
 		constraint := layout.Fill(c.weight)
-		if c.node.paneID != 0 {
+		if c.node.paneID != 0 && childCanMinimize {
 			if p := m.find(c.node.paneID); p != nil && p.minimized {
 				constraint = layout.Length(1)
 			}
 		}
-		children = append(children, tui.Child(constraint, m.renderSplit(c.node, numbers)))
+		children = append(children, tui.Child(constraint, m.renderSplit(c.node, numbers, childCanMinimize)))
 	}
 	return tui.Box(n.dir, children...).Key(splitKey(n.id))
 }
@@ -951,12 +965,22 @@ func clicked(e input.Event) bool {
 	return false
 }
 
-func (m Model) paneNode(p *paneState, number int) tui.Node {
+func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 	id := p.id
 
-	chevron := "▾ "
-	if p.minimized {
-		chevron = "▸ "
+	// A pane along a horizontal split's axis can't be minimized at all —
+	// collapsing its *width* to one column would garble the title
+	// sideways with nothing readable, unlike a vertical stack's Length(1)
+	// row (see renderSplit's own doc comment for the full reasoning).
+	// The chevron drops to a blank placeholder rather than showing a
+	// (now non-functional) ▾/▸ — p.minimized's stored value is left
+	// alone regardless, purely a display decision here.
+	chevron := "  "
+	if canMinimize {
+		chevron = "▾ "
+		if p.minimized {
+			chevron = "▸ "
+		}
 	}
 	label := chevron + paneLabel(p)
 	if number >= 1 && number <= 9 {
@@ -1012,7 +1036,7 @@ func (m Model) paneNode(p *paneState, number int) tui.Node {
 					return resizePaneMsg{id: id, delta: -1}
 				}
 			}
-			if !clicked(e) {
+			if !canMinimize || !clicked(e) {
 				return nil
 			}
 			return toggleMinimizeMsg{id: id}

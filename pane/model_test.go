@@ -613,6 +613,40 @@ func TestMinimizeKeepsProcessAliveAndStatePreserved(t *testing.T) {
 	}
 }
 
+// TestHorizontalSplitPaneCannotMinimize drives the real input path: a
+// pane that's a child of a horizontal split shouldn't be mini­mizable
+// at all (see renderSplit's own doc comment — collapsing width to one
+// column just garbles the title sideways). Uses F2 (verified working
+// end to end by TestFKeyJumpsFocusEndToEnd's sibling tests) to jump
+// straight to the second pane's own title bar, then Enter (the normal
+// click-equivalent minimize toggle) should be a no-op.
+func TestHorizontalSplitPaneCannotMinimize(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("kyu", nil))
+	id := m.panes[0].id
+	m, _ = m.splitPane(id, layout.Horizontal, KyuReplSpec("kyu2", nil))
+
+	app := tui.NewApp(m, 80, 16)
+	defer app.Close()
+	forceRenders(app, 1)
+
+	for _, cmd := range app.HandleInput(input.KeyEvent{Key: input.KeyF2}) {
+		if cmd != nil {
+			app.Dispatch(cmd())
+		}
+	}
+	for _, cmd := range app.HandleInput(input.KeyEvent{Key: input.KeyEnter}) {
+		if cmd != nil {
+			app.Dispatch(cmd())
+		}
+	}
+	forceRenders(app, 2)
+
+	buf := app.Buffer().String()
+	if !strings.Contains(buf, "9sh>") || strings.Count(buf, "9sh>") != 2 {
+		t.Fatalf("expected both panes' content still visible (minimize should be a no-op here):\n%s", buf)
+	}
+}
+
 // TestAddingSecondPaneKeepsFirstPaneAlive is the tree-restructuring
 // counterpart to TestMinimizeKeepsProcessAliveAndStatePreserved:
 // appending a new top-level row must not discard an existing pane's

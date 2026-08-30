@@ -238,9 +238,10 @@ type ExprStmt struct {
 
 // DefineStmt is `name := expr`.
 type DefineStmt struct {
-	Tok  token.Token
-	Name string
-	Val  Expr
+	NameTok token.Token // the identifier's own token — the statement's true start
+	Tok     token.Token // ':=' — kept for callers that specifically want the operator
+	Name    string
+	Val     Expr
 }
 
 // AssignStmt is `target = expr`, where target is an Ident or FieldAccess

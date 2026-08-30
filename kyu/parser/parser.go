@@ -126,7 +126,7 @@ func (p *Parser) parseDefineStmt() ast.Stmt {
 	tok := p.cur
 	p.next() // consume :=
 	val := p.parseValueExpr()
-	return &ast.DefineStmt{Tok: tok, Name: name.Literal, Val: val}
+	return &ast.DefineStmt{NameTok: name, Tok: tok, Name: name.Literal, Val: val}
 }
 
 // parseValueExpr parses one expression and, if it's immediately followed

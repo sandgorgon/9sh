@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func TestDialListenEndToEnd(t *testing.T) {
 	authorized := auth.AuthorizedPeers{clientID.Fingerprint(): auth.PermWrite}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	l, err := listen(ctx, serverID, authorized, "127.0.0.1:0", fs)
+	l, err := listen(ctx, serverID, authorized, nil, "127.0.0.1:0", fs)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestListenRejectsUnauthorizedPeer(t *testing.T) {
 	// clientID's fingerprint is deliberately absent from authorized.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	l, err := listen(ctx, serverID, auth.AuthorizedPeers{}, "127.0.0.1:0", fs)
+	l, err := listen(ctx, serverID, auth.AuthorizedPeers{}, nil, "127.0.0.1:0", fs)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestDialRefusesChangedFingerprint(t *testing.T) {
 	authorized := auth.AuthorizedPeers{clientID.Fingerprint(): auth.PermRead}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	l, err := listen(ctx, serverID, authorized, "127.0.0.1:0", fs)
+	l, err := listen(ctx, serverID, authorized, nil, "127.0.0.1:0", fs)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestAuthFSDeniesWriteWithoutPermission(t *testing.T) {
 	authorized := auth.AuthorizedPeers{clientID.Fingerprint(): auth.PermRead}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	l, err := listen(ctx, serverID, authorized, "127.0.0.1:0", fs)
+	l, err := listen(ctx, serverID, authorized, nil, "127.0.0.1:0", fs)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -190,6 +191,202 @@ func TestAuthFSDeniesWriteWithoutPermission(t *testing.T) {
 	}
 	if _, err := root.Create(ctx, "nope", 0644, p9.OWRITE); err == nil {
 		t.Fatal("expected Create to be denied for a read-only peer")
+	}
+}
+
+// TestAuthFSProposePermitsWriteButNotDestructive checks the concrete
+// Propose-vs-Write mapping authFile's doc comment settles: PermPropose is
+// enough for Write/Create, but Remove and WStat still need PermWrite.
+func TestAuthFSProposePermitsWriteButNotDestructive(t *testing.T) {
+	serverID := loadIdentity(t, "server")
+	clientID := loadIdentity(t, "client")
+
+	fs := memfs.New()
+	if err := writeMemFile(fs, "existing", []byte("content")); err != nil {
+		t.Fatalf("seeding memfs: %v", err)
+	}
+	authorized := auth.AuthorizedPeers{clientID.Fingerprint(): auth.PermPropose}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l, err := listen(ctx, serverID, authorized, nil, "127.0.0.1:0", fs)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := l.Addr().String()
+
+	knownPeersPath := filepath.Join(t.TempDir(), "known-peers")
+	conn, err := dial(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	root, err := conn.FS().Attach(ctx, "9sh", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	created, err := root.Create(ctx, "new-file", 0644, p9.OWRITE)
+	if err != nil {
+		t.Fatalf("expected Create to be permitted for a propose-level peer: %v", err)
+	}
+	if _, err := created.Write(ctx, 0, []byte("hi")); err != nil {
+		t.Fatalf("expected Write to be permitted for a propose-level peer: %v", err)
+	}
+	created.Close()
+
+	root2, err := conn.FS().Attach(ctx, "9sh", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	existing, err := root2.Walk(ctx, "existing")
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if err := existing.Remove(ctx); err == nil {
+		t.Fatal("expected Remove to be denied for a propose-level peer")
+	}
+}
+
+// TestListenWithRootPermsScopesPerRoot checks that a root-specific ACL
+// governs its whole subtree (a peer with global read-only access can get
+// elevated permission throughout one particular exported root, nested
+// content included) without spilling over to a different, non-overridden
+// root — even one containing a same-named subdirectory, which only ever
+// matters if the override check ran again at that depth.
+func TestListenWithRootPermsScopesPerRoot(t *testing.T) {
+	// Unlike the other tests in this file, ListenWithRootPerms is the
+	// real exported entry point (not the explicit-id/authorized `listen`
+	// test helper), so it resolves its own identity and global
+	// authorized-peers file from env-derived paths (auth.Load/
+	// AuthorizedPeersPath) exactly as a real caller would — XDG_CONFIG_HOME
+	// has to be pointed at the server's own config dir for that call
+	// specifically, the same constraint loadIdentity's own doc comment
+	// flags for auth.Load in general.
+	serverDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", serverDir)
+	serverID, err := auth.Load()
+	if err != nil {
+		t.Fatalf("server identity: %v", err)
+	}
+
+	clientDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", clientDir)
+	clientID, err := auth.Load()
+	if err != nil {
+		t.Fatalf("client identity: %v", err)
+	}
+
+	fs := memfs.New()
+	// /plain/elevated: a same-named subdirectory nested inside a
+	// *different*, non-overridden root — proves the override check only
+	// ever fires exactly at the top level, not by name match at any
+	// depth. /elevated/nested: proves an override, once it does apply,
+	// correctly governs everything beneath that root, not just the
+	// top-level directory entry itself.
+	root, err := fs.Attach(context.Background(), "test", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	plainDir, err := root.Create(context.Background(), "plain", p9.DMDIR|0755, p9.ORDWR)
+	if err != nil {
+		t.Fatalf("creating plain dir: %v", err)
+	}
+	if _, err := plainDir.Create(context.Background(), "elevated", p9.DMDIR|0755, p9.ORDWR); err != nil {
+		t.Fatalf("creating plain/elevated dir: %v", err)
+	}
+	elevatedDir, err := root.Create(context.Background(), "elevated", p9.DMDIR|0755, p9.ORDWR)
+	if err != nil {
+		t.Fatalf("creating elevated dir: %v", err)
+	}
+	if _, err := elevatedDir.Create(context.Background(), "nested", p9.DMDIR|0755, p9.ORDWR); err != nil {
+		t.Fatalf("creating elevated/nested dir: %v", err)
+	}
+
+	// Global ACL: read-only. Root override for "elevated": write.
+	t.Setenv("XDG_CONFIG_HOME", serverDir)
+	globalPath, err := AuthorizedPeersPath()
+	if err != nil {
+		t.Fatalf("AuthorizedPeersPath: %v", err)
+	}
+	if err := os.WriteFile(globalPath, []byte(clientID.Fingerprint()+" read\n"), 0o600); err != nil {
+		t.Fatalf("writing global authorized-peers: %v", err)
+	}
+	rootPath := filepath.Join(t.TempDir(), "elevated-authorized-peers")
+	if err := os.WriteFile(rootPath, []byte(clientID.Fingerprint()+" write\n"), 0o600); err != nil {
+		t.Fatalf("writing root authorized-peers: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l, err := ListenWithRootPerms(ctx, "127.0.0.1:0", fs, map[string]string{"elevated": rootPath})
+	if err != nil {
+		t.Fatalf("ListenWithRootPerms: %v", err)
+	}
+	addr := l.Addr().String()
+
+	knownPeersPath := filepath.Join(t.TempDir(), "known-peers")
+	conn, err := dial(ctx, clientID, knownPeersPath, auth.KnownPeers{}, addr, strings.NewReader("yes\n"))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if conn.Fingerprint() != serverID.Fingerprint() {
+		t.Fatalf("fingerprint mismatch: got %s, want %s", conn.Fingerprint(), serverID.Fingerprint())
+	}
+
+	attach := func() server.File {
+		t.Helper()
+		f, err := conn.FS().Attach(ctx, "9sh", "")
+		if err != nil {
+			t.Fatalf("attach: %v", err)
+		}
+		return f
+	}
+
+	// The plain root has no override: global read-only applies, so a
+	// write must fail.
+	plain, err := attach().Walk(ctx, "plain")
+	if err != nil {
+		t.Fatalf("walk plain: %v", err)
+	}
+	if _, err := plain.Create(ctx, "nope", 0644, p9.OWRITE); err == nil {
+		t.Fatal("expected Create under the un-overridden root to be denied (global read-only)")
+	}
+
+	// A same-named "elevated" subdirectory nested inside "plain" must
+	// not spuriously pick up the override just by matching its name —
+	// only exactly-first-segment walks from the attach root ever
+	// consult rootPerms at all.
+	plainElevated, err := plain.Walk(ctx, "elevated")
+	if err != nil {
+		t.Fatalf("walk plain/elevated: %v", err)
+	}
+	if _, err := plainElevated.Create(ctx, "nope", 0644, p9.OWRITE); err == nil {
+		t.Fatal("expected Create under plain/elevated to be denied (nested, not the overridden root itself)")
+	}
+
+	// The overridden root grants write, at the root itself...
+	elevatedRoot, err := attach().Walk(ctx, "elevated")
+	if err != nil {
+		t.Fatalf("walk elevated: %v", err)
+	}
+	if _, err := elevatedRoot.Create(ctx, "ok", 0644, p9.OWRITE); err != nil {
+		t.Fatalf("expected Create under the overridden root to be permitted: %v", err)
+	}
+
+	// ...and that grant correctly propagates to content nested beneath
+	// it — a root override scopes the whole subtree, not just the one
+	// top-level directory entry.
+	nested, err := attach().Walk(ctx, "elevated")
+	if err != nil {
+		t.Fatalf("walk elevated (2nd): %v", err)
+	}
+	nested, err = nested.Walk(ctx, "nested")
+	if err != nil {
+		t.Fatalf("walk elevated/nested: %v", err)
+	}
+	if _, err := nested.Create(ctx, "ok", 0644, p9.OWRITE); err != nil {
+		t.Fatalf("expected Create under elevated/nested to be permitted (inherits the root override): %v", err)
 	}
 }
 

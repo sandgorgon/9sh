@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"testing"
+	"time"
 
 	auth "github.com/sandgorgon/9auth"
 	p9 "github.com/sandgorgon/9p"
@@ -141,5 +142,141 @@ func TestAtHostWithoutBindFailsClearly(t *testing.T) {
 	err := runEnvErr(t, `@nosuchhost { %true & }`, env)
 	if err == nil {
 		t.Fatal("expected an error for an unbound host")
+	}
+}
+
+// setupAtHostTestPeer builds a real remote 9sh-shaped peer (its own
+// namespace + job.Manager, served over TLS — the same shape
+// TestAtHostEndToEnd exercises) and a client-side Env with it already
+// dialed and bound at /n/testhost, ready for @testhost{} blocks — reused
+// by the proxy-recording tests below, which don't otherwise care about
+// the dial/listen/TOFU machinery TestAtHostEndToEnd's own body walks
+// through step by step.
+func setupAtHostTestPeer(t *testing.T) *Env {
+	t.Helper()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH")
+	}
+
+	serverDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", serverDir)
+	serverID, err := auth.Load()
+	if err != nil {
+		t.Fatalf("server identity: %v", err)
+	}
+
+	clientDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", clientDir)
+	clientID, err := auth.Load()
+	if err != nil {
+		t.Fatalf("client identity: %v", err)
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", serverDir)
+	authPath, err := remote.AuthorizedPeersPath()
+	if err != nil {
+		t.Fatalf("authorized-peers path: %v", err)
+	}
+	if err := os.WriteFile(authPath, []byte(clientID.Fingerprint()+" write\n"), 0o600); err != nil {
+		t.Fatalf("writing authorized-peers: %v", err)
+	}
+
+	remoteNamespace := ns.New()
+	if err := remoteNamespace.BindFS(job.New(job.NewManager()), "", "/jobs", ns.Replace); err != nil {
+		t.Fatalf("bootstrapping remote /jobs: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	l, err := remote.Listen(ctx, "127.0.0.1:0", remoteNamespace)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := l.Addr().String()
+
+	t.Setenv("XDG_CONFIG_HOME", clientDir)
+	knownPeersPath, err := auth.KnownPeersPath()
+	if err != nil {
+		t.Fatalf("known-peers path: %v", err)
+	}
+	if err := auth.RememberPeer(knownPeersPath, addr, serverID.Fingerprint()); err != nil {
+		t.Fatalf("pre-pinning server fingerprint: %v", err)
+	}
+
+	env, _ := jobsEnvWithManager(t)
+	conn, err := remote.Dial(context.Background(), addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if err := env.Namespace().BindFS(conn.FS(), "", "/n/testhost", ns.Replace); err != nil {
+		t.Fatalf("bind /n/testhost: %v", err)
+	}
+	return env
+}
+
+// TestAtHostRecordsLocalProxyLinkingRecordSync exercises the foreground
+// (%cmd, no &) path: runExternalViaJob already blocks on the remote
+// job's wait file, so it can report the proxy recorder synchronously
+// with the real terminal status in hand — see external.go's call to
+// isProxyJobRoot/ProxyRecorder.
+func TestAtHostRecordsLocalProxyLinkingRecordSync(t *testing.T) {
+	env := setupAtHostTestPeer(t)
+
+	type recorded struct {
+		host     string
+		remoteID int
+		argv     []string
+		exit     *int
+	}
+	recCh := make(chan recorded, 1)
+	env.SetProxyRecorder(func(host string, remoteID int, argv []string, tsStart, tsEnd time.Time, exitCode *int, signal string) {
+		recCh <- recorded{host: host, remoteID: remoteID, argv: append([]string(nil), argv...), exit: exitCode}
+	})
+
+	runEnv(t, `@testhost { %sh "-c" "echo hi" }`, env)
+
+	select {
+	case r := <-recCh:
+		if r.host != "testhost" {
+			t.Fatalf("host = %q, want %q", r.host, "testhost")
+		}
+		if r.remoteID == 0 {
+			t.Fatal("remoteID = 0, want a real remote job id")
+		}
+		if len(r.argv) == 0 || r.argv[0] != "sh" {
+			t.Fatalf("argv = %v, want it to start with \"sh\"", r.argv)
+		}
+		if r.exit == nil || *r.exit != 0 {
+			t.Fatalf("exit = %v, want 0", r.exit)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy recorder was never called")
+	}
+}
+
+// TestAtHostRecordsLocalProxyLinkingRecordAsync exercises the
+// backgrounded (`&`) path: evalBackground never waits on the job itself,
+// so the recording has to happen from recordProxyJobAsync's own
+// independent goroutine once the remote job's wait file unblocks — this
+// confirms that actually fires, not just the synchronous case above.
+func TestAtHostRecordsLocalProxyLinkingRecordAsync(t *testing.T) {
+	env := setupAtHostTestPeer(t)
+
+	recCh := make(chan int, 1) // remote job id
+	env.SetProxyRecorder(func(host string, remoteID int, argv []string, tsStart, tsEnd time.Time, exitCode *int, signal string) {
+		recCh <- remoteID
+	})
+
+	src := `j := @testhost { %sh "-c" "echo hi" & }
+j | wait`
+	runEnv(t, src, env)
+
+	select {
+	case id := <-recCh:
+		if id == 0 {
+			t.Fatal("remoteID = 0, want a real remote job id")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy recorder was never called")
 	}
 }

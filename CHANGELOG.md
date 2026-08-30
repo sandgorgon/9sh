@@ -47,6 +47,21 @@ once a first tagged release is cut.
   wheel), and copying (Ctrl+C for the whole transcript, Alt+C for just
   what's currently visible — see [README](README.md) for why Alt, not
   Ctrl+Shift).
+- Session history: a job run via `@host{}` now gets a local-side
+  "proxy" linking record too (host, remote job id, argv, exit/signal),
+  alongside the ordinary history line the remote peer's own session
+  repo already recorded for it on its side.
+- Session history records now carry a `detached` field, reflecting
+  what was already true of the recording behavior itself (a `ctl
+  detach`'d job was always still recorded — detach only ever meant
+  "don't tie this job's lifetime to whatever's watching it," not
+  "stop tracking it").
+- `remote`: a three-tier permission model instead of write-or-nothing
+  — `auth.PermPropose` is now enough to `Write`/`Create`, while
+  `Remove`/`WStat` still require full `auth.PermWrite`. New
+  `ListenWithRootPerms`, scoping a distinct authorized-peers file to
+  one exported namespace root (e.g. `/local`) instead of the one
+  connection-wide file `Listen` alone still uses.
 
 ### Fixed
 

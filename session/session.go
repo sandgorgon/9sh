@@ -33,18 +33,30 @@ import (
 
 // Record is one completed job's history entry — the design doc's
 // per-job schema. No stdout/stderr capture by default (an opt-in for
-// later, content-addressed via checkout, not v1); no remote_host
-// (Phase 5, proxy jobs don't exist yet).
+// later, content-addressed via checkout, not v1).
+//
+// RemoteHost/RemoteJobID are set only on a "proxy" record (Kind ==
+// "proxy") — see ProxyJob/RecordProxy — the local-side "I ran X on host
+// Y" linking record for a job started via @host{}. Host stays this
+// Recorder's own host (which branch the row lives on), matching every
+// other record; RemoteHost names where the job actually ran, and
+// RemoteJobID is the job's own ID in *that* peer's numbering, letting a
+// reader cross-reference the remote's own history for anything this
+// linking record doesn't carry (stdout, e.g.) with RemoteHost's own
+// session repo.
 type Record struct {
-	TSStart time.Time `json:"ts_start"`
-	TSEnd   time.Time `json:"ts_end"`
-	Host    string    `json:"host"`
-	JobID   int       `json:"job_id"`
-	Cwd     string    `json:"cwd,omitempty"`
-	Argv    []string  `json:"argv,omitempty"`
-	Exit    *int      `json:"exit,omitempty"`
-	Signal  string    `json:"signal,omitempty"`
-	Kind    string    `json:"kind"`
+	TSStart     time.Time `json:"ts_start"`
+	TSEnd       time.Time `json:"ts_end"`
+	Host        string    `json:"host"`
+	JobID       int       `json:"job_id"`
+	Cwd         string    `json:"cwd,omitempty"`
+	Argv        []string  `json:"argv,omitempty"`
+	Exit        *int      `json:"exit,omitempty"`
+	Signal      string    `json:"signal,omitempty"`
+	Kind        string    `json:"kind"`
+	Detached    bool      `json:"detached,omitempty"`
+	RemoteHost  string    `json:"remote_host,omitempty"`
+	RemoteJobID int       `json:"remote_job_id,omitempty"`
 }
 
 // Checkpoint policy (design doc: "idle ~30s, shell exit, or ~5min
@@ -110,13 +122,55 @@ func (r *Recorder) Attach(mgr *job.Manager) {
 // RecordJob appends st as a history line. It matches job.Manager's
 // OnFinish signature directly, so Attach can pass it as the callback
 // with no adapter.
+//
+// A detached job (st.Detached — set by a `ctl detach` write) still gets
+// recorded here exactly like any other: OnFinish fires on every terminal
+// transition regardless of the flag (see job.Job.finish), and detach
+// only ever meant "don't tie this job's lifetime to whatever's watching
+// it," not "stop tracking it in history" — the same distinction `nohup`/
+// `disown` draw in a POSIX shell. Detached is carried through onto the
+// record so a reader can tell the two cases apart after the fact.
 func (r *Recorder) RecordJob(st job.Status) {
 	rec := Record{
 		TSStart: st.StartedAt, TSEnd: st.FinishedAt, Host: r.host, JobID: st.ID,
 		Cwd: st.Cwd, Argv: st.Argv, Exit: st.ExitCode, Signal: st.Signal, Kind: string(st.Kind),
+		Detached: st.Detached,
 	}
 	if err := r.append(rec); err != nil {
 		fmt.Fprintln(os.Stderr, "9sh: session: appending history:", err)
+	}
+}
+
+// ProxyJob describes a job run via `@host{}` for RecordProxy — the local
+// side of the design doc's "proxy jobs" (see kyu/eval/athost.go): the
+// job itself is created and tracked entirely on the remote peer's own
+// job.Manager, so it already gets an ordinary Phase-4 history line for
+// free in *that peer's own* session repo (nothing special needed there,
+// per the design doc). What's genuinely missing, and what this
+// captures, is a record on the *local* side saying "I ran X on host Y".
+type ProxyJob struct {
+	Host     string // the remote peer's own hostname/address, e.g. from @host{}'s literal host
+	RemoteID int    // the job's ID in the remote peer's own numbering
+	Argv     []string
+	TSStart  time.Time
+	TSEnd    time.Time
+	Exit     *int
+	Signal   string
+}
+
+// RecordProxy appends pj as a "proxy"-kind history line. kyu/eval wires
+// this in as an eval.ProxyRecorderFunc callback (see cmd/9sh's
+// bootstrap) rather than eval importing package session directly — the
+// same shape job.Manager.OnFinish's callback already uses for the same
+// reason (job doesn't import session either).
+func (r *Recorder) RecordProxy(pj ProxyJob) {
+	rec := Record{
+		TSStart: pj.TSStart, TSEnd: pj.TSEnd, Host: r.host,
+		RemoteHost: pj.Host, RemoteJobID: pj.RemoteID,
+		Argv: pj.Argv, Exit: pj.Exit, Signal: pj.Signal, Kind: "proxy",
+	}
+	if err := r.append(rec); err != nil {
+		fmt.Fprintln(os.Stderr, "9sh: session: appending proxy history:", err)
 	}
 }
 

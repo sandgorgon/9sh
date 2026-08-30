@@ -195,11 +195,14 @@ round out the design doc's original differentiator list.
 
 Getting close to usable as an actual daily driver, not just ready for
 hands-on testing — but the kyu language itself is still young enough
-that rough edges are expected there, and a few backlog items remain
-open: proxy-job (`@host{}`) session recording has no local-side linking
-record yet, and the remote-namespace ACL model is collapsed to one
-global allowlist rather than the design doc's original per-root
-scheme.
+that rough edges are expected there. Proxy-job (`@host{}`) session
+recording now has a local-side linking record (host, remote job id,
+argv, exit/signal, alongside the ordinary entry the remote peer's own
+session repo already logged for it); the remote-namespace ACL model
+gained a `propose` permission tier (enough to write/create, short of
+remove/wstat) and `ListenWithRootPerms`, scoping a distinct
+authorized-peers file to one exported root instead of only the single
+global allowlist `Listen` alone still uses.
 
 ## Design
 

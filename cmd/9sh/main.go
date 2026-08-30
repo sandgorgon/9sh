@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
 	"github.com/sandgorgon/tui/input"
@@ -128,6 +129,19 @@ func bootstrap(listenAddr string) (*eval.Env, *session.Recorder, string) {
 
 	recorder, sessionDir := bootstrapSession(mgr)
 	env := eval.NewGlobalEnv(namespace)
+	if recorder != nil {
+		// The local-side half of @host{} session recording: the remote
+		// peer's own Recorder (if it has one) already logs an ordinary
+		// entry for the job in its own history, on its own side — this
+		// hook is what appends "I ran X on host Y" to *this* shell's
+		// history too. See session.Recorder.RecordProxy's doc comment.
+		env.SetProxyRecorder(func(host string, remoteID int, argv []string, tsStart, tsEnd time.Time, exitCode *int, signal string) {
+			recorder.RecordProxy(session.ProxyJob{
+				Host: host, RemoteID: remoteID, Argv: argv,
+				TSStart: tsStart, TSEnd: tsEnd, Exit: exitCode, Signal: signal,
+			})
+		})
+	}
 	// Loaded last, once /jobs, /local, -listen, and session history are
 	// all already wired up: common.ky/hosts/<hostname>.ky may reasonably
 	// want to bind, dial, or background jobs of their own.

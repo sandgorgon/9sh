@@ -8,7 +8,9 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	p9 "github.com/sandgorgon/9p"
 	"github.com/sandgorgon/9p/server"
@@ -161,6 +163,7 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	}
 	argvFile.Close()
 
+	tsStart := time.Now()
 	ctlFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "ctl")...)
 	if err != nil {
 		return nil, err
@@ -170,11 +173,68 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	}
 	ctlFile.Close()
 
+	if host, ok := isProxyJobRoot(jobRoot); ok {
+		if rec := env.ProxyRecorder(); rec != nil {
+			// Fire-and-forget: evalBackground never waits for this job, so
+			// there's no terminal status in hand here to record yet, only
+			// once it eventually finishes — mirroring job.Job.notifyFinished's
+			// own `go fn(...)` shape for local jobs, whose caller has
+			// likewise already moved on by the time this can matter.
+			go recordProxyJobAsync(namespace, jobRoot, id, host, append([]string(nil), argv...), tsStart, rec)
+		}
+	}
+
 	base, err := walkAll(ctx, root, jobPath(jobRoot, id))
 	if err != nil {
 		return nil, err
 	}
 	return buildJobRecord(ctx, base)
+}
+
+// isProxyJobRoot reports whether jobRoot points at a remote peer's /jobs
+// tree — `@host{}`'s desugaring (see evalAtHost) — rather than the local
+// /jobs, and if so returns the remote host name. evalBackground and
+// runExternalViaJob don't otherwise know or care that @host exists; this
+// is the one place either asks, purely to decide whether a local-side
+// proxy linking record is even applicable.
+func isProxyJobRoot(jobRoot []string) (host string, ok bool) {
+	if len(jobRoot) >= 2 && jobRoot[0] == "n" {
+		return jobRoot[1], true
+	}
+	return "", false
+}
+
+// recordProxyJobAsync waits for a backgrounded proxy job to finish, then
+// reports it through record. It opens its own, independent fid onto the
+// job's wait file (rather than reusing anything the caller's live job
+// record already holds) — that file blocks until the job is terminal,
+// exactly the semantics buildJobRecord's own "wait" field already relies
+// on, just read here through a second, unrelated handle so this
+// goroutine can't race whatever the kyu caller does with its own live
+// record. Any error along the way (the connection dropping, e.g.) just
+// means no linking record gets appended — the remote peer's own history
+// already has the authoritative entry regardless.
+func recordProxyJobAsync(namespace *ns.Namespace, jobRoot []string, id, host string, argv []string, tsStart time.Time, record ProxyRecorderFunc) {
+	ctx := context.Background()
+	root, err := namespace.Attach(ctx, "9sh", "")
+	if err != nil {
+		return
+	}
+	waitFile, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, id, "wait")...)
+	if err != nil {
+		return
+	}
+	defer waitFile.Close()
+	waitBytes, err := readAllFile(ctx, waitFile)
+	if err != nil {
+		return
+	}
+	var st jobWaitStatus
+	if err := json.Unmarshal(waitBytes, &st); err != nil {
+		return
+	}
+	remoteID, _ := strconv.Atoi(id)
+	record(host, remoteID, argv, tsStart, time.Now(), st.ExitCode, st.Signal)
 }
 
 // jobPath appends parts to a copy of jobRoot — never mutating or aliasing

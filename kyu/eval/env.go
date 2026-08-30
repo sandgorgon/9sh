@@ -1,6 +1,8 @@
 package eval
 
 import (
+	"time"
+
 	"github.com/sandgorgon/9sh/kyu/value"
 	"github.com/sandgorgon/9sh/ns"
 )
@@ -11,24 +13,55 @@ import (
 // way every other language keeps one thing (here, "what /jobs resolves
 // to") outside the scope-per-block model that vars/Define/Set exist for.
 type Env struct {
-	vars    map[string]value.Value
-	parent  *Env
-	ns      *ns.Namespace
-	jobRoot []string // nil = inherit from parent; see JobRoot
+	vars          map[string]value.Value
+	parent        *Env
+	ns            *ns.Namespace
+	jobRoot       []string          // nil = inherit from parent; see JobRoot
+	proxyRecorder ProxyRecorderFunc // process-wide, like ns; see ProxyRecorder
 }
+
+// ProxyRecorderFunc is called once a job created via `@host{}` (a "proxy"
+// job — see evalAtHost's doc comment) reaches a terminal state: the
+// local-side "I ran X on host Y" linking record the design doc calls for
+// (session.Recorder.RecordProxy has the full rationale). A plain
+// callback, not a direct reference to package session, so eval doesn't
+// need to import it — the same shape job.Manager.OnFinish's own callback
+// already uses for the same reason.
+type ProxyRecorderFunc func(host string, remoteID int, argv []string, tsStart, tsEnd time.Time, exitCode *int, signal string)
 
 func NewEnv(parent *Env) *Env {
 	return &Env{vars: map[string]value.Value{}, parent: parent}
 }
 
-// Namespace returns the process's namespace (nil if none was configured —
-// see NewGlobalEnv), regardless of how deep in nested scopes e is.
-func (e *Env) Namespace() *ns.Namespace {
+// root walks up to the outermost Env — where process-wide state (the
+// namespace, the proxy recorder) actually lives, regardless of how deep
+// in nested scopes the caller is.
+func (e *Env) root() *Env {
 	n := e
 	for n.parent != nil {
 		n = n.parent
 	}
-	return n.ns
+	return n
+}
+
+// Namespace returns the process's namespace (nil if none was configured —
+// see NewGlobalEnv), regardless of how deep in nested scopes e is.
+func (e *Env) Namespace() *ns.Namespace {
+	return e.root().ns
+}
+
+// SetProxyRecorder configures the hook evalBackground/runExternalViaJob
+// call when a job runs against a remote (`@host{}`-scoped) JobRoot — see
+// cmd/9sh's bootstrap. Only meaningful set once, on the root Env; nil
+// (the default) means proxy jobs simply aren't recorded, matching how
+// session history degrades gracefully everywhere else in this codebase.
+func (e *Env) SetProxyRecorder(fn ProxyRecorderFunc) {
+	e.root().proxyRecorder = fn
+}
+
+// ProxyRecorder returns the hook set by SetProxyRecorder, or nil.
+func (e *Env) ProxyRecorder() ProxyRecorderFunc {
+	return e.root().proxyRecorder
 }
 
 // JobRoot returns the namespace path prefix job creation should use —

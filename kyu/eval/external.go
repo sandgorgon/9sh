@@ -7,13 +7,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 
 	p9 "github.com/sandgorgon/9p"
 
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // runExternal evaluates a `%cmd arg...` external/legacy-binary call. in is
@@ -50,8 +51,8 @@ func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, er
 		args[i] = s
 	}
 
-	if namespace := env.Namespace(); namespace != nil {
-		return runExternalViaJob(namespace, env.JobRoot(), x.Name, args, in)
+	if env.Namespace() != nil {
+		return runExternalViaJob(env, x.Name, args, in)
 	}
 	return runExternalDirect(x.Name, args, in)
 }
@@ -73,13 +74,16 @@ func runExternalDirect(name string, args []string, in value.Value) (value.Value,
 	return value.Bytes(stdout.Bytes()), nil
 }
 
-// jobWaitStatus is the subset of job.Status this function needs from the
-// wait file's JSON — a local, minimal decode rather than pulling in
-// job.Status itself (eval doesn't otherwise depend on package job; only
-// on the namespace files any 9P client would see).
+// jobWaitStatus is the subset of job.Status this function (and
+// namespace.go's recordProxyJobAsync) needs from the wait file's JSON —
+// a local, minimal decode rather than pulling in job.Status itself (eval
+// doesn't otherwise depend on package job; only on the namespace files
+// any 9P client would see).
 type jobWaitStatus struct {
-	State string `json:"state"`
-	Err   string `json:"error"`
+	State    string `json:"state"`
+	Err      string `json:"error"`
+	ExitCode *int   `json:"exit_code"`
+	Signal   string `json:"signal"`
 }
 
 // runExternalViaJob is runExternalDirect's job-tracked equivalent: the
@@ -91,7 +95,10 @@ type jobWaitStatus struct {
 // becomes a value.ErrorVal, matching runExternalDirect's
 // exec.Start()-failure handling exactly, so kyu code can't tell which
 // path ran from a bad-command-name failure alone.
-func runExternalViaJob(namespace *ns.Namespace, jobRoot []string, name string, args []string, in value.Value) (value.Value, error) {
+func runExternalViaJob(env *Env, name string, args []string, in value.Value) (value.Value, error) {
+	namespace := env.Namespace()
+	jobRoot := env.JobRoot()
+	tsStart := time.Now()
 	ctx := context.Background()
 	root, err := namespace.Attach(ctx, "9sh", "")
 	if err != nil {
@@ -157,6 +164,19 @@ func runExternalViaJob(namespace *ns.Namespace, jobRoot []string, name string, a
 	if err := json.Unmarshal(waitBytes, &st); err != nil {
 		return nil, fmt.Errorf("%%%s: decoding job status: %w", name, err)
 	}
+
+	// Unlike evalBackground (which never waits, so has no terminal status
+	// in hand at all), runExternalViaJob already blocked on wait above —
+	// record synchronously here with the real result, whatever it was,
+	// rather than spawning a second goroutine to re-derive what's already
+	// known.
+	if host, ok := isProxyJobRoot(jobRoot); ok {
+		if rec := env.ProxyRecorder(); rec != nil {
+			remoteID, _ := strconv.Atoi(id)
+			rec(host, remoteID, argv, tsStart, time.Now(), st.ExitCode, st.Signal)
+		}
+	}
+
 	if st.State == "failed" {
 		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %s", name, st.Err)}, nil
 	}

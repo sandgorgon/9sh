@@ -179,6 +179,69 @@ func TestCheckpointBatchesMultipleAppendsIntoOnePatch(t *testing.T) {
 	}
 }
 
+func TestRecordJobCarriesDetachedFlag(t *testing.T) {
+	skipUnless9vcs(t)
+	dir := t.TempDir()
+	r, err := New(dir, "myhost")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Close()
+
+	now := time.Now()
+	r.RecordJob(job.Status{
+		ID: 7, Kind: job.KindSubprocess, State: job.StateDone,
+		Argv: []string{"true"}, Detached: true, StartedAt: now, FinishedAt: now,
+	})
+
+	shard := filepath.Join(dir, historyDirName, dayShard(now))
+	data, err := os.ReadFile(shard)
+	if err != nil {
+		t.Fatalf("reading shard: %v", err)
+	}
+	var rec Record
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &rec); err != nil {
+		t.Fatalf("unmarshal record: %v", err)
+	}
+	if !rec.Detached {
+		t.Fatalf("record = %+v, want detached=true", rec)
+	}
+}
+
+func TestRecordProxyWritesLinkingRecord(t *testing.T) {
+	skipUnless9vcs(t)
+	dir := t.TempDir()
+	r, err := New(dir, "myhost")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Close()
+
+	start := time.Now()
+	end := start.Add(time.Second)
+	code := 0
+	r.RecordProxy(ProxyJob{
+		Host: "otherhost", RemoteID: 5, Argv: []string{"sh", "-c", "echo hi"},
+		TSStart: start, TSEnd: end, Exit: &code,
+	})
+
+	shard := filepath.Join(dir, historyDirName, dayShard(end))
+	data, err := os.ReadFile(shard)
+	if err != nil {
+		t.Fatalf("reading shard: %v", err)
+	}
+	var rec Record
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &rec); err != nil {
+		t.Fatalf("unmarshal record: %v", err)
+	}
+	if rec.Kind != "proxy" || rec.Host != "myhost" || rec.RemoteHost != "otherhost" || rec.RemoteJobID != 5 {
+		t.Fatalf("record = %+v, want kind=proxy host=myhost remote_host=otherhost remote_job_id=5", rec)
+	}
+	if rec.Exit == nil || *rec.Exit != 0 {
+		t.Fatalf("record.Exit = %v, want 0", rec.Exit)
+	}
+}
+
 func TestRecorderIntegratesWithRealJobManager(t *testing.T) {
 	skipUnless9vcs(t)
 	if _, err := exec.LookPath("true"); err != nil {

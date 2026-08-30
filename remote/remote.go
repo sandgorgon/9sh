@@ -157,13 +157,15 @@ func promptTrustPeer(in io.Reader, addr, fingerprint string) (bool, error) {
 }
 
 // AuthorizedPeersPath returns this install's global authorized-peers file.
-// v1 simplification of the design doc's per-exported-namespace-root ACL
-// (".9sh/authorized-peers" per root): one allowlist gates every peer that
-// attaches to this 9sh's exported namespace at all, fingerprint -> minimum
-// permission, the same shape 9vcs's per-repo authorized-peers already
-// uses — narrowing to one root per served namespace is an open question
-// for later, not a correctness gap (nothing is under-protected, just not
-// yet as finely scoped as the design doc ultimately calls for).
+// One allowlist gates every peer that attaches to this 9sh's exported
+// namespace at all (fingerprint -> minimum permission, the same shape
+// 9vcs's per-repo authorized-peers already uses) and is still the only
+// file the TLS handshake's own accept gate ever consults — see
+// ListenWithRootPerms's doc comment for why that specific gate can't be
+// scoped per-root without a bigger change to the trust model, and for
+// what a root-specific file (this design doc's ".9sh/authorized-peers"
+// per exported root, echoing 9vcs's per-repo file) *can* still do once a
+// peer is past it.
 func AuthorizedPeersPath() (string, error) {
 	dir, err := auth.ConfigDir()
 	if err != nil {
@@ -177,8 +179,31 @@ func AuthorizedPeersPath() (string, error) {
 // at all — an unauthorized fingerprint is refused before any 9P message is
 // reachable, matching the design doc's "Tauth becomes a formality" (the
 // real gate is the handshake itself). Serving continues until ctx is
-// canceled or the listener is otherwise closed.
+// canceled or the listener is otherwise closed. Equivalent to
+// ListenWithRootPerms with no root overrides.
 func Listen(ctx context.Context, addr string, fs server.FileSystem) (net.Listener, error) {
+	return ListenWithRootPerms(ctx, addr, fs, nil)
+}
+
+// ListenWithRootPerms is Listen plus rootPerms: a map from one of fs's
+// top-level path segments (e.g. "local") to a distinct authorized-peers
+// file, scoping that one subtree's permissions differently from the
+// connection-wide default AuthorizedPeersPath loads — 9sh's concrete take
+// on the design doc's per-exported-namespace-root ACL, beyond today's
+// single flat file. A segment absent from rootPerms falls back to the
+// connection-wide file exactly as Listen already behaves.
+//
+// Scope, deliberate: the TLS handshake's own accept callback (below)
+// still checks only the connection-wide file — a peer entirely absent
+// from it can't complete a handshake at all, regardless of what a
+// root-specific file might otherwise grant, since the handshake runs
+// before any 9P message (and so any path) is reachable at all. A root
+// override can only broaden or narrow what an *already-connected* peer
+// may do inside that one subtree, never grant admission by itself.
+// Lifting that fully would mean moving authorization entirely out of the
+// TLS accept callback and into Attach/Walk — a bigger change to the
+// trust model than this generalizes; left as a further open question.
+func ListenWithRootPerms(ctx context.Context, addr string, fs server.FileSystem, rootPerms map[string]string) (net.Listener, error) {
 	id, err := auth.Load()
 	if err != nil {
 		return nil, err
@@ -191,10 +216,18 @@ func Listen(ctx context.Context, addr string, fs server.FileSystem) (net.Listene
 	if err != nil {
 		return nil, err
 	}
-	return listen(ctx, id, authorized, addr, fs)
+	roots := make(map[string]auth.AuthorizedPeers, len(rootPerms))
+	for seg, path := range rootPerms {
+		ap, err := auth.LoadAuthorizedPeers(path)
+		if err != nil {
+			return nil, fmt.Errorf("remote: loading root ACL for /%s: %w", seg, err)
+		}
+		roots[seg] = ap
+	}
+	return listen(ctx, id, authorized, roots, addr, fs)
 }
 
-func listen(ctx context.Context, id *auth.Identity, authorized auth.AuthorizedPeers, addr string, fs server.FileSystem) (net.Listener, error) {
+func listen(ctx context.Context, id *auth.Identity, authorized auth.AuthorizedPeers, rootPerms map[string]auth.AuthorizedPeers, addr string, fs server.FileSystem) (net.Listener, error) {
 	tlsCfg := id.ServerTLSConfig(func(fp string) bool {
 		return authorized.Allows(fp, auth.PermRead)
 	})
@@ -204,7 +237,7 @@ func listen(ctx context.Context, id *auth.Identity, authorized auth.AuthorizedPe
 	}
 
 	srv := &server.Server{
-		FS: &authFS{fs: fs, authorized: authorized},
+		FS: &authFS{fs: fs, authorized: authorized, rootPerms: rootPerms},
 		ConnContext: func(connCtx context.Context, c net.Conn) context.Context {
 			tc, ok := c.(*tls.Conn)
 			if !ok {

@@ -51,9 +51,11 @@ func (fs *clientFS) Attach(ctx context.Context, uname, aname string) (server.Fil
 // needed for pure metadata/traversal), while Open/Create re-walk from the
 // attach root by path string to obtain a *client.File. That re-walk on
 // Open is a real, known inefficiency versus reusing the Fid Walk already
-// produced — an accepted v1 simplification, not a correctness gap; filing
-// this as a p9 API gap is worth doing if it turns out to matter in
-// practice.
+// produced — an accepted v1 simplification, not a correctness gap.
+// Filed upstream as sandgorgon/9p#4 (Fid.OpenFile/CreateFile, returning a
+// *File built from a Fid the caller already holds instead of re-walking);
+// once that lands, Open/Create here can call it directly on f.fid instead
+// of going through c.OpenContext/c.CreateContext by path string.
 type clientFile struct {
 	c    *client.Client
 	root *client.Fid // shared anchor for path-based re-walks; never Closed by any clientFile — see clientFS.Attach

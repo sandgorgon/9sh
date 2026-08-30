@@ -89,6 +89,20 @@ func barFill(style cell.Style) tui.Node {
 	})
 }
 
+// divider is a keyed barFillWidget instance — the same plain filled
+// bar barFill already is, just with a caller-supplied key instead of
+// the shared literal "bar-fill" one. barFill's own single hardcoded
+// key is fine where it's the only instance in its parent Box (the
+// control strip's trailing space); renderSplit's dividers between
+// split panes need one per gap, in the same parent Box, so each needs
+// its own distinct key — see renderSplit's own doc comment on why
+// every node in this package's tree needs an explicit, stable key.
+func divider(key any, style cell.Style) tui.Node {
+	return tui.Component(key, style, func() tui.Widget {
+		return &barFillWidget{}
+	})
+}
+
 type barFillWidget struct{ style cell.Style }
 
 func (w *barFillWidget) Reconcile(props any) bool {

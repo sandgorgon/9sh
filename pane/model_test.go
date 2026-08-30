@@ -239,6 +239,39 @@ func TestSplitPaneAddsSiblingInTree(t *testing.T) {
 	}
 }
 
+// TestHorizontalSplitPaintsADivider drives a real horizontal split
+// through the actual View()/renderSplit render path and checks the
+// frame buffer directly for the divider's themed background — Buffer's
+// text-only rendering (strings.Count etc., as most other pane tests
+// use) can't see a divider at all, since it paints a plain space, not
+// a distinguishing glyph. Scans a content row (below the title bars,
+// which also use theme.Border when unfocused and would otherwise be
+// indistinguishable from the divider) for exactly one column carrying
+// theme.Border as its background.
+func TestHorizontalSplitPaintsADivider(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("kyu", nil))
+	id := m.panes[0].id
+
+	next, _ := m.Update(splitPaneMsg{id: id, dir: layout.Horizontal, spec: KyuReplSpec("kyu2", nil)})
+	m = next.(Model)
+
+	app := tui.NewApp(m, 40, 10)
+	defer app.Close()
+	forceRenders(app, 1)
+
+	buf := app.Buffer()
+	const contentRow = 5 // well below the control strip + title bar rows
+	dividerCols := 0
+	for x := range 40 {
+		if buf.At(x, contentRow).Style.Bg == m.theme.Border {
+			dividerCols++
+		}
+	}
+	if dividerCols != 1 {
+		t.Fatalf("got %d divider-styled columns at row %d, want 1", dividerCols, contentRow)
+	}
+}
+
 func TestSplitUnknownIDIsNoOp(t *testing.T) {
 	m := New(nil, "", ShellSpec("a"))
 	next, cmd := m.Update(splitPaneMsg{id: 999, dir: layout.Vertical, spec: KyuReplSpec("kyu", nil)})

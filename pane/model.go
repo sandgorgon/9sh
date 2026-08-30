@@ -789,11 +789,19 @@ func (m Model) View() tui.Node {
 
 // renderSplit renders n recursively: a leaf becomes that pane's own
 // Node (already stably keyed by paneNode itself); an interior split
-// becomes a Box along n.dir, one child per entry in n.children, keyed
-// by n's own id — see splitNode's doc comment on why every level needs
-// its own stable key, not just the leaves. numbers is View()'s
-// once-per-frame pane-number map, threaded down so paneNode can show a
-// "[F#]" label without each leaf re-walking the whole tree itself.
+// becomes a Box along n.dir, one child per entry in n.children plus a
+// thin divider between each consecutive pair, keyed by n's own id —
+// see splitNode's doc comment on why every level needs its own stable
+// key, not just the leaves. numbers is View()'s once-per-frame
+// pane-number map, threaded down so paneNode can show a "[F#]" label
+// without each leaf re-walking the whole tree itself.
+//
+// Dividers are plain filled bars (see flatfocus.go's divider), not
+// focusable and not draggable this round — resize is keyboard-only
+// (+/- on a title bar). Each needs its own key distinct from its
+// siblings' (dividerKey), unlike barFill's single shared literal key,
+// since more than one can exist in the very same parent Box once a
+// split has more than two children.
 //
 // A minimized leaf's constraint is decided here, by its parent, rather
 // than inside paneNode — matching exactly how the pre-tree View() loop
@@ -806,20 +814,26 @@ func (m Model) renderSplit(n *splitNode, numbers map[int]int) tui.Node {
 	if n.paneID != 0 {
 		return m.paneNode(m.find(n.paneID), numbers[n.paneID])
 	}
-	children := make([]tui.BoxChild, len(n.children))
+	dividerStyle := cell.Style{Bg: m.theme.Border}
+	var children []tui.BoxChild
 	for i, c := range n.children {
+		if i > 0 {
+			children = append(children, tui.Child(layout.Length(1), divider(dividerKey(n.id, i), dividerStyle)))
+		}
 		constraint := layout.Fill(c.weight)
 		if c.node.paneID != 0 {
 			if p := m.find(c.node.paneID); p != nil && p.minimized {
 				constraint = layout.Length(1)
 			}
 		}
-		children[i] = tui.Child(constraint, m.renderSplit(c.node, numbers))
+		children = append(children, tui.Child(constraint, m.renderSplit(c.node, numbers)))
 	}
 	return tui.Box(n.dir, children...).Key(splitKey(n.id))
 }
 
 func splitKey(id int) string { return fmt.Sprintf("split-%d", id) }
+
+func dividerKey(splitID, idx int) string { return fmt.Sprintf("split-%d-div-%d", splitID, idx) }
 
 // controlStripFocusables is how many Tab-focusable widgets
 // controlStrip contributes, ahead of any pane, in Tab order — kept

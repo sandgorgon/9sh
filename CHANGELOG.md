@@ -27,6 +27,7 @@ once a first tagged release is cut.
   sibling's kind (`s`=shell, `k`=kyu, `b`=browse, `j`=jobs,
   `h`=history — any other key cancels) — a split-created pane is no
   longer always a kyu-repl.
+- A themed divider bar between split panes.
 
 ### Changed
 

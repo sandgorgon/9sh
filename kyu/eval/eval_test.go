@@ -77,6 +77,19 @@ func TestArithmetic(t *testing.T) {
 	if v := run(t, `-5 + 2`); v.(value.Int) != -3 {
 		t.Errorf("got %v, want -3", v)
 	}
+	if v := run(t, `"hello, " + "world"`); v.(value.String) != "hello, world" {
+		t.Errorf("got %v, want %q", v, "hello, world")
+	}
+	if v := run(t, `"" + ""`); v.(value.String) != "" {
+		t.Errorf("got %v, want empty string", v)
+	}
+}
+
+func TestStringPlusNonStringStillErrors(t *testing.T) {
+	// + concatenates String+String only — no implicit stringification
+	// of other kinds, matching kyu's general preference for explicit
+	// conversions over silently guessing what a mixed-type + should do.
+	runErr(t, `"n = " + 5`)
 }
 
 func TestComparisonAndLogic(t *testing.T) {

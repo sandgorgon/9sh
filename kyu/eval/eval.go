@@ -391,6 +391,11 @@ func evalArith(op token.Kind, l, r value.Value) (value.Value, error) {
 		if u, ok := nsUnion(l, r); ok {
 			return u, nil
 		}
+		if ls, ok := l.(value.String); ok {
+			if rs, ok := r.(value.String); ok {
+				return ls + rs, nil
+			}
+		}
 	}
 	li, liOK := l.(value.Int)
 	ri, riOK := r.(value.Int)

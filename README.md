@@ -98,10 +98,11 @@ built binary, not just `go test`.
 The pane multiplexer has now had real hands-on use, not just headless
 `tui.App` tests — several real bugs (invisible keyboard focus on
 launch, blank control-strip/title-bar chrome, an invisible cursor) were
-found and fixed this way, not caught by any automated test. Treat 9sh
-as ready for hands-on testing, not as a finished daily driver — the
-kyu language in particular is young enough that rough edges (e.g. `+`
-doesn't concatenate strings yet) are still expected.
+found and fixed this way, not caught by any automated test. Two more
+namespace-aware panes (a job viewer, a session-history viewer) have
+landed since. Treat 9sh as ready for hands-on testing, not as a
+finished daily driver — the kyu language in particular is young enough
+that rough edges are still expected.
 
 ## Design
 

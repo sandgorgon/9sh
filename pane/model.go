@@ -19,12 +19,16 @@
 // the focused widget at once, with no way to suppress the latter — a
 // hotkey pressed while a Terminal pane is focused would be forwarded
 // straight into the hosted shell right alongside whatever Update did
-// with it. A pane's Node keeps an explicit, stable key (its pane ID)
-// at every level of its subtree, from the pane-list Box's child down
-// through its content widget: reconcile.go's key matching is scoped
-// per-parent, so an unkeyed ancestor whose position shifts would
-// discard and rebuild everything beneath it — including a live
-// Terminal's pty — even though the leaf node itself carried a key.
+// with it. Panes are arranged in a layout tree (see splitNode), not a
+// flat list; every node in that tree — interior split or pane leaf —
+// keeps an explicit, stable key at every level: reconcile.go's key
+// matching is scoped per-parent, so an unkeyed ancestor whose position
+// (or, here, whose very identity across a tree restructuring) shifts
+// would discard and rebuild everything beneath it — including a live
+// Terminal's pty — even though the leaf node itself carried a key. See
+// appendTopLevelRow's doc comment for the concrete case this guards
+// against, and TestAddingSecondPaneKeepsFirstPaneAlive for the
+// regression test that catches it.
 package pane
 
 import (
@@ -137,13 +141,49 @@ type paneState struct {
 	sessionErr    string
 }
 
+// splitNode is one node of the pane-layout tree: either a leaf
+// (paneID != 0, referencing a paneState by id — the actual per-pane
+// business state lives there, not here) or an interior split (paneID
+// == 0, dir meaningful, children the panes/sub-splits it arranges
+// along that axis). This is deliberately a separate structure from
+// paneState/m.panes: paneState is "what does this pane hold", the
+// tree is "where does it sit" — the two vary independently (a pane's
+// own state doesn't change when it's moved to a different split).
+//
+// Every splitNode, leaf or interior, gets its own stable id, used as
+// that node's tui.Node.Key in renderSplit. This is load-bearing, not
+// cosmetic: reconcile.go's key matching is scoped per-parent (see
+// tui/reconcile.go's reconcileChildren), so an interior node's own
+// identity has to stay stable across frames for its *children's*
+// retained state (a live Terminal's pty in particular) to survive —
+// exactly the failure mode Phase 3's original pane work already found
+// and fixed once for the flat-list case; this tree has to uphold the
+// same invariant one level deeper. See appendTopLevelRow's doc comment
+// for the concrete case this guards against.
+type splitNode struct {
+	id       int
+	paneID   int // >0 for a leaf; 0 for an interior split
+	dir      layout.Direction
+	children []splitChild
+}
+
+// splitChild pairs a splitNode with its weight (layout.Fill(weight))
+// within the parent split — a minimized leaf overrides this to
+// layout.Length(1) at render time instead; see renderSplit.
+type splitChild struct {
+	weight int
+	node   *splitNode
+}
+
 // Model is the pane multiplexer's tui.Model.
 type Model struct {
-	panes      []*paneState
-	nextID     int
-	env        *eval.Env   // shared with every pane's spec that needs one, for the "+" buttons
-	theme      style.Theme // for the control strip / title bar background bars — see barStyle
-	sessionDir string      // for the "+ history" button's SessionViewerSpec — see New
+	panes       []*paneState
+	nextID      int
+	root        *splitNode // the pane-layout tree; see splitNode's doc comment
+	nextSplitID int
+	env         *eval.Env   // shared with every pane's spec that needs one, for the "+" buttons
+	theme       style.Theme // for the control strip / title bar background bars — see barStyle
+	sessionDir  string      // for the "+ history" button's SessionViewerSpec — see New
 }
 
 // New builds a Model seeded with the given panes. env is used to build
@@ -166,6 +206,16 @@ type Model struct {
 // worth polling for.
 func New(env *eval.Env, sessionDir string, specs ...Spec) Model {
 	m := Model{env: env, sessionDir: sessionDir, theme: style.Default(style.DetectAppearance(os.Getenv))}
+	// root is created once, up front, as an (initially empty) Vertical
+	// split — never replaced or re-wrapped afterward. Every pane, first
+	// or hundredth, is added the same way: append a new leaf to root's
+	// own children. This is what appendTopLevelRow's doc comment is
+	// about — root's identity has to be stable from the very first
+	// frame, or promoting a lone leaf into a wrapping split later would
+	// change that leaf's parent and discard its retained state (a live
+	// Terminal's pty included).
+	m.nextSplitID++
+	m.root = &splitNode{id: m.nextSplitID, dir: layout.Vertical}
 	for _, s := range specs {
 		m = m.withNewPane(s)
 	}
@@ -174,12 +224,179 @@ func New(env *eval.Env, sessionDir string, specs ...Spec) Model {
 
 func (m Model) withNewPane(s Spec) Model {
 	m.nextID++
-	m.panes = append(m.panes, &paneState{
+	p := &paneState{
 		id: m.nextID, title: s.Title, kind: s.Kind,
 		command: s.Command, env: s.Env, browserPath: "/",
 		sessionDir: s.SessionDir,
-	})
+	}
+	m.panes = append(m.panes, p)
+	m.appendTopLevelRow(&splitNode{paneID: p.id})
 	return m
+}
+
+// appendTopLevelRow adds leaf as a new full-width row at the bottom of
+// the pane stack — every pane's insertion point today (splitting an
+// existing pane instead is future work, not yet wired to any control-
+// strip button). Always appends to m.root's existing children slice,
+// never replaces or re-wraps m.root itself: m.root's identity is fixed
+// once, in New, specifically so this never has to "promote" an
+// existing lone child into a new wrapping split node — doing so would
+// change that child's parent from reconcile's point of view (even
+// though the child keeps its own stable key), discarding its retained
+// widget state, a live Terminal's pty included. Appending a sibling to
+// an already-stable, already-keyed parent is the well-supported case
+// instead — see tui/reconcile.go's reconcileChildren doc comment on
+// why reordering/inserting/removing *siblings* is safe.
+func (m *Model) appendTopLevelRow(leaf *splitNode) {
+	m.root.children = append(m.root.children, splitChild{weight: 1, node: leaf})
+}
+
+// closePane removes id's pane entirely — from both the flat store and
+// the layout tree — relying on tui's reconciler to dispose its retained
+// widget state (a Terminal's live pty included) once its Node simply
+// stops appearing in the tree, the same disposeTree mechanism that
+// already runs for any other tree shrink. Closing the last remaining
+// pane quits, the same way the quit button already does — there's no
+// sensible empty-screen state to design for instead.
+func (m Model) closePane(id int) (Model, tui.Cmd) {
+	if m.find(id) == nil {
+		return m, nil
+	}
+	panes := make([]*paneState, 0, len(m.panes))
+	for _, p := range m.panes {
+		if p.id != id {
+			panes = append(panes, p)
+		}
+	}
+	m.panes = panes
+	m.root = removeLeafFromTree(m.root, id)
+	if len(m.root.children) == 0 {
+		return m, tui.Quit()
+	}
+	return m, nil
+}
+
+// removeLeafFromTree returns n with the leaf for paneID removed.
+// Deliberately does *not* collapse an interior node left with only one
+// (or zero) children into its own parent's slot — that would "unwrap"
+// the remaining child into its grandparent's child list, changing that
+// child's parent from reconcile's point of view even though the child
+// keeps its own stable key, exactly appendTopLevelRow's promote-a-leaf
+// risk, just in reverse. A leftover single-child (or, once nested
+// splits exist, empty) interior node is harmless: Box lays out however
+// many children it actually has, so a lone child still gets the whole
+// available space — this is a cosmetic tree-tidiness question, not a
+// correctness one, not worth the regression risk. (Originally planned
+// as "collapse the parent"; changed during implementation once this
+// risk became clear — see the plan file/session history for why.)
+func removeLeafFromTree(n *splitNode, paneID int) *splitNode {
+	if n == nil {
+		return nil
+	}
+	if n.paneID != 0 {
+		if n.paneID == paneID {
+			return nil
+		}
+		return n
+	}
+	kept := make([]splitChild, 0, len(n.children))
+	for _, c := range n.children {
+		if updated := removeLeafFromTree(c.node, paneID); updated != nil {
+			kept = append(kept, splitChild{weight: c.weight, node: updated})
+		}
+	}
+	n.children = kept
+	return n
+}
+
+// splitPane replaces id's own tree slot with a new interior split
+// containing id's existing pane and a fresh kyu-repl pane along dir,
+// giving the pair equal weight. Always adds a plain kyu-repl pane —
+// no "pick a kind" UI for the new sibling; use the control strip's own
+// "+" buttons afterward (or close this one) for anything else — one
+// less new surface to design for splitting's first pass.
+//
+// Splitting a pane that currently holds retained widget state (a live
+// Terminal's pty in particular) preserves that state across the
+// reparent: the pane's Node moves one level deeper (wrapped in the new
+// split), which used to discard retained state entirely, since tui's
+// reconciler matched children strictly per-parent, one level at a time
+// (see appendTopLevelRow's and removeLeafFromTree's doc comments for
+// the same constraint, still relevant for the sibling-level case they
+// each handle). Filed as sandgorgon/tui#3; fixed there by a whole-tree
+// key index (reconciler falls back to it when a local per-parent match
+// misses) and picked up here via the tui v0.1.10 bump — no code change
+// needed on this side once the dependency moved.
+// TestSplittingLiveShellPanePreservesItsProcess pins down the new
+// behavior so a future tui regression would be caught here too.
+func (m Model) splitPane(id int, dir layout.Direction) Model {
+	if m.find(id) == nil {
+		return m
+	}
+	m.nextID++
+	newPane := &paneState{id: m.nextID, title: "kyu", kind: KindKyuRepl, env: m.env, browserPath: "/"}
+	m.panes = append(m.panes, newPane)
+	m.nextSplitID++
+	splitLeaf(m.root, id, dir, &splitNode{paneID: newPane.id}, m.nextSplitID)
+	return m
+}
+
+// splitLeaf walks n looking for the direct child whose leaf is
+// targetPaneID, and if found, replaces that child's node in place with
+// a new interior split (id newSplitID, direction dir) containing the
+// original node and newLeaf, each weighted 1 — preserving the outer
+// splitChild's own weight in its parent unchanged. Reports whether the
+// target was found (and thus split).
+func splitLeaf(n *splitNode, targetPaneID int, dir layout.Direction, newLeaf *splitNode, newSplitID int) bool {
+	if n == nil || n.paneID != 0 {
+		return false
+	}
+	for i, c := range n.children {
+		if c.node.paneID == targetPaneID {
+			wrapped := &splitNode{
+				id:  newSplitID,
+				dir: dir,
+				children: []splitChild{
+					{weight: 1, node: c.node},
+					{weight: 1, node: newLeaf},
+				},
+			}
+			n.children[i] = splitChild{weight: c.weight, node: wrapped}
+			return true
+		}
+		if splitLeaf(c.node, targetPaneID, dir, newLeaf, newSplitID) {
+			return true
+		}
+	}
+	return false
+}
+
+// resizePane adjusts id's own weight within its direct parent's
+// children by delta, clamped to a minimum of 1 (layout.Fill needs a
+// positive weight to mean anything).
+func (m Model) resizePane(id int, delta int) Model {
+	adjustWeight(m.root, id, delta)
+	return m
+}
+
+func adjustWeight(n *splitNode, targetPaneID int, delta int) bool {
+	if n == nil || n.paneID != 0 {
+		return false
+	}
+	for i, c := range n.children {
+		if c.node.paneID == targetPaneID {
+			w := c.weight + delta
+			if w < 1 {
+				w = 1
+			}
+			n.children[i].weight = w
+			return true
+		}
+		if adjustWeight(c.node, targetPaneID, delta) {
+			return true
+		}
+	}
+	return false
 }
 
 // Init kicks off the initial namespace/disk listing for any seed panes
@@ -201,6 +418,15 @@ func (m Model) Init() tui.Cmd {
 }
 
 type toggleMinimizeMsg struct{ id int }
+type closePaneMsg struct{ id int }
+type splitPaneMsg struct {
+	id  int
+	dir layout.Direction
+}
+type resizePaneMsg struct {
+	id    int
+	delta int
+}
 type paneExitedMsg struct {
 	id  int
 	err error
@@ -215,6 +441,12 @@ func AddPane(s Spec) tui.Msg { return addPaneMsg{spec: s} }
 
 func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 	switch mm := msg.(type) {
+	case closePaneMsg:
+		return m.closePane(mm.id)
+	case splitPaneMsg:
+		return m.splitPane(mm.id, mm.dir), nil
+	case resizePaneMsg:
+		return m.resizePane(mm.id, mm.delta), nil
 	case toggleMinimizeMsg:
 		if p := m.find(mm.id); p != nil {
 			p.minimized = !p.minimized
@@ -417,21 +649,43 @@ func listDirCmd(id int, namespace *ns.Namespace, path string) tui.Cmd {
 // ---- view ----
 
 func (m Model) View() tui.Node {
-	var paneChildren []tui.BoxChild
-	for _, p := range m.panes {
-		constraint := layout.Fill(1)
-		if p.minimized {
-			constraint = layout.Length(1)
-		}
-		paneChildren = append(paneChildren, tui.Child(constraint, m.paneNode(p)))
-	}
-	paneList := tui.Box(layout.Vertical, paneChildren...).Key("pane-list")
-
 	return tui.Box(layout.Vertical,
 		tui.Child(layout.Length(1), m.controlStrip()),
-		tui.Child(layout.Fill(1), paneList),
+		tui.Child(layout.Fill(1), m.renderSplit(m.root)),
 	)
 }
+
+// renderSplit renders n recursively: a leaf becomes that pane's own
+// Node (already stably keyed by paneNode itself); an interior split
+// becomes a Box along n.dir, one child per entry in n.children, keyed
+// by n's own id — see splitNode's doc comment on why every level needs
+// its own stable key, not just the leaves.
+//
+// A minimized leaf's constraint is decided here, by its parent, rather
+// than inside paneNode — matching exactly how the pre-tree View() loop
+// already computed each top-level pane's Fill(1)/Length(1) constraint
+// itself. Collapsing a horizontally-split pane's width to Length(1)
+// this way is a known rough edge (right for a vertical stack, less
+// meaningful sideways) — tracked as follow-up work once horizontal
+// splits actually exist, not fixed here.
+func (m Model) renderSplit(n *splitNode) tui.Node {
+	if n.paneID != 0 {
+		return m.paneNode(m.find(n.paneID))
+	}
+	children := make([]tui.BoxChild, len(n.children))
+	for i, c := range n.children {
+		constraint := layout.Fill(c.weight)
+		if c.node.paneID != 0 {
+			if p := m.find(c.node.paneID); p != nil && p.minimized {
+				constraint = layout.Length(1)
+			}
+		}
+		children[i] = tui.Child(constraint, m.renderSplit(c.node))
+	}
+	return tui.Box(n.dir, children...).Key(splitKey(n.id))
+}
+
+func splitKey(id int) string { return fmt.Sprintf("split-%d", id) }
 
 // controlStripFocusables is how many Tab-focusable widgets
 // controlStrip contributes, ahead of any pane, in Tab order — kept
@@ -560,9 +814,31 @@ func (m Model) paneNode(p *paneState) tui.Node {
 	if p.exited {
 		label += " (exited)"
 	}
+	label += "  (x close, d/r split, +/- resize)"
 	titleBar := flatFocusable(paneKey(id, "title"), label,
 		func(focused bool) cell.Style { return m.titleStyle(p, focused) },
+		// Every key here is scoped to the title bar specifically, never
+		// a global hotkey, for the same reason minimize already was:
+		// tui.App delivers every key to both Update and the focused
+		// widget at once, with no way to suppress the latter, and a
+		// Terminal pane's hosted shell needs all of these (and anything
+		// else) for its own use. click/Enter/Space still toggle
+		// minimize, checked last so none of the others shadow it.
 		func(e input.Event) tui.Msg {
+			if ke, ok := e.(input.KeyEvent); ok {
+				switch ke.Rune {
+				case 'x':
+					return closePaneMsg{id: id}
+				case 'd':
+					return splitPaneMsg{id: id, dir: layout.Vertical} // split down
+				case 'r':
+					return splitPaneMsg{id: id, dir: layout.Horizontal} // split right
+				case '+', '=':
+					return resizePaneMsg{id: id, delta: 1}
+				case '-':
+					return resizePaneMsg{id: id, delta: -1}
+				}
+			}
 			if !clicked(e) {
 				return nil
 			}

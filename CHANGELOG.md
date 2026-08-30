@@ -8,6 +8,28 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- Two more namespace-aware panes: a job viewer ("+ jobs", spanning
+  `/jobs` and every host bound under `/n`) and a session-history
+  viewer ("+ history", reading `~/.config/9/session` back).
+- kyu: `+` now concatenates two strings. Still errors on a string plus
+  any other kind — no implicit stringification.
+- Pane management: close (`x`), split down/right (`d`/`r`), and resize
+  (`+`/`-`) on any pane's title bar. Panes are now arranged in a real
+  layout tree rather than a single vertical stack.
+
+### Changed
+
+- Bumped `github.com/sandgorgon/tui` to v0.1.10, which fixes
+  [sandgorgon/tui#3](https://github.com/sandgorgon/tui/issues/3) — the
+  reconciler now preserves a keyed subtree's retained state (a live
+  Terminal's pty included) even when it moves to a new parent across
+  frames, so splitting a pane that hosts a running shell no longer
+  kills and restarts it.
+- Bumped `github.com/sandgorgon/9p` to v0.6.0 (adds a `-net` flag to
+  `cmd/9pc`; no change to anything 9sh imports).
+
 ## [0.1.0] - 2026-08-29
 
 The v1 build-order plan (Phases 0-6) is complete: a runnable shell with its

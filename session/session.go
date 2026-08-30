@@ -9,6 +9,15 @@
 // (see kyu/eval/external.go) — gets a history line for free, with no
 // separate logging path, exactly as the design doc calls for.
 //
+// A job run via `@host{}` is the one exception RecordJob can't cover:
+// it's created and tracked entirely on the remote peer's own
+// job.Manager, not this Recorder's, so it never reaches this
+// Recorder's OnFinish hook at all — the remote peer's own Recorder (if
+// it has one) logs an ordinary entry for it on its own side instead.
+// RecordProxy is the separate, explicitly-called path
+// (kyu/eval.ProxyRecorderFunc, wired in cmd/9sh's bootstrap) that
+// appends the missing local-side "I ran X on host Y" linking record.
+//
 // 9vcs itself is a CLI-only tool (its repo/patch-graph logic lives in
 // cmd/9vcs's own package main, not an importable library — confirmed
 // by reading the source before writing this package), so checkpointing

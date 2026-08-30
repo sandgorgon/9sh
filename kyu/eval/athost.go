@@ -15,7 +15,9 @@ import (
 // this needs to do is run the block in a child scope whose JobRoot points
 // there instead of at the local /jobs. evalBackground and
 // runExternalViaJob are unaware @host exists at all; they just consult
-// Env.JobRoot.
+// Env.JobRoot (and, to decide whether a local-side session-history
+// linking record is even applicable, Env.ProxyRecorder — see
+// namespace.go's isProxyJobRoot) — neither has any @host-specific code.
 //
 // The /n/<host>/jobs walk before running the block is a deliberate
 // eagerness: it turns a typo'd or never-dialed host into one clear error

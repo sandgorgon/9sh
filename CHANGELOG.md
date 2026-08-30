@@ -23,6 +23,10 @@ once a first tagged release is cut.
   hint text was shortened from "(x close, d/r split, +/- resize)" to
   "(x/d/r/+/-)" to keep room for the new label, especially once
   horizontal splits leave less width per pane.
+- `d`/`r` now start a two-step split: pick direction, then pick the new
+  sibling's kind (`s`=shell, `k`=kyu, `b`=browse, `j`=jobs,
+  `h`=history — any other key cancels) — a split-created pane is no
+  longer always a kyu-repl.
 
 ### Changed
 

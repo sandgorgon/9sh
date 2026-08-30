@@ -127,6 +127,14 @@ type paneState struct {
 	exited    bool
 	exitErr   error
 
+	// awaitingSplitKind is true between a beginSplitMsg (d/r pressed) and
+	// whatever resolves it (a recognized kind key -> splitPaneMsg, or
+	// anything else -> cancelSplitMsg) — see paneNode's title-bar key
+	// handler, which is the only thing that reads or sets this via those
+	// two Msg types.
+	awaitingSplitKind bool
+	awaitingSplitDir  layout.Direction
+
 	command *exec.Cmd // KindShell
 	env     *eval.Env // KindKyuRepl, KindNamespaceBrowser, KindJobViewer
 
@@ -235,14 +243,39 @@ func New(env *eval.Env, sessionDir string, specs ...Spec) Model {
 
 func (m Model) withNewPane(s Spec) Model {
 	m.nextID++
-	p := &paneState{
-		id: m.nextID, title: s.Title, kind: s.Kind,
-		command: s.Command, env: s.Env, browserPath: "/",
-		sessionDir: s.SessionDir,
-	}
+	p := newPaneState(m.nextID, s)
 	m.panes = append(m.panes, p)
 	m.appendTopLevelRow(&splitNode{paneID: p.id})
 	return m
+}
+
+// newPaneState builds a fresh paneState from spec — shared by
+// withNewPane (top-level "+" additions) and splitPane (splitting an
+// existing pane), so both construct a pane identically.
+func newPaneState(id int, s Spec) *paneState {
+	return &paneState{
+		id: id, title: s.Title, kind: s.Kind,
+		command: s.Command, env: s.Env, browserPath: "/",
+		sessionDir: s.SessionDir,
+	}
+}
+
+// initialLoadCmd returns the Cmd (if any) a freshly created pane needs
+// to populate itself — shared by addPaneMsg (a control-strip "+"
+// button) and splitPaneMsg (splitting an existing pane), so a
+// split-created browser/job/session-viewer pane loads exactly the same
+// way a top-level one does. newPane must be the pane just built from
+// spec (its id, and for KindNamespaceBrowser its initial browserPath).
+func initialLoadCmd(newPane *paneState, spec Spec) tui.Cmd {
+	switch spec.Kind {
+	case KindNamespaceBrowser:
+		return listDirCmd(newPane.id, spec.Env.Namespace(), newPane.browserPath)
+	case KindJobViewer:
+		return listJobsCmd(newPane.id, spec.Env.Namespace())
+	case KindSessionViewer:
+		return listSessionCmd(newPane.id, spec.SessionDir)
+	}
+	return nil
 }
 
 // appendTopLevelRow adds leaf as a new full-width row at the bottom of
@@ -321,11 +354,11 @@ func removeLeafFromTree(n *splitNode, paneID int) *splitNode {
 }
 
 // splitPane replaces id's own tree slot with a new interior split
-// containing id's existing pane and a fresh kyu-repl pane along dir,
-// giving the pair equal weight. Always adds a plain kyu-repl pane —
-// no "pick a kind" UI for the new sibling; use the control strip's own
-// "+" buttons afterward (or close this one) for anything else — one
-// less new surface to design for splitting's first pass.
+// containing id's existing pane and a fresh pane built from spec along
+// dir, giving the pair equal weight. Returns the new pane too (nil if
+// id wasn't found, in which case m is returned unchanged) so Update
+// can fire whatever initial-load Cmd that pane's kind needs — see
+// initialLoadCmd, shared with addPaneMsg's own handling.
 //
 // Splitting a pane that currently holds retained widget state (a live
 // Terminal's pty in particular) preserves that state across the
@@ -340,16 +373,18 @@ func removeLeafFromTree(n *splitNode, paneID int) *splitNode {
 // needed on this side once the dependency moved.
 // TestSplittingLiveShellPanePreservesItsProcess pins down the new
 // behavior so a future tui regression would be caught here too.
-func (m Model) splitPane(id int, dir layout.Direction) Model {
-	if m.find(id) == nil {
-		return m
+func (m Model) splitPane(id int, dir layout.Direction, spec Spec) (Model, *paneState) {
+	if orig := m.find(id); orig == nil {
+		return m, nil
+	} else {
+		orig.awaitingSplitKind = false
 	}
 	m.nextID++
-	newPane := &paneState{id: m.nextID, title: "kyu", kind: KindKyuRepl, env: m.env, browserPath: "/"}
+	newPane := newPaneState(m.nextID, spec)
 	m.panes = append(m.panes, newPane)
 	m.nextSplitID++
 	splitLeaf(m.root, id, dir, &splitNode{paneID: newPane.id}, m.nextSplitID)
-	return m
+	return m, newPane
 }
 
 // splitLeaf walks n looking for the direct child whose leaf is
@@ -468,9 +503,27 @@ func (m Model) Init() tui.Cmd {
 
 type toggleMinimizeMsg struct{ id int }
 type closePaneMsg struct{ id int }
-type splitPaneMsg struct {
+
+// beginSplitMsg starts the two-step split flow on id's title bar: dir
+// is already chosen (d/r), the next keypress on that same title bar
+// picks the new sibling's kind (see splitKindKey) or cancels.
+type beginSplitMsg struct {
 	id  int
 	dir layout.Direction
+}
+
+// cancelSplitMsg abandons an in-progress beginSplitMsg without
+// splitting — any title-bar key that isn't a recognized kind while
+// awaitingSplitKind is true produces this.
+type cancelSplitMsg struct{ id int }
+
+// splitPaneMsg actually performs the split: id's pane gets a new
+// sibling along dir, built from spec (see splitKindKey/
+// defaultSpecForKind for how a title-bar keypress becomes a Spec).
+type splitPaneMsg struct {
+	id   int
+	dir  layout.Direction
+	spec Spec
 }
 type resizePaneMsg struct {
 	id    int
@@ -509,8 +562,21 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		}
 	case closePaneMsg:
 		return m.closePane(mm.id)
+	case beginSplitMsg:
+		if p := m.find(mm.id); p != nil {
+			p.awaitingSplitKind = true
+			p.awaitingSplitDir = mm.dir
+		}
+	case cancelSplitMsg:
+		if p := m.find(mm.id); p != nil {
+			p.awaitingSplitKind = false
+		}
 	case splitPaneMsg:
-		return m.splitPane(mm.id, mm.dir), nil
+		next, newPane := m.splitPane(mm.id, mm.dir, mm.spec)
+		if newPane == nil {
+			return next, nil
+		}
+		return next, initialLoadCmd(newPane, mm.spec)
 	case resizePaneMsg:
 		return m.resizePane(mm.id, mm.delta), nil
 	case toggleMinimizeMsg:
@@ -525,15 +591,7 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 	case addPaneMsg:
 		next := m.withNewPane(mm.spec)
 		newPane := next.panes[len(next.panes)-1]
-		switch mm.spec.Kind {
-		case KindNamespaceBrowser:
-			return next, listDirCmd(newPane.id, mm.spec.Env.Namespace(), newPane.browserPath)
-		case KindJobViewer:
-			return next, listJobsCmd(newPane.id, mm.spec.Env.Namespace())
-		case KindSessionViewer:
-			return next, listSessionCmd(newPane.id, mm.spec.SessionDir)
-		}
-		return next, nil
+		return next, initialLoadCmd(newPane, mm.spec)
 	case quitRequestedMsg:
 		return m, tui.Quit()
 	case browserMoveMsg:
@@ -895,12 +953,21 @@ func (m Model) paneNode(p *paneState, number int) tui.Node {
 	if p.exited {
 		label += " (exited)"
 	}
-	// Kept terse on purpose, not "(x close, d/r split, +/- resize)": once
-	// a title bar is one of several side by side after a horizontal
-	// split, or carries an "[F#]" jump-hotkey prefix, the available width
-	// per pane shrinks fast — see TestSplitKeysOnTitleBar's 60-col/2-pane
-	// case, which is exactly narrow enough to clip the old, longer hint.
-	label += "  (x/d/r/+/-)"
+	if p.awaitingSplitKind {
+		// Overrides the normal hint entirely while awaiting the second
+		// keypress of the two-step split flow — see splitKindKey for what
+		// each letter means; anything else (including this same title
+		// bar's own x/+/-, deliberately) cancels via cancelSplitMsg.
+		label += "  split: s=shell k=kyu b=browse j=jobs h=history (else cancel)"
+	} else {
+		// Kept terse, not "(x close, d/r split, +/- resize)": once a
+		// title bar is one of several side by side after a horizontal
+		// split, or carries an "[F#]" jump-hotkey prefix, the available
+		// width per pane shrinks fast — see TestSplitKeysOnTitleBar's
+		// 60-col/2-pane case, which is exactly narrow enough to clip the
+		// old, longer hint.
+		label += "  (x/d/r/+/-)"
+	}
 	titleBar := flatFocusable(paneKey(id, "title"), label,
 		func(focused bool) cell.Style { return m.titleStyle(p, focused) },
 		// Every key here is scoped to the title bar specifically, never
@@ -912,13 +979,19 @@ func (m Model) paneNode(p *paneState, number int) tui.Node {
 		// minimize, checked last so none of the others shadow it.
 		func(e input.Event) tui.Msg {
 			if ke, ok := e.(input.KeyEvent); ok {
+				if p.awaitingSplitKind {
+					if kind, ok := splitKindKey(ke.Rune); ok {
+						return splitPaneMsg{id: id, dir: p.awaitingSplitDir, spec: defaultSpecForKind(kind, m.env, m.sessionDir)}
+					}
+					return cancelSplitMsg{id: id}
+				}
 				switch ke.Rune {
 				case 'x':
 					return closePaneMsg{id: id}
 				case 'd':
-					return splitPaneMsg{id: id, dir: layout.Vertical} // split down
+					return beginSplitMsg{id: id, dir: layout.Vertical} // split down, then pick a kind
 				case 'r':
-					return splitPaneMsg{id: id, dir: layout.Horizontal} // split right
+					return beginSplitMsg{id: id, dir: layout.Horizontal} // split right, then pick a kind
 				case '+', '=':
 					return resizePaneMsg{id: id, delta: 1}
 				case '-':
@@ -968,6 +1041,47 @@ func paneLabel(p *paneState) string {
 
 func paneKey(id int, part string) string {
 	return fmt.Sprintf("pane-%d-%s", id, part)
+}
+
+// splitKindKey maps a title bar's second split-flow keypress to the
+// kind it requests — mnemonic first letters, matching the control
+// strip's own "+ shell"/"+ kyu"/"+ browse"/"+ jobs"/"+ history" order.
+// Any other rune isn't recognized (Update's caller falls back to
+// cancelSplitMsg in that case, not this function's business).
+func splitKindKey(r rune) (Kind, bool) {
+	switch r {
+	case 's':
+		return KindShell, true
+	case 'k':
+		return KindKyuRepl, true
+	case 'b':
+		return KindNamespaceBrowser, true
+	case 'j':
+		return KindJobViewer, true
+	case 'h':
+		return KindSessionViewer, true
+	}
+	return 0, false
+}
+
+// defaultSpecForKind builds the Spec a split-created pane of kind gets
+// — the same convenience constructors (ShellSpec etc.) and default
+// titles the control strip's own "+" buttons use, so a split-created
+// pane is indistinguishable from a top-level one apart from where it
+// landed in the tree.
+func defaultSpecForKind(kind Kind, env *eval.Env, sessionDir string) Spec {
+	switch kind {
+	case KindShell:
+		return ShellSpec("shell")
+	case KindNamespaceBrowser:
+		return NamespaceBrowserSpec("browse", env)
+	case KindJobViewer:
+		return JobViewerSpec("jobs", env)
+	case KindSessionViewer:
+		return SessionViewerSpec("history", sessionDir)
+	default:
+		return KyuReplSpec("kyu", env)
+	}
 }
 
 func (m Model) titleStyle(p *paneState, focused bool) cell.Style {

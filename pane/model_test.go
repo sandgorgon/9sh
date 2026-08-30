@@ -204,10 +204,10 @@ func TestSplitPaneAddsSiblingInTree(t *testing.T) {
 	m := New(nil, "", ShellSpec("a"))
 	id := m.panes[0].id
 
-	next, cmd := m.Update(splitPaneMsg{id: id, dir: layout.Horizontal})
+	next, cmd := m.Update(splitPaneMsg{id: id, dir: layout.Horizontal, spec: KyuReplSpec("kyu", nil)})
 	m = next.(Model)
 	if cmd != nil {
-		t.Fatal("splitPaneMsg should not produce a Cmd")
+		t.Fatal("splitPaneMsg should not produce a Cmd for a kyu-repl sibling (no initial load needed)")
 	}
 	if len(m.panes) != 2 {
 		t.Fatalf("got %d panes, want 2", len(m.panes))
@@ -241,7 +241,7 @@ func TestSplitPaneAddsSiblingInTree(t *testing.T) {
 
 func TestSplitUnknownIDIsNoOp(t *testing.T) {
 	m := New(nil, "", ShellSpec("a"))
-	next, cmd := m.Update(splitPaneMsg{id: 999, dir: layout.Vertical})
+	next, cmd := m.Update(splitPaneMsg{id: 999, dir: layout.Vertical, spec: KyuReplSpec("kyu", nil)})
 	if cmd != nil {
 		t.Fatal("unknown id should not produce a Cmd")
 	}
@@ -254,7 +254,7 @@ func TestSplitUnknownIDIsNoOp(t *testing.T) {
 func TestResizeAdjustsWeightAndClamps(t *testing.T) {
 	m := New(nil, "", ShellSpec("a"))
 	id := m.panes[0].id
-	next, _ := m.Update(splitPaneMsg{id: id, dir: layout.Horizontal})
+	next, _ := m.Update(splitPaneMsg{id: id, dir: layout.Horizontal, spec: KyuReplSpec("kyu", nil)})
 	m = next.(Model)
 	row := m.root.children[0].node
 
@@ -274,13 +274,14 @@ func TestResizeAdjustsWeightAndClamps(t *testing.T) {
 }
 
 // TestSplitKeysOnTitleBar drives the real input path, mirroring
-// TestTitleBarXKeyClosesPane, to confirm 'r' on a title bar actually
-// splits via app.HandleInput (not just a direct Update call) — the new
-// sibling's own title bar (with the same close/split/resize hint text)
-// should now be on screen too. 60 cols split into two 30-col halves is
-// deliberately narrow enough to have once clipped the hint text
-// mid-word before it was shortened — see paneNode's own comment on
-// why the hint is "(x/d/r/+/-)" rather than the old spelled-out form.
+// TestTitleBarXKeyClosesPane, to confirm the two-step 'r' then 'k'
+// split flow actually works via app.HandleInput (not just direct
+// Update calls) — the new sibling's own title bar (with the same
+// close/split/resize hint text) should now be on screen too. 60 cols
+// split into two 30-col halves is deliberately narrow enough to have
+// once clipped the hint text mid-word before it was shortened — see
+// paneNode's own comment on why the hint is "(x/d/r/+/-)" rather than
+// the old spelled-out form.
 func TestSplitKeysOnTitleBar(t *testing.T) {
 	m := New(nil, "", KyuReplSpec("kyu", nil))
 
@@ -295,11 +296,102 @@ func TestSplitKeysOnTitleBar(t *testing.T) {
 			app.Dispatch(cmd())
 		}
 	}
+	forceRenders(app, 1)
+	if buf := app.Buffer().String(); !strings.Contains(buf, "s=shell k=kyu") {
+		t.Fatalf("expected the split-flow kind prompt after 'r':\n%s", buf)
+	}
+	for _, cmd := range app.HandleInput(input.KeyEvent{Rune: 'k'}) {
+		if cmd != nil {
+			app.Dispatch(cmd())
+		}
+	}
 	forceRenders(app, 2)
 
 	buf := app.Buffer().String()
 	if n := strings.Count(buf, "x/d/r/+/-"); n != 2 {
 		t.Fatalf("expected 2 title bars after splitting, found %d:\n%s", n, buf)
+	}
+}
+
+// TestSplitFlowCancelsOnUnrecognizedKey confirms any key other than
+// s/k/b/j/h during the split-flow's second step abandons it (via
+// cancelSplitMsg) rather than splitting with some default kind.
+func TestSplitFlowCancelsOnUnrecognizedKey(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("kyu", nil))
+	id := m.panes[0].id
+
+	next, _ := m.Update(beginSplitMsg{id: id, dir: layout.Vertical})
+	m = next.(Model)
+	if !m.panes[0].awaitingSplitKind {
+		t.Fatal("expected awaitingSplitKind after beginSplitMsg")
+	}
+
+	next, cmd := m.Update(cancelSplitMsg{id: id})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("cancelSplitMsg should not produce a Cmd")
+	}
+	if m.panes[0].awaitingSplitKind {
+		t.Fatal("expected awaitingSplitKind cleared after cancelSplitMsg")
+	}
+	if len(m.panes) != 1 {
+		t.Fatalf("got %d panes, want 1 (cancel shouldn't split)", len(m.panes))
+	}
+}
+
+// TestSplitKindKeyMapping is a direct unit test of splitKindKey and
+// defaultSpecForKind — the letter-to-kind mapping paneNode's title-bar
+// closure relies on for the split flow's second keypress. It's a pure
+// function, not something that needs a real widget/App to exercise;
+// TestSplitKeysOnTitleBar already covers one full real-input-path case
+// ('r' then 'k') end to end, so this fills in the other four kinds at
+// the unit level instead of repeating a full tui.App drive five times.
+func TestSplitKindKeyMapping(t *testing.T) {
+	cases := []struct {
+		key  rune
+		kind Kind
+	}{
+		{'s', KindShell},
+		{'k', KindKyuRepl},
+		{'b', KindNamespaceBrowser},
+		{'j', KindJobViewer},
+		{'h', KindSessionViewer},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.key), func(t *testing.T) {
+			kind, ok := splitKindKey(tc.key)
+			if !ok || kind != tc.kind {
+				t.Fatalf("splitKindKey(%q) = (%v, %v), want (%v, true)", tc.key, kind, ok, tc.kind)
+			}
+			if spec := defaultSpecForKind(kind, nil, ""); spec.Kind != tc.kind {
+				t.Fatalf("defaultSpecForKind(%v) built a Spec of kind %v", kind, spec.Kind)
+			}
+		})
+	}
+	if _, ok := splitKindKey('q'); ok {
+		t.Fatal("splitKindKey('q') should not be recognized")
+	}
+}
+
+// TestSplitPaneMsgWithChosenSpecBuildsRightSibling confirms Update's
+// splitPaneMsg case (which paneNode's title-bar closure feeds a Spec
+// computed from splitKindKey/defaultSpecForKind) actually builds a
+// sibling of that kind, for a kind other than the default kyu-repl —
+// TestSplitPaneAddsSiblingInTree already covers the kyu-repl case.
+func TestSplitPaneMsgWithChosenSpecBuildsRightSibling(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("kyu", nil))
+	id := m.panes[0].id
+
+	next, cmd := m.Update(splitPaneMsg{id: id, dir: layout.Vertical, spec: ShellSpec("shell")})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("splitting with a shell spec should not produce a Cmd (no initial load needed)")
+	}
+	if len(m.panes) != 2 {
+		t.Fatalf("got %d panes, want 2", len(m.panes))
+	}
+	if m.panes[1].kind != KindShell {
+		t.Fatalf("new sibling kind = %v, want KindShell", m.panes[1].kind)
 	}
 }
 
@@ -406,7 +498,7 @@ func TestSplittingLiveShellPanePreservesItsProcess(t *testing.T) {
 
 	waitForText(t, app, "READY", 3*time.Second)
 
-	app.Dispatch(splitPaneMsg{id: id, dir: layout.Horizontal})
+	app.Dispatch(splitPaneMsg{id: id, dir: layout.Horizontal, spec: KyuReplSpec("kyu", nil)})
 	forceRenders(app, 3)
 
 	if strings.Contains(app.Buffer().String(), "failed to start") {

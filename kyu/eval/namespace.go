@@ -274,33 +274,50 @@ func walkAll(ctx context.Context, root server.File, parts []string) (server.File
 	return f, nil
 }
 
-// buildJobRecord constructs a job's kyu-visible record: five live-backed
-// fields over the namespace files under base ("/jobs/<id>"). "wait" is
+// buildJobRecord constructs a job's kyu-visible record: live-backed fields
+// over the namespace files under base ("/jobs/<id>"). "wait" is
 // deliberately just another backed field (its ReadField blocks until the
 // job is terminal) rather than special syntax — `j | wait` desugars to
 // the "wait" builtin, which is just rec.Get("wait"); see builtins.go.
+// "stdout"/"stderr" are read-only and kept as raw value.Bytes (not
+// text-decoded/trimmed like argv/env) — the same shape a foreground %cmd
+// already returns, so `(%cmd "x" &) | wait` then `.stdout` matches
+// runExternalDirect/runExternalViaJob's own foreground return value
+// exactly, just reached via the live record instead of blocking inline.
 func buildJobRecord(ctx context.Context, base server.File) (*value.Record, error) {
 	rec := value.NewRecord()
+	const (
+		kindJSON = iota
+		kindText
+		kindBytes
+	)
 	fields := []struct {
 		name     string
 		writable bool
-		json     bool
+		readable bool // kindText only; false only for ctl (write-only namespace file)
+		blocking bool // kindJSON only; true only for wait (Read blocks until terminal)
+		kind     int
 	}{
-		{"status", false, true},
-		{"wait", false, true},
-		{"ctl", true, false},
-		{"argv", true, false},
-		{"env", true, false},
+		{"status", false, true, false, kindJSON},
+		{"wait", false, true, true, kindJSON},
+		{"ctl", true, false, false, kindText},
+		{"argv", true, true, false, kindText},
+		{"env", true, true, false, kindText},
+		{"stdout", false, true, false, kindBytes},
+		{"stderr", false, true, false, kindBytes},
 	}
 	for _, fld := range fields {
 		f, err := openFile(ctx, base, p9.ORDWR, fld.name)
 		if err != nil {
 			return nil, err
 		}
-		if fld.json {
-			rec.SetBacking(fld.name, &jsonField{ctx: ctx, file: f})
-		} else {
-			rec.SetBacking(fld.name, &textField{ctx: ctx, file: f, writable: fld.writable})
+		switch fld.kind {
+		case kindJSON:
+			rec.SetBacking(fld.name, &jsonField{ctx: ctx, file: f, blocking: fld.blocking})
+		case kindBytes:
+			rec.SetBacking(fld.name, &bytesField{ctx: ctx, file: f})
+		default:
+			rec.SetBacking(fld.name, &textField{ctx: ctx, file: f, writable: fld.writable, readable: fld.readable})
 		}
 	}
 	return rec, nil
@@ -313,9 +330,13 @@ type textField struct {
 	ctx      context.Context
 	file     server.File
 	writable bool
+	readable bool
 }
 
 func (f *textField) ReadField() (value.Value, error) {
+	if !f.readable {
+		return nil, fmt.Errorf("field is write-only")
+	}
 	b, err := readAllFile(f.ctx, f.file)
 	if err != nil {
 		return nil, err
@@ -335,14 +356,54 @@ func (f *textField) WriteField(v value.Value) error {
 	return err
 }
 
+// DisplayField implements value.FieldDisplay: an unreadable field (ctl)
+// shows a plain placeholder in a record dump rather than the namespace
+// file's own "write-only" error — the failure is already known statically
+// (readable is false), so there's no need to actually hit the file just to
+// render it. A readable field renders exactly like Record's default
+// (Get + String) would, so status/argv/env's display is unchanged.
+func (f *textField) DisplayField() string {
+	if !f.readable {
+		return "<write-only>"
+	}
+	v, err := f.ReadField()
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	return v.String()
+}
+
+// bytesField backs a field with a namespace file's raw content, undecoded
+// and untrimmed — stdout/stderr, where trimming a trailing newline or
+// forcing UTF-8 (textField's behavior) would corrupt binary output.
+// Read-only: writing to a job's own stdout/stderr isn't a sensible
+// operation.
+type bytesField struct {
+	ctx  context.Context
+	file server.File
+}
+
+func (f *bytesField) ReadField() (value.Value, error) {
+	b, err := readAllFile(f.ctx, f.file)
+	if err != nil {
+		return nil, err
+	}
+	return value.Bytes(b), nil
+}
+
+func (f *bytesField) WriteField(value.Value) error {
+	return fmt.Errorf("field is read-only")
+}
+
 // jsonField backs a field with a namespace file whose content is one
 // JSON object (status, wait) — job/fs.go's placeholder for the design
 // doc's NRF/NRL format — decoded into a nested kyu Record so
 // `j.status.state` reads naturally instead of forcing callers to parse
 // a raw string.
 type jsonField struct {
-	ctx  context.Context
-	file server.File
+	ctx      context.Context
+	file     server.File
+	blocking bool // true for "wait": ReadField blocks until the job is terminal
 }
 
 func (f *jsonField) ReadField() (value.Value, error) {
@@ -359,6 +420,24 @@ func (f *jsonField) ReadField() (value.Value, error) {
 
 func (f *jsonField) WriteField(value.Value) error {
 	return fmt.Errorf("field is read-only")
+}
+
+// DisplayField implements value.FieldDisplay: a blocking field (wait)
+// shows a plain placeholder in a record dump instead of actually blocking
+// until the job finishes — printing the record as a whole is a glance at
+// its current shape, not an implicit `| wait`. Explicit `.wait`/`j | wait`
+// access still goes through ReadField and blocks exactly as designed. A
+// non-blocking field (status) renders exactly like Record's default
+// (Get + String) would, so its display is unchanged.
+func (f *jsonField) DisplayField() string {
+	if f.blocking {
+		return "<blocks until done>"
+	}
+	v, err := f.ReadField()
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	return v.String()
 }
 
 // readAllFile reads a server.File to completion. For a blocking file

@@ -9,6 +9,7 @@ import (
 
 	"github.com/sandgorgon/9sh/kyu/eval"
 	"github.com/sandgorgon/9sh/kyu/parser"
+	"github.com/sandgorgon/9sh/kyu/value"
 )
 
 var (
@@ -536,8 +537,33 @@ func (w *kyuReplWidget) evaluate(src string) {
 		return
 	}
 	if v.Kind() != "null" {
-		w.lines = append(w.lines, replLine{text: v.String(), style: resultStyle})
+		w.lines = append(w.lines, resultLines(v)...)
 	}
+}
+
+// resultLines renders a top-level evaluation result as one or more
+// replLines. Bytes is special-cased the same way cmd/9sh's line REPL
+// special-cases it (see that package's printResult): value.Bytes.String()
+// deliberately stays a "<N bytes>" summary everywhere else, but a bare
+// %cmd at the REPL is exactly the case where real output is wanted, not a
+// summary. Split on newlines rather than handing multi-line text to a
+// single replLine — each replLine is one visual row (see scrollOffset/
+// cursor-line math above), so an embedded "\n" would render wrong.
+func resultLines(v value.Value) []replLine {
+	b, ok := v.(value.Bytes)
+	if !ok {
+		return []replLine{{text: v.String(), style: resultStyle}}
+	}
+	text := strings.TrimSuffix(string(b), "\n")
+	if text == "" {
+		return nil
+	}
+	rows := strings.Split(text, "\n")
+	lines := make([]replLine, len(rows))
+	for i, row := range rows {
+		lines[i] = replLine{text: row, style: resultStyle}
+	}
+	return lines
 }
 
 func trimmedNonEmpty(s string) bool {

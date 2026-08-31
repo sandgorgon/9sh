@@ -190,6 +190,25 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 	if err != nil {
 		return nil, fmt.Errorf("%%%s: reading stdout: %w", name, err)
 	}
+
+	// The job's stderr is captured into its own growBuf (job.go), same as
+	// stdout, rather than inherited live from the terminal — so unlike
+	// runExternalDirect (which wires cmd.Stderr = os.Stderr and gets it for
+	// free), it has to be explicitly read back and forwarded here. Without
+	// this, stderr silently vanishes for the common bare-%cmd case: nothing
+	// else reads or returns it, and there's no job handle in the caller's
+	// hands to fetch it from afterward.
+	stderrFile, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, id, "stderr")...)
+	if err != nil {
+		return nil, err
+	}
+	errOut, err := readAllFile(ctx, stderrFile)
+	stderrFile.Close()
+	if err != nil {
+		return nil, fmt.Errorf("%%%s: reading stderr: %w", name, err)
+	}
+	os.Stderr.Write(errOut)
+
 	return value.Bytes(out), nil
 }
 

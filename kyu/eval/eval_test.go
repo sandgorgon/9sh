@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"testing"
@@ -430,6 +431,39 @@ func TestForegroundExternalCallBadCommandStillErrorVal(t *testing.T) {
 	v2 := runEnv(t, `%this-command-does-not-exist-9sh`, env) // job-routed path
 	if _, ok := v2.(value.ErrorVal); !ok {
 		t.Fatalf("job-routed path: want ErrorVal, got %#v", v2)
+	}
+}
+
+// TestForegroundExternalCallForwardsStderr locks in the fix for stderr
+// silently vanishing on a bare foreground %cmd: job.go captures a
+// subprocess's stderr into its own growBuf (same as stdout), so unlike
+// the no-namespace direct-exec fallback (which wires cmd.Stderr =
+// os.Stderr live), the job-routed path has to explicitly read it back
+// and forward it after the job finishes -- see runExternalViaJob.
+func TestForegroundExternalCallForwardsStderr(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+	v := runEnv(t, `%sh "-c" "echo -n out-text; echo -n err-text 1>&2"`, env)
+	os.Stderr = origStderr
+	w.Close()
+
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stderr: %v", err)
+	}
+
+	if string(v.(value.Bytes)) != "out-text" {
+		t.Fatalf("stdout = %q, want %q", v, "out-text")
+	}
+	if string(captured) != "err-text" {
+		t.Fatalf("stderr forwarded = %q, want %q", captured, "err-text")
 	}
 }
 

@@ -99,6 +99,19 @@ type FieldBacking interface {
 	WriteField(Value) error
 }
 
+// FieldDisplay is an optional refinement of FieldBacking: a backing that
+// implements it controls how it's shown when the *containing record* is
+// stringified (Record.String()), without necessarily performing the real
+// read ReadField does. Explicit field access (rec.Get, kyu's `.field`)
+// always goes through ReadField unchanged — this only affects a record's
+// own aggregate display, for a field whose real read blocks (a job's
+// "wait", which waits for the job to finish) or fails by design (a
+// write-only "ctl") — printing the record shouldn't hang or spam an
+// expected failure just to render a summary.
+type FieldDisplay interface {
+	DisplayField() string
+}
+
 // NSUnion is a namespace-union expression's value — `ns := /a + /b` — an
 // ordered list of namespace paths to search in order, as `bind`'s source.
 // It's kyu-level syntax sugar over ns.Namespace.BindPath's multi-source
@@ -173,8 +186,12 @@ func (r *Record) String() string {
 		}
 		b.WriteString(k)
 		b.WriteString(": ")
-		v, _ := r.Get(k)
-		b.WriteString(v.String())
+		if d, ok := r.backing[k].(FieldDisplay); ok {
+			b.WriteString(d.DisplayField())
+		} else {
+			v, _ := r.Get(k)
+			b.WriteString(v.String())
+		}
 	}
 	b.WriteString("}")
 	return b.String()

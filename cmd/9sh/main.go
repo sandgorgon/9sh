@@ -25,6 +25,7 @@ import (
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/eval"
 	"github.com/sandgorgon/9sh/kyu/parser"
+	"github.com/sandgorgon/9sh/kyu/value"
 	"github.com/sandgorgon/9sh/ns"
 	"github.com/sandgorgon/9sh/pane"
 	"github.com/sandgorgon/9sh/remote"
@@ -265,9 +266,26 @@ func runSource(src string, env *eval.Env) bool {
 		return false
 	}
 	if v.Kind() != "null" {
-		fmt.Println(v.String())
+		printResult(v)
 	}
 	return true
+}
+
+// printResult prints a top-level evaluation result. Bytes is special-cased:
+// value.Bytes.String() deliberately stays a "<N bytes>" summary everywhere
+// else (a record/table field showing full %cmd output inline would be
+// unreadable), but a bare %cmd at the REPL is exactly the case where a real
+// shell would just show you the output — so here, and only here, the raw
+// content is written directly instead of going through the summary.
+func printResult(v value.Value) {
+	if b, ok := v.(value.Bytes); ok {
+		os.Stdout.Write(b)
+		if len(b) > 0 && b[len(b)-1] != '\n' {
+			fmt.Println()
+		}
+		return
+	}
+	fmt.Println(v.String())
 }
 
 // repl reads statements from stdin, accumulating lines until every

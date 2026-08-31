@@ -29,6 +29,23 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("checkout", &Builtin{Name: "checkout", Fn: func(args []value.Value) (value.Value, error) {
 		return biCheckout(namespace, args)
 	}})
+	// cd needs the calling Env itself (to call SetCwd) — same
+	// closure-capture shape as checkout above. See cd.go's biCd doc
+	// comment for why this is a per-Env value, not a real os.Chdir().
+	env.Define("cd", &Builtin{Name: "cd", Fn: func(args []value.Value) (value.Value, error) {
+		return biCd(env, args)
+	}})
+	// getenv/setenv/unsetenv need the calling Env's namespace — same
+	// closure-capture shape as cd/checkout above. See envvars.go.
+	env.Define("getenv", &Builtin{Name: "getenv", Fn: func(args []value.Value) (value.Value, error) {
+		return biGetenv(env, args)
+	}})
+	env.Define("setenv", &Builtin{Name: "setenv", Fn: func(args []value.Value) (value.Value, error) {
+		return biSetenv(env, args)
+	}})
+	env.Define("unsetenv", &Builtin{Name: "unsetenv", Fn: func(args []value.Value) (value.Value, error) {
+		return biUnsetenv(env, args)
+	}})
 	return env
 }
 
@@ -145,6 +162,12 @@ func evalExpr(e ast.Expr, env *Env) (value.Value, error) {
 		return evalErrCheck(x, env)
 	case *ast.IfExpr:
 		return evalIf(x, env)
+	case *ast.WhileExpr:
+		return evalWhile(x, env)
+	case *ast.BreakExpr:
+		return nil, breakSignal{}
+	case *ast.ContinueExpr:
+		return nil, continueSignal{}
 	case *ast.AtHost:
 		return evalAtHost(x, env)
 	case *ast.Background:
@@ -262,6 +285,48 @@ func evalIf(x *ast.IfExpr, env *Env) (value.Value, error) {
 		return evalBlock(x.Else, NewEnv(env))
 	}
 	return value.Null{}, nil
+}
+
+// breakSignal/continueSignal are sentinel errors evalWhile uses to unwind
+// out of a loop body when it hits `break`/`continue` — the same
+// "ordinary Go error propagates up through evalBlock/evalStmt until
+// something catches it" mechanism evalErrCheck already relies on for
+// abort-on-first-error, just caught here specifically instead of
+// surfacing to the caller. A break/continue outside any loop propagates
+// all the way up as an ordinary eval error, which is the right behavior
+// — there's nothing valid to unwind to.
+type breakSignal struct{}
+
+func (breakSignal) Error() string { return "break outside a loop" }
+
+type continueSignal struct{}
+
+func (continueSignal) Error() string { return "continue outside a loop" }
+
+// evalWhile runs ast.WhileExpr: re-evaluates Cond before each iteration,
+// running Body in a fresh child scope (matching evalIf's Then/Else) as
+// long as it's truthy. A nested while's break/continue is caught by its
+// own innermost evalWhile — it never bubbles out to an enclosing loop.
+func evalWhile(x *ast.WhileExpr, env *Env) (value.Value, error) {
+	for {
+		cond, err := evalExpr(x.Cond, env)
+		if err != nil {
+			return nil, err
+		}
+		if !value.Truthy(cond) {
+			return value.Null{}, nil
+		}
+		_, err = evalBlock(x.Body, NewEnv(env))
+		if err != nil {
+			if _, ok := err.(breakSignal); ok {
+				return value.Null{}, nil
+			}
+			if _, ok := err.(continueSignal); ok {
+				continue
+			}
+			return nil, err
+		}
+	}
 }
 
 // evalErrCheck implements postfix `?`: an ErrorVal result becomes a hard

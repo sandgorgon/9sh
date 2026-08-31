@@ -54,11 +54,12 @@ func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, er
 	if env.Namespace() != nil {
 		return runExternalViaJob(env, x.Name, args, in)
 	}
-	return runExternalDirect(x.Name, args, in)
+	return runExternalDirect(env, x.Name, args, in)
 }
 
-func runExternalDirect(name string, args []string, in value.Value) (value.Value, error) {
+func runExternalDirect(env *Env, name string, args []string, in value.Value) (value.Value, error) {
 	cmd := exec.Command(name, args...)
+	cmd.Dir = env.Cwd() // "" leaves it unset, os/exec's own "inherit" default
 	if in != nil {
 		cmd.Stdin = bytes.NewReader(renderForExternal(in))
 	}
@@ -69,6 +70,11 @@ func runExternalDirect(name string, args []string, in value.Value) (value.Value,
 	if err := cmd.Start(); err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %v", name, err)}, nil
 	}
+	// A -repl Ctrl-C while this runs should interrupt just this process —
+	// see Env.SetInterruptHandler's doc comment. os.Interrupt (SIGINT),
+	// matching a normal shell's Ctrl-C, not Kill/SIGKILL.
+	env.SetInterruptHandler(func() { cmd.Process.Signal(os.Interrupt) })
+	defer env.SetInterruptHandler(nil)
 	_ = cmd.Wait() // non-zero exit is ordinary data, not a Go-level error here
 
 	return value.Bytes(stdout.Bytes()), nil
@@ -125,6 +131,41 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 	}
 	argvFile.Close()
 
+	// A prior cd(...) overrides the job's default cwd (its own process's
+	// os.Getwd(), see job.New) — only written when set, matching argv's
+	// "small config file written once before ctl start" shape.
+	if cwd := env.Cwd(); cwd != "" {
+		cwdFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "cwd")...)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := cwdFile.Write(ctx, 0, []byte(cwd)); err != nil {
+			return nil, fmt.Errorf("%%%s: writing cwd: %w", name, err)
+		}
+		cwdFile.Close()
+	}
+
+	// The job protocol's "env" file is already fully wired (job.go's
+	// startSubprocess sets cmd.Env from it) — the only new part here is
+	// populating it from /env's current contents (setenv/getenv's
+	// backing store) instead of leaving it unwritten, which left every
+	// job silently inheriting os/exec's own default. A nil slice (no
+	// /env bound — mainly tests that don't go through cmd/9sh's full
+	// bootstrap) skips the write entirely, so the job's own env stays
+	// unset and still inherits normally, unchanged from before this.
+	if envVars, err := envSlice(ctx, namespace); err != nil {
+		return nil, fmt.Errorf("%%%s: reading /env: %w", name, err)
+	} else if envVars != nil {
+		envFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "env")...)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := envFile.Write(ctx, 0, []byte(strings.Join(envVars, "\n"))); err != nil {
+			return nil, fmt.Errorf("%%%s: writing env: %w", name, err)
+		}
+		envFile.Close()
+	}
+
 	ctlFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "ctl")...)
 	if err != nil {
 		return nil, err
@@ -150,6 +191,25 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 		}
 	}
 	stdinFile.Close() // EOF regardless of whether anything was written — see job/job_test.go's note
+
+	// A -repl Ctrl-C between here and wait returning should interrupt
+	// this job, not the whole shell — see Env.SetInterruptHandler's doc
+	// comment. "signal INT" (Job.Ctl's real-SIGINT path, job.go) rather
+	// than "kill"/SIGKILL, matching what Ctrl-C actually sends in a
+	// normal shell so the child can handle it gracefully. Reopens the
+	// ctl file fresh each call rather than keeping the one already
+	// closed above (line ~171) — this fires rarely, if ever, so there's
+	// no reason to hold a handle open for the job's entire runtime just
+	// for it.
+	env.SetInterruptHandler(func() {
+		ctlFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "ctl")...)
+		if err != nil {
+			return
+		}
+		defer ctlFile.Close()
+		ctlFile.Write(ctx, 0, []byte("signal INT"))
+	})
+	defer env.SetInterruptHandler(nil)
 
 	waitFile, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, id, "wait")...)
 	if err != nil {
@@ -247,13 +307,28 @@ func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error)
 		args[i] = s
 	}
 
+	envVars, err := envSlice(context.Background(), env.Namespace())
+	if err != nil {
+		return nil, fmt.Errorf("$%s: reading /env: %w", st.Name, err)
+	}
+
 	cmd := exec.Command(st.Name, args...)
+	cmd.Dir = env.Cwd() // "" leaves it unset, os/exec's own "inherit" default
+	cmd.Env = envVars   // nil (no /env bound) leaves it unset too, same default
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("$%s: %v", st.Name, err)}, nil
 	}
+	// See runExternalDirect's identical line: a -repl Ctrl-C should
+	// interrupt just this process. ($cmd's child also shares 9sh's real
+	// terminal, so in -repl it likely already gets a terminal-driven
+	// SIGINT directly too — this is a harmless belt-and-suspenders, and
+	// what actually matters for the job-tracked %cmd path, which has no
+	// real terminal to inherit one from.)
+	env.SetInterruptHandler(func() { cmd.Process.Signal(os.Interrupt) })
+	defer env.SetInterruptHandler(nil)
 	_ = cmd.Wait() // non-zero exit is ordinary data, not a Go-level error here
 	return value.Null{}, nil
 }

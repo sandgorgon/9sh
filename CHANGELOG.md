@@ -20,6 +20,29 @@ once a first tagged release is cut.
   refused with a clear error inside the pane multiplexer's kyu REPL
   pane, where it would race the TUI's own raw-mode stdin reader for
   every keystroke — use a shell pane (`+ shell`) there instead.
+- kyu gains a loop construct: `while cond { body }`, plus `break` and
+  `continue`. Previously the only way to iterate was recursion via a
+  self-referencing closure. A nested loop's `break`/`continue` only
+  affects its own innermost `while`.
+- `cd(path)` sets the working directory `%cmd`/`$cmd` subprocesses run
+  in. Per-session state (the same shape as `bind`/the namespace itself),
+  not a real `os.Chdir()` — every pane in a TUI session shares one
+  process, so a real chdir would silently redirect every pane at once.
+  Propagates to job-tracked `%cmd`/`%cmd &` via a new per-job `cwd`
+  namespace file, alongside the existing `argv`/`env`.
+- Real environment-variable support: `getenv(name)`, `setenv(name,
+  value)`, `unsetenv(name)`, backed by a new `/env` namespace (Plan 9's
+  own convention — env vars as real, bind-able, browsable files, seeded
+  from 9sh's own process environment at startup) rather than hidden
+  shell state. `%cmd`/`%cmd &`/`$cmd` subprocesses all see the current
+  `/env` contents, not just an inherited snapshot.
+- `-repl`'s Ctrl-C now interrupts the currently running `%cmd`/`$cmd`
+  (a real `SIGINT`, same as a normal shell) instead of killing the whole
+  9sh process — previously there was no signal handling at all, so
+  Ctrl-C hit Go's default "terminate" disposition. Scoped to `-repl`
+  only for now; the pane multiplexer's kyu REPL pane needs asynchronous
+  evaluation first (a separate, larger change) before an interrupt
+  affordance can work safely there.
 
 ### Fixed
 

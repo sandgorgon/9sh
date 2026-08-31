@@ -303,6 +303,12 @@ func (p *Parser) parsePrefix() ast.Expr {
 		return p.parseExternalCall()
 	case token.IF:
 		return p.parseIfExpr()
+	case token.WHILE:
+		return p.parseWhileExpr()
+	case token.BREAK:
+		return &ast.BreakExpr{Tok: p.cur}
+	case token.CONTINUE:
+		return &ast.ContinueExpr{Tok: p.cur}
 	case token.AT:
 		return p.parseAtHost()
 	default:
@@ -594,6 +600,23 @@ func (p *Parser) parseIfExpr() ast.Expr {
 		}
 	}
 	return ie
+}
+
+// parseWhileExpr parses `while cond { body }` — identical shape to
+// parseIfExpr, minus the else branch.
+func (p *Parser) parseWhileExpr() ast.Expr {
+	tok := p.cur
+	p.next() // consume 'while'
+	cond := p.parseExpr(LOWEST)
+	if !p.expectPeekOrCur(token.LBRACE) {
+		return nil
+	}
+	p.next() // consume '{'
+	body := p.parseBlock()
+	if !p.expectPeekOrCur(token.RBRACE) {
+		return nil
+	}
+	return &ast.WhileExpr{Tok: tok, Cond: cond, Body: body}
 }
 
 // parseAtHost parses `@host { ... }`. host is a bareword identifier

@@ -20,17 +20,19 @@ import (
 const (
 	qidRoot    = 0
 	qidClone   = 1
-	qidJobBase = 1000 // job id -> qidJobBase + id*10, plus a per-name offset below
+	qidJobBase = 1000 // job id -> qidJobBase + id*20, plus a per-name offset below
 )
 
 var fileOffset = map[string]uint64{
 	"ctl": 1, "status": 2, "events": 3, "wait": 4,
-	"argv": 5, "env": 6, "stdin": 7, "stdout": 8, "stderr": 9,
+	"argv": 5, "env": 6, "stdin": 7, "stdout": 8, "stderr": 9, "cwd": 10,
 }
 
-var childNames = []string{"ctl", "status", "events", "wait", "argv", "env", "stdin", "stdout", "stderr"}
+var childNames = []string{"ctl", "status", "events", "wait", "argv", "env", "stdin", "stdout", "stderr", "cwd"}
 
-func jobDirPath(id int) uint64 { return qidJobBase + uint64(id)*10 }
+// The *20 stride (not *10) leaves headroom past today's 10 offsets for a
+// future field without another cross-cutting stride bump.
+func jobDirPath(id int) uint64 { return qidJobBase + uint64(id)*20 }
 
 const sysUser = "9sh"
 
@@ -235,6 +237,9 @@ func (f *jobDirFile) Walk(ctx context.Context, name string) (server.File, error)
 	case "env":
 		base.mode = 0644
 		return &envFile{baseFile: base, job: j}, nil
+	case "cwd":
+		base.mode = 0644
+		return &cwdFile{baseFile: base, job: j}, nil
 	case "stdin":
 		base.mode = 0200
 		return &stdinFile{baseFile: base, job: j}, nil
@@ -260,7 +265,7 @@ func (f *jobDirFile) Read(ctx context.Context, offset int64, p []byte) (int, err
 		switch name {
 		case "ctl", "stdin":
 			mode = 0200
-		case "argv", "env":
+		case "argv", "env", "cwd":
 			mode = 0644
 		}
 		entries[i] = p9.Stat{
@@ -376,6 +381,27 @@ func (f *envFile) Read(ctx context.Context, offset int64, p []byte) (int, error)
 }
 func (f *envFile) Write(ctx context.Context, offset int64, p []byte) (int, error) {
 	if err := f.job.SetEnv(splitNonEmptyLines(p)); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// cwdFile is a single-value config file, like argvFile/envFile but never
+// line-split — a job's working directory is one path, not a list.
+type cwdFile struct {
+	baseFile
+	job *Job
+}
+
+func (f *cwdFile) Read(ctx context.Context, offset int64, p []byte) (int, error) {
+	b := f.job.CwdBytes()
+	if offset >= int64(len(b)) {
+		return 0, io.EOF
+	}
+	return copy(p, b[offset:]), nil
+}
+func (f *cwdFile) Write(ctx context.Context, offset int64, p []byte) (int, error) {
+	if err := f.job.SetCwd(strings.TrimSpace(string(p))); err != nil {
 		return 0, err
 	}
 	return len(p), nil

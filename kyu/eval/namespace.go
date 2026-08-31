@@ -163,6 +163,36 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	}
 	argvFile.Close()
 
+	// A prior cd(...) overrides the job's default cwd (its own process's
+	// os.Getwd(), see job.New) — only written when set, matching argv's
+	// "small config file written once before ctl start" shape.
+	if cwd := env.Cwd(); cwd != "" {
+		cwdFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "cwd")...)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := cwdFile.Write(ctx, 0, []byte(cwd)); err != nil {
+			return nil, fmt.Errorf("'&': writing cwd: %w", err)
+		}
+		cwdFile.Close()
+	}
+
+	// See runExternalViaJob's identical block: the job protocol's "env"
+	// file is already fully wired, this just populates it from /env's
+	// current contents before start.
+	if envVars, err := envSlice(ctx, namespace); err != nil {
+		return nil, fmt.Errorf("'&': reading /env: %w", err)
+	} else if envVars != nil {
+		envFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "env")...)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := envFile.Write(ctx, 0, []byte(strings.Join(envVars, "\n"))); err != nil {
+			return nil, fmt.Errorf("'&': writing env: %w", err)
+		}
+		envFile.Close()
+	}
+
 	tsStart := time.Now()
 	ctlFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "ctl")...)
 	if err != nil {
@@ -303,6 +333,7 @@ func buildJobRecord(ctx context.Context, base server.File) (*value.Record, error
 		{"ctl", true, false, false, kindText},
 		{"argv", true, true, false, kindText},
 		{"env", true, true, false, kindText},
+		{"cwd", true, true, false, kindText},
 		{"stdout", false, true, false, kindBytes},
 		{"stderr", false, true, false, kindBytes},
 	}

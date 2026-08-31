@@ -13,7 +13,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
@@ -61,9 +63,12 @@ func run() int {
 		return 0
 	}
 
-	env, recorder, sessionDir := bootstrap(*listenAddr, *listenUnixPath)
+	env, recorder, sessionDir, envScratchDir := bootstrap(*listenAddr, *listenUnixPath)
 	if recorder != nil {
 		defer recorder.Close()
+	}
+	if envScratchDir != "" {
+		defer os.RemoveAll(envScratchDir)
 	}
 
 	if args := flag.Args(); len(args) > 0 {
@@ -101,7 +106,7 @@ func run() int {
 // pane.SessionViewerSpec, see runTUI) is still worth passing on even
 // then, since it may hold real history from an earlier run when 9vcs
 // *was* available — reading it back is pure disk I/O, no 9vcs needed.
-func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder, string) {
+func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder, string, string) {
 	namespace := ns.New()
 	mgr := job.NewManager()
 	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
@@ -152,6 +157,31 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 		os.Setenv("_9SH_UNIX_SOCK", listenUnixPath)
 	}
 
+	// /env exposes this process's environment as real namespace files —
+	// Plan 9's own convention (env vars are files under /env), not a
+	// hidden getenv/setenv side-table — via the same dirfs-over-a-real-
+	// directory trick /local above already uses. Seeded from os.Environ()
+	// (after _9SH_UNIX_SOCK above, so a job reading /env still inherits
+	// it) so %cmd/$cmd subprocesses keep inheriting PATH/HOME/etc by
+	// default exactly as before this existed — see kyu/eval's envSlice,
+	// which %cmd/$cmd now build their environment from instead of the
+	// os/exec "nil Cmd.Env" implicit-inherit default. Ephemeral by
+	// design, like Plan 9's own tmpfs-backed /env: cleaned up via
+	// envScratchDir's caller-side defer, not meant to persist across runs.
+	envScratchDir, err := os.MkdirTemp("", "9sh-env-*")
+	if err == nil {
+		for _, kv := range os.Environ() {
+			if name, value, ok := strings.Cut(kv, "="); ok {
+				os.WriteFile(filepath.Join(envScratchDir, name), []byte(value), 0600)
+			}
+		}
+		if fs, err := dirfs.New(envScratchDir); err == nil {
+			namespace.BindFS(fs, "", "/env", ns.Replace)
+		}
+	} else {
+		envScratchDir = ""
+	}
+
 	recorder, sessionDir := bootstrapSession(mgr)
 	env := eval.NewGlobalEnv(namespace)
 	if recorder != nil {
@@ -171,7 +201,7 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 	// all already wired up: common.ky/hosts/<hostname>.ky may reasonably
 	// want to bind, dial, or background jobs of their own.
 	dotfiles.Load(env)
-	return env, recorder, sessionDir
+	return env, recorder, sessionDir, envScratchDir
 }
 
 // bootstrapSession sets up ~/.config/9/session and attaches it to mgr's
@@ -303,7 +333,27 @@ func printResult(v value.Value) {
 // fallback for non-interactive/piped stdin (runTUI needs a real raw-
 // mode terminal) or an explicit -repl; pane.kyuReplWidget uses the
 // same parser.BracketDepth check for the native tui REPL pane.
+// repl's stdin loop is a bare bufio.Scanner — no raw mode, nothing else
+// ever reads os.Stdin — so unlike the TUI (see Env.SetPassthroughBlocked's
+// doc comment), a Ctrl-C here is a real OS SIGINT, delivered
+// asynchronously regardless of what the process is doing. signal.Notify
+// below overrides Go's default "kill the process" disposition for it:
+// this goroutine forwards each SIGINT to whatever foreground %cmd/$cmd
+// currently has an interrupt handler registered (see
+// Env.SetInterruptHandler), or does nothing if nothing's running —
+// matching a normal shell's "Ctrl-C at an idle prompt does nothing."
 func repl(env *eval.Env) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+	go func() {
+		for range sigCh {
+			if h := env.InterruptHandler(); h != nil {
+				h()
+			}
+		}
+	}()
+
 	scanner := bufio.NewScanner(os.Stdin)
 	var buf string
 	prompt := "9sh> "

@@ -98,6 +98,12 @@ func TestPercentSigilVsModulo(t *testing.T) {
 	assertKinds(t, `10 % 3`, []token.Kind{token.INT, token.MOD, token.INT, token.EOF})
 }
 
+func TestWhileBreakContinueKeywords(t *testing.T) {
+	assertKinds(t, `while true { break }`,
+		[]token.Kind{token.WHILE, token.TRUE, token.LBRACE, token.BREAK, token.RBRACE, token.EOF})
+	assertKinds(t, `continue`, []token.Kind{token.CONTINUE, token.EOF})
+}
+
 func TestDollarSigil(t *testing.T) {
 	// unlike '%', '$' has no infix meaning to disambiguate from -- it's
 	// always the passthrough-command sigil, and the command name after it

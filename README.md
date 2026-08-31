@@ -77,6 +77,15 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   live terminal (a shell pane, `+ shell`), and `$cmd` there would race
   the multiplexer for the terminal itself, so it's refused with a clear
   error instead.
+- `while cond { ... }` loops, with `break`/`continue` — kyu's only loop
+  construct; recursion via a self-referencing closure still works too.
+- `cd(path)` sets the working directory `%cmd`/`$cmd` subprocesses run
+  in — per-session state (like `bind`), not a real `chdir`, since every
+  pane in a TUI session shares one process.
+- `getenv(name)`/`setenv(name, value)`/`unsetenv(name)` read and write
+  real files under `/env` — Plan 9's own convention (environment
+  variables *are* namespace files), not hidden shell state. `%ls /env`
+  to see what's there.
 
 Run a job on another 9sh, over mutual TLS, with no separate remote-job
 protocol:

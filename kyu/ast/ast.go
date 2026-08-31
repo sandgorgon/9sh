@@ -158,6 +158,31 @@ type IfExpr struct {
 	Else []Stmt // nil if no else clause
 }
 
+// WhileExpr is `while cond { body }` — re-evaluates Cond before each
+// iteration, running Body (in a fresh child scope, matching IfExpr's
+// Then/Else) as long as it's truthy. No else clause, unlike IfExpr: a
+// loop that never runs has nothing sensible to fall back to.
+type WhileExpr struct {
+	Tok  token.Token
+	Cond Expr
+	Body []Stmt
+}
+
+// BreakExpr is `break` — exits the nearest enclosing WhileExpr
+// immediately, the same "ordinary Go error propagates until something
+// catches it" mechanism ErrCheck already uses for abort-on-first-error,
+// just caught by evalWhile specifically instead of surfacing to the
+// caller.
+type BreakExpr struct {
+	Tok token.Token
+}
+
+// ContinueExpr is `continue` — skips the rest of the current iteration
+// of the nearest enclosing WhileExpr and re-evaluates Cond.
+type ContinueExpr struct {
+	Tok token.Token
+}
+
 // Background is `%cmd args... &`: starts an external command as a job
 // and evaluates to a live job record (its fields backed by the job's
 // namespace files) rather than blocking for output like a bare
@@ -206,6 +231,9 @@ func (*UnaryExpr) exprNode()    {}
 func (*ErrCheck) exprNode()     {}
 func (*IfExpr) exprNode()       {}
 func (*Background) exprNode()   {}
+func (*WhileExpr) exprNode()    {}
+func (*BreakExpr) exprNode()    {}
+func (*ContinueExpr) exprNode() {}
 
 func (*Ident) node()        {}
 func (*IntLit) node()       {}
@@ -228,6 +256,9 @@ func (*UnaryExpr) node()    {}
 func (*ErrCheck) node()     {}
 func (*IfExpr) node()       {}
 func (*Background) node()   {}
+func (*WhileExpr) node()    {}
+func (*BreakExpr) node()    {}
+func (*ContinueExpr) node() {}
 
 // ---- statements ----
 

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sandgorgon/9p/examples/dirfs"
+
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/kyu/value"
@@ -33,6 +35,26 @@ func jobsEnv(t *testing.T) *Env {
 		t.Fatalf("bootstrap bind /jobs: %v", err)
 	}
 	return NewGlobalEnv(namespace)
+}
+
+// jobsAndEnvVarsEnv is jobsEnv plus /env bound over a fresh scratch
+// directory (dirfs, the same mechanism cmd/9sh's bootstrap uses for
+// /env — see main.go) — for tests exercising getenv/setenv/unsetenv and
+// their propagation into %cmd/%cmd &/$cmd. Deliberately starts empty
+// (unlike bootstrap, which seeds it from os.Environ()): tests want a
+// known, controlled set of variables, not whatever happens to be in the
+// process running `go test`.
+func jobsAndEnvVarsEnv(t *testing.T) *Env {
+	t.Helper()
+	env := jobsEnv(t)
+	fs, err := dirfs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("dirfs.New: %v", err)
+	}
+	if err := env.Namespace().BindFS(fs, "", "/env", ns.Replace); err != nil {
+		t.Fatalf("bind /env: %v", err)
+	}
+	return env
 }
 
 func runEnv(t *testing.T, src string, env *Env) value.Value {
@@ -131,6 +153,63 @@ func TestIfElse(t *testing.T) {
 	}
 	if v := run(t, `if 1 > 2 { "yes" } else { "no" }`); v.(value.String) != "no" {
 		t.Errorf("got %v, want no", v)
+	}
+}
+
+func TestWhileLoop(t *testing.T) {
+	v := run(t, `i := 0
+sum := 0
+while i < 5 {
+  sum = sum + i
+  i = i + 1
+}
+sum`)
+	if v.(value.Int) != 10 {
+		t.Errorf("got %v, want 10 (0+1+2+3+4)", v)
+	}
+}
+
+func TestWhileBreak(t *testing.T) {
+	v := run(t, `i := 0
+while i < 100 {
+  if i == 3 { break }
+  i = i + 1
+}
+i`)
+	if v.(value.Int) != 3 {
+		t.Errorf("got %v, want 3", v)
+	}
+}
+
+func TestWhileContinue(t *testing.T) {
+	v := run(t, `i := 0
+sum := 0
+while i < 5 {
+  i = i + 1
+  if i == 3 { continue }
+  sum = sum + i
+}
+sum`)
+	if v.(value.Int) != 12 {
+		t.Errorf("got %v, want 12 (1+2+4+5, 3 skipped)", v)
+	}
+}
+
+func TestNestedWhileBreakOnlyExitsInner(t *testing.T) {
+	v := run(t, `outer := 0
+inner_total := 0
+while outer < 3 {
+  j := 0
+  while true {
+    if j == 2 { break }
+    inner_total = inner_total + 1
+    j = j + 1
+  }
+  outer = outer + 1
+}
+inner_total`)
+	if v.(value.Int) != 6 {
+		t.Errorf("got %v, want 6 (3 outer iterations x 2 inner each)", v)
 	}
 }
 
@@ -501,6 +580,177 @@ func TestForegroundExternalCallBadCommandStillErrorVal(t *testing.T) {
 // the no-namespace direct-exec fallback (which wires cmd.Stderr =
 // os.Stderr live), the job-routed path has to explicitly read it back
 // and forward it after the job finishes -- see runExternalViaJob.
+func TestCdBadPathIsErrorVal(t *testing.T) {
+	env := jobsEnv(t)
+	v := runEnv(t, `cd("/this/path/does/not/exist/anywhere")`, env)
+	if _, ok := v.(value.ErrorVal); !ok {
+		t.Fatalf("want ErrorVal for a nonexistent path, got %#v", v)
+	}
+	if env.Cwd() != "" {
+		t.Fatalf("Cwd should be unchanged after a failed cd, got %q", env.Cwd())
+	}
+}
+
+func TestCdAffectsForegroundExternalCall(t *testing.T) {
+	skipUnlessOnPath(t, "pwd")
+	dir := t.TempDir()
+	env := jobsEnv(t)
+	runEnv(t, `cd("`+dir+`")`, env)
+	v := runEnv(t, `%pwd`, env)
+	if string(v.(value.Bytes)) != dir+"\n" {
+		t.Fatalf("pwd output = %q, want %q", v, dir+"\n")
+	}
+}
+
+func TestCdAffectsDirectExecFallback(t *testing.T) {
+	skipUnlessOnPath(t, "pwd")
+	dir := t.TempDir()
+	env := NewGlobalEnv(nil) // no namespace: %pwd goes through runExternalDirect
+	runEnv(t, `cd("`+dir+`")`, env)
+	v := runEnv(t, `%pwd`, env)
+	if string(v.(value.Bytes)) != dir+"\n" {
+		t.Fatalf("pwd output = %q, want %q", v, dir+"\n")
+	}
+}
+
+func TestCdAffectsPassthrough(t *testing.T) {
+	skipUnlessOnPath(t, "pwd")
+	dir := t.TempDir()
+	env := jobsEnv(t)
+	runEnv(t, `cd("`+dir+`")`, env)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+	runEnv(t, `$pwd`, env)
+	os.Stdout = origStdout
+	w.Close()
+
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stdout: %v", err)
+	}
+	if string(captured) != dir+"\n" {
+		t.Fatalf("pwd output = %q, want %q", captured, dir+"\n")
+	}
+}
+
+func TestCdAffectsBackgroundJob(t *testing.T) {
+	skipUnlessOnPath(t, "pwd")
+	dir := t.TempDir()
+	env := jobsEnv(t)
+	runEnv(t, `cd("`+dir+`")`, env)
+	v := runEnv(t, `j := %pwd &
+j | wait
+j.stdout`, env)
+	if string(v.(value.Bytes)) != dir+"\n" {
+		t.Fatalf("pwd output = %q, want %q", v, dir+"\n")
+	}
+}
+
+func TestGetenvSetenvUnsetenvRoundTrip(t *testing.T) {
+	env := jobsAndEnvVarsEnv(t)
+	if v := runEnv(t, `getenv("NINESH_TEST_VAR")`, env); v.(value.String) != "" {
+		t.Fatalf("unset getenv = %q, want empty string", v)
+	}
+	runEnv(t, `setenv("NINESH_TEST_VAR", "hello")`, env)
+	if v := runEnv(t, `getenv("NINESH_TEST_VAR")`, env); v.(value.String) != "hello" {
+		t.Fatalf("getenv after setenv = %q, want %q", v, "hello")
+	}
+	runEnv(t, `unsetenv("NINESH_TEST_VAR")`, env)
+	if v := runEnv(t, `getenv("NINESH_TEST_VAR")`, env); v.(value.String) != "" {
+		t.Fatalf("getenv after unsetenv = %q, want empty string", v)
+	}
+}
+
+func TestSetenvWithoutNamespaceErrors(t *testing.T) {
+	runErr(t, `setenv("X", "y")`)
+}
+
+func TestSetenvAffectsForegroundExternalCall(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsAndEnvVarsEnv(t)
+	runEnv(t, `setenv("NINESH_TEST_VAR", "from-setenv")`, env)
+	v := runEnv(t, `%sh "-c" "echo -n $NINESH_TEST_VAR"`, env)
+	if string(v.(value.Bytes)) != "from-setenv" {
+		t.Fatalf("stdout = %q, want %q", v, "from-setenv")
+	}
+}
+
+func TestSetenvAffectsBackgroundJob(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsAndEnvVarsEnv(t)
+	runEnv(t, `setenv("NINESH_TEST_VAR", "from-setenv-bg")`, env)
+	v := runEnv(t, `j := %sh "-c" "echo -n $NINESH_TEST_VAR" &
+j | wait
+j.stdout`, env)
+	if string(v.(value.Bytes)) != "from-setenv-bg" {
+		t.Fatalf("stdout = %q, want %q", v, "from-setenv-bg")
+	}
+}
+
+func TestSetenvAffectsPassthrough(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsAndEnvVarsEnv(t)
+	runEnv(t, `setenv("NINESH_TEST_VAR", "from-setenv-dollar")`, env)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+	runEnv(t, `$sh "-c" "echo -n $NINESH_TEST_VAR"`, env)
+	os.Stdout = origStdout
+	w.Close()
+
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stdout: %v", err)
+	}
+	if string(captured) != "from-setenv-dollar" {
+		t.Fatalf("stdout = %q, want %q", captured, "from-setenv-dollar")
+	}
+}
+
+// TestForegroundExternalCallInheritsProcessEnv above already locks in
+// that a job without /env bound (jobsEnv, not jobsAndEnvVarsEnv) still
+// inherits this test process's own environment unchanged — envSlice
+// returning nil for "no /env bound" must not regress that.
+
+func TestInterruptHandlerSetAndCleared(t *testing.T) {
+	env := jobsEnv(t)
+	if env.InterruptHandler() != nil {
+		t.Fatal("InterruptHandler should start nil")
+	}
+	called := false
+	env.SetInterruptHandler(func() { called = true })
+	h := env.InterruptHandler()
+	if h == nil {
+		t.Fatal("InterruptHandler should return the registered handler")
+	}
+	h()
+	if !called {
+		t.Fatal("the registered handler should have run")
+	}
+	env.SetInterruptHandler(nil)
+	if env.InterruptHandler() != nil {
+		t.Fatal("InterruptHandler should be nil after clearing")
+	}
+}
+
+func TestForegroundExternalCallSetsAndClearsInterruptHandler(t *testing.T) {
+	skipUnlessOnPath(t, "echo")
+	env := jobsEnv(t)
+	runEnv(t, `%echo "hi"`, env)
+	if env.InterruptHandler() != nil {
+		t.Fatal("InterruptHandler should be cleared once the foreground command returns")
+	}
+}
+
 func TestForegroundExternalCallForwardsStderr(t *testing.T) {
 	skipUnlessOnPath(t, "sh")
 	env := jobsEnv(t)

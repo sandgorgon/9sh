@@ -195,6 +195,37 @@ func TestExternalCallInPipe(t *testing.T) {
 	}
 }
 
+func TestWhileExpr(t *testing.T) {
+	prog := parseOK(t, `while i < 5 { i = i + 1 }`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	we, ok := es.X.(*ast.WhileExpr)
+	if !ok {
+		t.Fatalf("want WhileExpr, got %T", es.X)
+	}
+	if _, ok := we.Cond.(*ast.BinaryExpr); !ok {
+		t.Fatalf("want Cond=BinaryExpr, got %T", we.Cond)
+	}
+	if len(we.Body) != 1 {
+		t.Fatalf("want 1 body stmt, got %d", len(we.Body))
+	}
+}
+
+func TestBreakContinueExprs(t *testing.T) {
+	prog := parseOK(t, `while true { break }`)
+	we := prog.Stmts[0].(*ast.ExprStmt).X.(*ast.WhileExpr)
+	bs := we.Body[0].(*ast.ExprStmt)
+	if _, ok := bs.X.(*ast.BreakExpr); !ok {
+		t.Fatalf("want BreakExpr, got %T", bs.X)
+	}
+
+	prog2 := parseOK(t, `while true { continue }`)
+	we2 := prog2.Stmts[0].(*ast.ExprStmt).X.(*ast.WhileExpr)
+	cs := we2.Body[0].(*ast.ExprStmt)
+	if _, ok := cs.X.(*ast.ContinueExpr); !ok {
+		t.Fatalf("want ContinueExpr, got %T", cs.X)
+	}
+}
+
 func TestPassthroughStmt(t *testing.T) {
 	prog := parseOK(t, `$vim "file.txt"`)
 	pt, ok := prog.Stmts[0].(*ast.PassthroughStmt)

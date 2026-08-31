@@ -238,6 +238,58 @@ func TestStatusCarriesCwdAndTimestamps(t *testing.T) {
 	}
 }
 
+// TestSetCwdOverridesDefault locks in cd's job-protocol plumbing: SetCwd
+// (the job/fs.go "cwd" file's Write handler) overrides the default
+// os.Getwd()-derived cwd TestStatusCarriesCwdAndTimestamps checks above,
+// and startSubprocess actually honors it — a subprocess run there sees
+// the overridden directory, not 9sh's own process cwd.
+func TestSetCwdOverridesDefault(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager()
+	j := mgr.AllocSubprocess()
+	if err := j.SetCwd(dir); err != nil {
+		t.Fatalf("SetCwd: %v", err)
+	}
+	if got := string(j.CwdBytes()); got != dir {
+		t.Fatalf("CwdBytes = %q, want %q", got, dir)
+	}
+	if j.Status().Cwd != dir {
+		t.Fatalf("Status().Cwd = %q, want %q", j.Status().Cwd, dir)
+	}
+
+	j.SetArgv([]string{"pwd"})
+	j.Ctl("start")
+	j.closeStdin()
+	st, err := j.WaitFor(withTimeout(t))
+	if err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	if st.State != StateDone {
+		t.Fatalf("final state = %v, want done (err=%s)", st.State, st.Err)
+	}
+	out, err := io.ReadAll(&growBufReader{ctx: withTimeout(t), buf: j.stdout})
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if string(out) != dir+"\n" {
+		t.Fatalf("pwd output = %q, want %q", out, dir+"\n")
+	}
+}
+
+func TestSetCwdRejectsAfterStart(t *testing.T) {
+	mgr := NewManager()
+	j := mgr.AllocSubprocess()
+	j.SetArgv([]string{"true"})
+	j.Ctl("start")
+	j.closeStdin()
+	if _, err := j.WaitFor(withTimeout(t)); err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	if err := j.SetCwd("/tmp"); err == nil {
+		t.Fatal("SetCwd after start should error, got nil")
+	}
+}
+
 // TestNonzeroExitIsDoneNotFailed locks in a real bug fix: a process
 // that runs to completion and exits nonzero (grep's "no match"
 // convention, sh's `exit N`, ...) is StateDone with that ExitCode, not

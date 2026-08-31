@@ -19,6 +19,8 @@ type Env struct {
 	jobRoot            []string          // nil = inherit from parent; see JobRoot
 	proxyRecorder      ProxyRecorderFunc // process-wide, like ns; see ProxyRecorder
 	passthroughBlocked string            // process-wide, like ns; see SetPassthroughBlocked
+	cwd                string            // process-wide, like ns; see SetCwd
+	interruptHandler   func()            // process-wide, like ns; see SetInterruptHandler
 }
 
 // ProxyRecorderFunc is called once a job created via `@host{}` (a "proxy"
@@ -88,6 +90,45 @@ func (e *Env) SetPassthroughBlocked(reason string) {
 // "" if $cmd is allowed to run normally.
 func (e *Env) PassthroughBlocked() string {
 	return e.root().passthroughBlocked
+}
+
+// SetCwd sets the working directory `%cmd`/`$cmd` subprocesses run in —
+// process-wide like the namespace, not lexical, and deliberately not a
+// real os.Chdir(): every kyu-repl pane in a TUI session shares this same
+// root Env (no eval.NewEnv call anywhere in package pane — every pane's
+// Spec carries the same *Env), so a real chdir would silently redirect
+// every pane's subsequent commands at once, not just the one that called
+// cd. "" (the default) means subprocesses inherit 9sh's own process cwd,
+// unchanged from today's behavior.
+func (e *Env) SetCwd(path string) {
+	e.root().cwd = path
+}
+
+// Cwd returns the path set by SetCwd, or "" if cd has never been called
+// (subprocesses should then inherit 9sh's own process cwd as before).
+func (e *Env) Cwd() string {
+	return e.root().cwd
+}
+
+// SetInterruptHandler registers the function a `-repl` SIGINT (Ctrl-C)
+// should call to interrupt whatever foreground %cmd/$cmd is currently
+// running — process-wide like the namespace. Callers (runExternalViaJob,
+// evalPassthroughStmt, runExternalDirect) set this once their subprocess
+// has actually started and clear it (nil) once it returns, via defer, so
+// a signal arriving before start or after completion is simply ignored —
+// matching a normal shell's "Ctrl-C at an idle prompt does nothing."
+// Only meaningful in cmd/9sh's repl(): the TUI can't safely deliver
+// SIGINT-driven interrupts at all yet (see SetPassthroughBlocked's doc
+// comment on the same underlying single-goroutine/raw-mode hazard), so
+// runTUI never calls InterruptHandler.
+func (e *Env) SetInterruptHandler(fn func()) {
+	e.root().interruptHandler = fn
+}
+
+// InterruptHandler returns the function set by SetInterruptHandler, or
+// nil if nothing interruptible is currently running.
+func (e *Env) InterruptHandler() func() {
+	return e.root().interruptHandler
 }
 
 // JobRoot returns the namespace path prefix job creation should use —

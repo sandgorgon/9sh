@@ -186,6 +186,28 @@ func (j *Job) SetEnv(env []string) error {
 	return nil
 }
 
+// CwdBytes returns the job's working directory. Unlike ArgvBytes/
+// EnvBytes, this is populated even before SetCwd is ever called — job
+// creation defaults j.cwd to 9sh's own process cwd (a best-effort
+// placeholder, see New's doc comment), and SetCwd (a kyu `cd(...)`
+// reaching the job protocol's "cwd" file before `ctl start`) overwrites
+// that default rather than leaving it unset.
+func (j *Job) CwdBytes() []byte {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return []byte(j.cwd)
+}
+
+func (j *Job) SetCwd(cwd string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.state != StatePending {
+		return fmt.Errorf("job %d: cannot set cwd: already %s", j.ID, j.state)
+	}
+	j.cwd = cwd
+	return nil
+}
+
 func (j *Job) writeStdin(p []byte) (int, error) {
 	j.mu.Lock()
 	w := j.stdinW
@@ -310,12 +332,14 @@ func (j *Job) startSubprocess(ctx context.Context) error {
 	j.mu.Lock()
 	argv := append([]string(nil), j.argv...)
 	env := append([]string(nil), j.env...)
+	cwd := j.cwd
 	j.mu.Unlock()
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	if len(env) > 0 {
 		cmd.Env = env
 	}
+	cmd.Dir = cwd
 	cmd.Stdin = j.stdinR
 	cmd.Stdout = j.stdout
 	cmd.Stderr = j.stderr

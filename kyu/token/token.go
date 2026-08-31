@@ -57,15 +57,21 @@ const (
 	IF
 	ELSE
 	BIND // reserved for Phase 3, lexed now so later phases need no lexer changes
+	WHILE
+	BREAK
+	CONTINUE
 )
 
 var keywords = map[string]Kind{
-	"true":  TRUE,
-	"false": FALSE,
-	"null":  NULL,
-	"if":    IF,
-	"else":  ELSE,
-	"bind":  BIND,
+	"true":     TRUE,
+	"false":    FALSE,
+	"null":     NULL,
+	"if":       IF,
+	"else":     ELSE,
+	"bind":     BIND,
+	"while":    WHILE,
+	"break":    BREAK,
+	"continue": CONTINUE,
 }
 
 // LookupIdent returns the keyword Kind for ident, or IDENT if it is not a keyword.
@@ -179,6 +185,12 @@ func (k Kind) String() string {
 		return "else"
 	case BIND:
 		return "bind"
+	case WHILE:
+		return "while"
+	case BREAK:
+		return "break"
+	case CONTINUE:
+		return "continue"
 	default:
 		return "UNKNOWN"
 	}

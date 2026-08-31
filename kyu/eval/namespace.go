@@ -538,3 +538,58 @@ func jsonToKyu(v any) value.Value {
 		return value.Null{}
 	}
 }
+
+// kyuToJSON converts a kyu Value into a JSON-marshalable Go value — the
+// reverse of jsonToKyu, for to_json(). A Record's field order is not
+// preserved (Go's encoding/json sorts map keys when marshaling a
+// map[string]any) — the same accepted simplification jsonToKyu's own
+// decode direction already makes for the opposite case, not a new one.
+// A live-backed field is read via Get (so to_json(jobRecord) reflects
+// current status, argv, etc.), the same as printing or explicit field
+// access already does. Kinds with no natural JSON representation
+// (ErrorVal, Ref, NSUnion, MountHandle) are a reported error, not a
+// silent null.
+func kyuToJSON(v value.Value) (any, error) {
+	switch x := v.(type) {
+	case value.Null:
+		return nil, nil
+	case value.Bool:
+		return bool(x), nil
+	case value.Int:
+		return int64(x), nil
+	case value.Float:
+		return float64(x), nil
+	case value.String:
+		return string(x), nil
+	case value.Bytes:
+		return []byte(x), nil // encoding/json base64-encodes a []byte automatically
+	case value.Path:
+		return string(x), nil
+	case value.Duration:
+		return x.String(), nil
+	case *value.Record:
+		keys := x.Keys()
+		out := make(map[string]any, len(keys))
+		for _, k := range keys {
+			fv, _ := x.Get(k)
+			jv, err := kyuToJSON(fv)
+			if err != nil {
+				return nil, fmt.Errorf("field %q: %w", k, err)
+			}
+			out[k] = jv
+		}
+		return out, nil
+	case *value.List:
+		out := make([]any, len(x.Elems))
+		for i, e := range x.Elems {
+			jv, err := kyuToJSON(e)
+			if err != nil {
+				return nil, fmt.Errorf("element %d: %w", i, err)
+			}
+			out[i] = jv
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("cannot convert a %s to JSON", v.Kind())
+	}
+}

@@ -48,6 +48,22 @@ once a first tagged release is cut.
   only for now; the pane multiplexer's kyu REPL pane needs asynchronous
   evaluation first (a separate, larger change) before an interrupt
   affordance can work safely there.
+- New data-pipeline builtins: `last`/`skip`/`reverse`/`uniq`/`flatten`,
+  `sum`/`min`/`max`/`avg`, `any`/`all`, `to_json`/`from_json`, and
+  string ops `split`/`trim`/`replace`/`contains`/`join`. All follow the
+  existing "explicit args..., then the input" pipe-stage convention
+  (`where`/`select`/`take`/...); `sum`/`avg` promote `Int`->`Float`
+  using the same rule kyu's own `+` already does, not a separate
+  numeric-coercion path. `to_json`/`from_json` reuse and add to the
+  JSON<->kyu-value conversion already used internally for job status
+  decoding.
+- `glob(pattern)` — namespace-native, not `filepath.Glob` against the
+  real OS filesystem, matching how `cd`/`/env` also avoid raw-OS
+  operations in favor of the namespace itself (most of it, like `/jobs`
+  or a remote mount, has no corresponding OS path at all to search).
+  Single-directory matching only (no recursive `**`), always an
+  explicit namespace path — kyu has no "current namespace directory"
+  concept to resolve a bare `*.go` against.
 
 ### Fixed
 

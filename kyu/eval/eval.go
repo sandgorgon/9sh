@@ -46,6 +46,11 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("unsetenv", &Builtin{Name: "unsetenv", Fn: func(args []value.Value) (value.Value, error) {
 		return biUnsetenv(env, args)
 	}})
+	// glob needs the calling Env's namespace — same closure-capture
+	// shape as cd/checkout above. See glob.go's biGlob doc comment.
+	env.Define("glob", &Builtin{Name: "glob", Fn: func(args []value.Value) (value.Value, error) {
+		return biGlob(env, args)
+	}})
 	return env
 }
 

@@ -311,6 +311,158 @@ t | take(2)`
 	}
 }
 
+func TestLast(t *testing.T) {
+	if v := run(t, `[10, 20, 30] | last`); v.(value.Int) != 30 {
+		t.Errorf("got %v, want 30", v)
+	}
+	if v := run(t, `[] | last`); v.Kind() != "null" {
+		t.Errorf("got %v, want null", v)
+	}
+}
+
+func TestSkip(t *testing.T) {
+	v := run(t, `[1, 2, 3, 4, 5] | skip(2)`)
+	elems := v.(*value.List).Elems
+	if len(elems) != 3 || elems[0].(value.Int) != 3 {
+		t.Errorf("got %v, want [3, 4, 5]", v)
+	}
+}
+
+func TestReverse(t *testing.T) {
+	v := run(t, `[1, 2, 3] | reverse`)
+	elems := v.(*value.List).Elems
+	if len(elems) != 3 || elems[0].(value.Int) != 3 || elems[2].(value.Int) != 1 {
+		t.Errorf("got %v, want [3, 2, 1]", v)
+	}
+}
+
+func TestUniq(t *testing.T) {
+	v := run(t, `[1, 2, 2, 3, 1, 1] | uniq`)
+	elems := v.(*value.List).Elems
+	if len(elems) != 3 {
+		t.Fatalf("got %v, want 3 unique elements", v)
+	}
+	want := []int64{1, 2, 3}
+	for i, w := range want {
+		if int64(elems[i].(value.Int)) != w {
+			t.Errorf("elem %d = %v, want %d (first-occurrence order)", i, elems[i], w)
+		}
+	}
+}
+
+func TestFlatten(t *testing.T) {
+	v := run(t, `[[1, 2], 3, [4, [5, 6]]] | flatten`)
+	elems := v.(*value.List).Elems
+	// one level only: [1,2] splices to 1,2; 3 passes through; [4,[5,6]]
+	// splices to 4,[5,6] -- the nested [5,6] stays a List, not further
+	// flattened. 5 top-level elements: 1, 2, 3, 4, [5,6].
+	if len(elems) != 5 {
+		t.Fatalf("got %d elements, want 5: %v", len(elems), v)
+	}
+	if _, ok := elems[4].(*value.List); !ok {
+		t.Errorf("last element should still be a nested List, got %T", elems[4])
+	}
+}
+
+func TestJoin(t *testing.T) {
+	if v := run(t, `["a", "b", "c"] | join(",")`); v.(value.String) != "a,b,c" {
+		t.Errorf("got %v, want a,b,c", v)
+	}
+	// join uses .String() on any element kind, not just strings
+	if v := run(t, `[1, 2, 3] | join("-")`); v.(value.String) != "1-2-3" {
+		t.Errorf("got %v, want 1-2-3", v)
+	}
+}
+
+func TestSumMinMaxAvg(t *testing.T) {
+	if v := run(t, `[1, 2, 3, 4] | sum`); v.(value.Int) != 10 {
+		t.Errorf("sum got %v, want 10", v)
+	}
+	if v := run(t, `[3, 1, 4, 1, 5] | min`); v.(value.Int) != 1 {
+		t.Errorf("min got %v, want 1", v)
+	}
+	if v := run(t, `[3, 1, 4, 1, 5] | max`); v.(value.Int) != 5 {
+		t.Errorf("max got %v, want 5", v)
+	}
+	if v := run(t, `[1, 2] | avg`); v.(value.Float) != 1.5 {
+		t.Errorf("avg got %v, want 1.5 (not integer-divided)", v)
+	}
+	runErr(t, `[] | avg`)
+	if v := run(t, `[] | min`); v.Kind() != "null" {
+		t.Errorf("min of empty = %v, want null", v)
+	}
+}
+
+func TestAnyAll(t *testing.T) {
+	if v := run(t, `[1, 2, 3] | any({ |x| x > 2 })`); v.(value.Bool) != true {
+		t.Errorf("any got %v, want true", v)
+	}
+	if v := run(t, `[1, 2, 3] | any({ |x| x > 5 })`); v.(value.Bool) != false {
+		t.Errorf("any got %v, want false", v)
+	}
+	if v := run(t, `[1, 2, 3] | all({ |x| x > 0 })`); v.(value.Bool) != true {
+		t.Errorf("all got %v, want true", v)
+	}
+	if v := run(t, `[1, 2, 3] | all({ |x| x > 1 })`); v.(value.Bool) != false {
+		t.Errorf("all got %v, want false", v)
+	}
+	// vacuously true for an empty list
+	if v := run(t, `[] | all({ |x| x > 0 })`); v.(value.Bool) != true {
+		t.Errorf("all of empty = %v, want true", v)
+	}
+}
+
+func TestToJSON(t *testing.T) {
+	v := run(t, `{name: "a", count: 3, ok: true} | to_json`)
+	s := string(v.(value.String))
+	if !strings.Contains(s, `"name":"a"`) || !strings.Contains(s, `"count":3`) {
+		t.Fatalf("to_json output = %q, missing expected fields", s)
+	}
+}
+
+func TestFromJSON(t *testing.T) {
+	v := run(t, `"{\"name\": \"a\", \"count\": 3, \"ok\": true}" | from_json`)
+	rec := v.(*value.Record)
+	if v, _ := rec.Get("name"); v.(value.String) != "a" {
+		t.Errorf("name = %v, want a", v)
+	}
+	if v, _ := rec.Get("count"); v.(value.Int) != 3 {
+		t.Errorf("count = %v, want 3", v)
+	}
+	if v, _ := rec.Get("ok"); v.(value.Bool) != true {
+		t.Errorf("ok = %v, want true", v)
+	}
+}
+
+func TestFromJSONBadInputIsErrorVal(t *testing.T) {
+	v := run(t, `"not json" | from_json`)
+	// invalid JSON's raw decode target is `any`, and "not json" isn't
+	// valid JSON at all, so json.Unmarshal itself fails -> ErrorVal.
+	if _, ok := v.(value.ErrorVal); !ok {
+		t.Fatalf("want ErrorVal, got %#v", v)
+	}
+}
+
+func TestSplitTrimReplaceContains(t *testing.T) {
+	v := run(t, `"a,b,c" | split(",")`)
+	elems := v.(*value.List).Elems
+	if len(elems) != 3 || elems[1].(value.String) != "b" {
+		t.Errorf("split got %v, want [a b c]", v)
+	}
+	if v := run(t, `"  hi  " | trim`); v.(value.String) != "hi" {
+		t.Errorf("trim got %q, want %q", v, "hi")
+	}
+	if v := run(t, `"hello world" | replace("world", "there")`); v.(value.String) != "hello there" {
+		t.Errorf("replace got %q, want %q", v, "hello there")
+	}
+	if v := run(t, `"hello world" | contains("wor")`); v.(value.Bool) != true {
+		t.Errorf("contains got %v, want true", v)
+	}
+	if v := run(t, `"hello world" | contains("xyz")`); v.(value.Bool) != false {
+		t.Errorf("contains got %v, want false", v)
+	}
+}
+
 func TestErrCheckAborts(t *testing.T) {
 	err := runErr(t, `error("boom")?`)
 	if err.Error() != "boom" {
@@ -795,6 +947,76 @@ func TestSetenvPathAffectsPassthroughResolution(t *testing.T) {
 func isErrorVal(v value.Value) bool {
 	_, ok := v.(value.ErrorVal)
 	return ok
+}
+
+// globEnv is a jobsEnv plus /testdir bound (dirfs) over a fresh scratch
+// directory -- for tests exercising glob(pattern).
+func globEnv(t *testing.T) (*Env, string) {
+	t.Helper()
+	env := jobsEnv(t)
+	dir := t.TempDir()
+	fs, err := dirfs.New(dir)
+	if err != nil {
+		t.Fatalf("dirfs.New: %v", err)
+	}
+	if err := env.Namespace().BindFS(fs, "", "/testdir", ns.Replace); err != nil {
+		t.Fatalf("bind /testdir: %v", err)
+	}
+	return env, dir
+}
+
+func TestGlobMatchesFiles(t *testing.T) {
+	env, dir := globEnv(t)
+	for _, name := range []string{"a.go", "b.go", "c.txt"} {
+		if err := os.WriteFile(dir+"/"+name, []byte("x"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	v := runEnv(t, `glob("/testdir/*.go")`, env)
+	lst, ok := v.(*value.List)
+	if !ok {
+		t.Fatalf("want List, got %#v", v)
+	}
+	if len(lst.Elems) != 2 {
+		t.Fatalf("got %d matches, want 2: %v", len(lst.Elems), v)
+	}
+	if lst.Elems[0].(value.Path) != "/testdir/a.go" || lst.Elems[1].(value.Path) != "/testdir/b.go" {
+		t.Errorf("got %v, want sorted [/testdir/a.go /testdir/b.go]", v)
+	}
+}
+
+func TestGlobNoMatchesReturnsEmptyList(t *testing.T) {
+	env, _ := globEnv(t)
+	v := runEnv(t, `glob("/testdir/*.nonexistent")`, env)
+	lst, ok := v.(*value.List)
+	if !ok || len(lst.Elems) != 0 {
+		t.Fatalf("want empty List, got %#v", v)
+	}
+}
+
+func TestGlobIsPipeable(t *testing.T) {
+	env, dir := globEnv(t)
+	for _, name := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(dir+"/"+name, []byte("x"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	v := runEnv(t, `glob("/testdir/*.go") | count`, env)
+	if v.(value.Int) != 2 {
+		t.Fatalf("got %v, want 2", v)
+	}
+}
+
+func TestGlobBadDirectoryIsErrorVal(t *testing.T) {
+	env := jobsEnv(t)
+	v := runEnv(t, `glob("/nonexistent-dir/*.go")`, env)
+	if !isErrorVal(v) {
+		t.Fatalf("want ErrorVal, got %#v", v)
+	}
+}
+
+func TestGlobWithoutNamespaceErrors(t *testing.T) {
+	runErr(t, `glob("/local/*.go")`)
 }
 
 // TestForegroundExternalCallInheritsProcessEnv above already locks in

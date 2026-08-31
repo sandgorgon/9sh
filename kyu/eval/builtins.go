@@ -2,10 +2,13 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
+	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/kyu/value"
 	"github.com/sandgorgon/9sh/remote"
 )
@@ -14,18 +17,36 @@ import (
 // evalPipeExpr) the piped-in value is appended as the final argument, so
 // each signature below reads as "explicit args..., then the input".
 var builtins = map[string]BuiltinFn{
-	"where":    biWhere,
-	"select":   biSelect,
-	"sort_by":  biSortBy,
-	"group_by": biGroupBy,
-	"each":     biEach,
-	"take":     biTake,
-	"first":    biFirst,
-	"count":    biCount,
-	"error":    biError,
-	"wait":     biWait,
-	"dial":     biDial,
-	"host":     biHost,
+	"where":     biWhere,
+	"select":    biSelect,
+	"sort_by":   biSortBy,
+	"group_by":  biGroupBy,
+	"each":      biEach,
+	"take":      biTake,
+	"first":     biFirst,
+	"count":     biCount,
+	"error":     biError,
+	"wait":      biWait,
+	"dial":      biDial,
+	"host":      biHost,
+	"last":      biLast,
+	"skip":      biSkip,
+	"reverse":   biReverse,
+	"uniq":      biUniq,
+	"flatten":   biFlatten,
+	"join":      biJoin,
+	"sum":       biSum,
+	"min":       biMin,
+	"max":       biMax,
+	"avg":       biAvg,
+	"any":       biAny,
+	"all":       biAll,
+	"to_json":   biToJSON,
+	"from_json": biFromJSON,
+	"split":     biSplit,
+	"trim":      biTrim,
+	"replace":   biReplace,
+	"contains":  biContains,
 }
 
 // biHost returns this machine's hostname — the design doc's own example
@@ -361,4 +382,376 @@ func biWait(args []value.Value) (value.Value, error) {
 		return nil, fmt.Errorf("wait: record has no \"wait\" field")
 	}
 	return v, nil
+}
+
+func biLast(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "last")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("last: expected no arguments besides input, got %d", len(rest))
+	}
+	if len(lst.Elems) == 0 {
+		return value.Null{}, nil
+	}
+	return lst.Elems[len(lst.Elems)-1], nil
+}
+
+func biSkip(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "skip")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("skip: expected 1 count argument, got %d", len(rest))
+	}
+	n, ok := rest[0].(value.Int)
+	if !ok {
+		return nil, fmt.Errorf("skip: count argument must be an int, got %s", rest[0].Kind())
+	}
+	if n < 0 {
+		return nil, fmt.Errorf("skip: count must be >= 0, got %d", n)
+	}
+	start := min(int(n), len(lst.Elems))
+	out := append([]value.Value(nil), lst.Elems[start:]...)
+	return value.NewList(out), nil
+}
+
+func biReverse(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "reverse")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("reverse: expected no arguments besides input, got %d", len(rest))
+	}
+	out := make([]value.Value, len(lst.Elems))
+	for i, e := range lst.Elems {
+		out[len(out)-1-i] = e
+	}
+	return value.NewList(out), nil
+}
+
+// biUniq drops duplicates (value.Equal), keeping first-occurrence order
+// — O(n²), the same style group_by already uses for its own key
+// deduplication, not a new complexity tradeoff.
+func biUniq(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "uniq")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("uniq: expected no arguments besides input, got %d", len(rest))
+	}
+	var out []value.Value
+	for _, e := range lst.Elems {
+		dup := false
+		for _, seen := range out {
+			if value.Equal(seen, e) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, e)
+		}
+	}
+	return value.NewList(out), nil
+}
+
+// biFlatten splices one level of nested Lists into the outer list;
+// anything else passes through unchanged. Not recursive — a List
+// nested two levels deep still comes out one level deep, matching a
+// typical shell's "flatten" rather than a full deep-flatten.
+func biFlatten(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "flatten")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("flatten: expected no arguments besides input, got %d", len(rest))
+	}
+	var out []value.Value
+	for _, e := range lst.Elems {
+		if inner, ok := e.(*value.List); ok {
+			out = append(out, inner.Elems...)
+		} else {
+			out = append(out, e)
+		}
+	}
+	return value.NewList(out), nil
+}
+
+// biJoin stringifies every element via .String() rather than requiring
+// value.String specifically — a list of Path/Int/whatever is just as
+// joinable as a list of strings, matching how renderForExternal already
+// leans on .String() broadly elsewhere in this package.
+func biJoin(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "join")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("join: expected 1 separator argument, got %d", len(rest))
+	}
+	sep, ok := rest[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("join: separator argument must be a string, got %s", rest[0].Kind())
+	}
+	parts := make([]string, len(lst.Elems))
+	for i, e := range lst.Elems {
+		parts[i] = e.String()
+	}
+	return value.String(strings.Join(parts, string(sep))), nil
+}
+
+// biSum folds evalArith(PLUS, ...) over the list, so it promotes
+// Int->Float exactly the way kyu's own `+` operator already does — not
+// a separate numeric-coercion rule invented just for sum/avg.
+func biSum(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "sum")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("sum: expected no arguments besides input, got %d", len(rest))
+	}
+	var acc value.Value = value.Int(0)
+	for i, e := range lst.Elems {
+		acc, err = evalArith(token.PLUS, acc, e)
+		if err != nil {
+			return nil, fmt.Errorf("sum: element %d: %w", i, err)
+		}
+	}
+	return acc, nil
+}
+
+func biMin(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "min")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("min: expected no arguments besides input, got %d", len(rest))
+	}
+	if len(lst.Elems) == 0 {
+		return value.Null{}, nil
+	}
+	best := lst.Elems[0]
+	for _, e := range lst.Elems[1:] {
+		c, err := value.Compare(e, best)
+		if err != nil {
+			return nil, fmt.Errorf("min: %w", err)
+		}
+		if c < 0 {
+			best = e
+		}
+	}
+	return best, nil
+}
+
+func biMax(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "max")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("max: expected no arguments besides input, got %d", len(rest))
+	}
+	if len(lst.Elems) == 0 {
+		return value.Null{}, nil
+	}
+	best := lst.Elems[0]
+	for _, e := range lst.Elems[1:] {
+		c, err := value.Compare(e, best)
+		if err != nil {
+			return nil, fmt.Errorf("max: %w", err)
+		}
+		if c > 0 {
+			best = e
+		}
+	}
+	return best, nil
+}
+
+// biAvg always returns a Float, even for an all-Int list (1+2)/2 should
+// be 1.5, not 1 via integer division) — errors on an empty list rather
+// than silently returning 0, which could be mistaken for a real average.
+func biAvg(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "avg")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("avg: expected no arguments besides input, got %d", len(rest))
+	}
+	if len(lst.Elems) == 0 {
+		return nil, fmt.Errorf("avg: empty list")
+	}
+	var acc value.Value = value.Int(0)
+	for i, e := range lst.Elems {
+		acc, err = evalArith(token.PLUS, acc, e)
+		if err != nil {
+			return nil, fmt.Errorf("avg: element %d: %w", i, err)
+		}
+	}
+	sum, ok := toFloat(acc)
+	if !ok {
+		return nil, fmt.Errorf("avg: cannot convert sum to float")
+	}
+	return value.Float(sum / float64(len(lst.Elems))), nil
+}
+
+func biAny(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "any")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("any: expected 1 predicate argument, got %d", len(rest))
+	}
+	pred := rest[0]
+	for _, row := range lst.Elems {
+		res, err := call(pred, []value.Value{row})
+		if err != nil {
+			return nil, err
+		}
+		if value.Truthy(res) {
+			return value.Bool(true), nil
+		}
+	}
+	return value.Bool(false), nil
+}
+
+// biAll is vacuously true for an empty list, the standard convention
+// (there's no element that fails the predicate).
+func biAll(args []value.Value) (value.Value, error) {
+	lst, rest, err := lastAsList(args, "all")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("all: expected 1 predicate argument, got %d", len(rest))
+	}
+	pred := rest[0]
+	for _, row := range lst.Elems {
+		res, err := call(pred, []value.Value{row})
+		if err != nil {
+			return nil, err
+		}
+		if !value.Truthy(res) {
+			return value.Bool(false), nil
+		}
+	}
+	return value.Bool(true), nil
+}
+
+func biToJSON(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("to_json: expected exactly 1 argument, got %d", len(args))
+	}
+	j, err := kyuToJSON(args[0])
+	if err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("to_json: %v", err)}, nil
+	}
+	b, err := json.Marshal(j)
+	if err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("to_json: %v", err)}, nil
+	}
+	return value.String(b), nil
+}
+
+func biFromJSON(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("from_json: expected exactly 1 argument, got %d", len(args))
+	}
+	s, ok := args[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("from_json: expected a string, got %s", args[0].Kind())
+	}
+	var raw any
+	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("from_json: %v", err)}, nil
+	}
+	return jsonToKyu(raw), nil
+}
+
+// lastAsString mirrors lastAsList, for the string builtins below.
+func lastAsString(args []value.Value, fnName string) (value.String, []value.Value, error) {
+	if len(args) == 0 {
+		return "", nil, fmt.Errorf("%s: missing input", fnName)
+	}
+	input := args[len(args)-1]
+	rest := args[:len(args)-1]
+	s, ok := input.(value.String)
+	if !ok {
+		return "", nil, fmt.Errorf("%s: expected a string input, got %s", fnName, input.Kind())
+	}
+	return s, rest, nil
+}
+
+func biSplit(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "split")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("split: expected 1 separator argument, got %d", len(rest))
+	}
+	sep, ok := rest[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("split: separator argument must be a string, got %s", rest[0].Kind())
+	}
+	parts := strings.Split(string(s), string(sep))
+	out := make([]value.Value, len(parts))
+	for i, p := range parts {
+		out[i] = value.String(p)
+	}
+	return value.NewList(out), nil
+}
+
+func biTrim(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "trim")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("trim: expected no arguments besides input, got %d", len(rest))
+	}
+	return value.String(strings.TrimSpace(string(s))), nil
+}
+
+func biReplace(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "replace")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 2 {
+		return nil, fmt.Errorf("replace: expected 2 arguments (old, new), got %d", len(rest))
+	}
+	oldS, ok := rest[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("replace: old argument must be a string, got %s", rest[0].Kind())
+	}
+	newS, ok := rest[1].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("replace: new argument must be a string, got %s", rest[1].Kind())
+	}
+	return value.String(strings.ReplaceAll(string(s), string(oldS), string(newS))), nil
+}
+
+func biContains(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "contains")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("contains: expected 1 needle argument, got %d", len(rest))
+	}
+	needle, ok := rest[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("contains: needle argument must be a string, got %s", rest[0].Kind())
+	}
+	return value.Bool(strings.Contains(string(s), string(needle))), nil
 }

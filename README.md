@@ -88,6 +88,17 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   to see what's there. `setenv("PATH", ...)` genuinely changes which
   binary `%cmd`/`$cmd` resolve, not just what a subprocess sees about
   its own environment.
+- Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
+  `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
+  `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
+  `trim`/`replace`/`contains`/`join`.
+- `glob(pattern)` — e.g. `glob("/local/*.go")` — matches namespace
+  entries, not real OS paths (most of the namespace, like `/jobs` or a
+  remote `/n/host` mount, has no OS path at all). Returns a `List` of
+  `Path`, pipeable like anything else: `glob("/local/*.go") | count`.
+  Single directory only, no recursive `**`, and always an explicit
+  path — kyu has no notion of a "current namespace directory" (`cd`'s
+  cwd is a separate, OS-path-only concept, just for subprocesses).
 
 Run a job on another 9sh, over mutual TLS, with no separate remote-job
 protocol:

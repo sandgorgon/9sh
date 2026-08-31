@@ -13,11 +13,12 @@ import (
 // way every other language keeps one thing (here, "what /jobs resolves
 // to") outside the scope-per-block model that vars/Define/Set exist for.
 type Env struct {
-	vars          map[string]value.Value
-	parent        *Env
-	ns            *ns.Namespace
-	jobRoot       []string          // nil = inherit from parent; see JobRoot
-	proxyRecorder ProxyRecorderFunc // process-wide, like ns; see ProxyRecorder
+	vars               map[string]value.Value
+	parent             *Env
+	ns                 *ns.Namespace
+	jobRoot            []string          // nil = inherit from parent; see JobRoot
+	proxyRecorder      ProxyRecorderFunc // process-wide, like ns; see ProxyRecorder
+	passthroughBlocked string            // process-wide, like ns; see SetPassthroughBlocked
 }
 
 // ProxyRecorderFunc is called once a job created via `@host{}` (a "proxy"
@@ -62,6 +63,31 @@ func (e *Env) SetProxyRecorder(fn ProxyRecorderFunc) {
 // ProxyRecorder returns the hook set by SetProxyRecorder, or nil.
 func (e *Env) ProxyRecorder() ProxyRecorderFunc {
 	return e.root().proxyRecorder
+}
+
+// SetPassthroughBlocked makes every $cmd (ast.PassthroughStmt) evaluation
+// fail with reason instead of running, process-wide like the namespace
+// and proxy recorder. cmd/9sh's runTUI calls this before starting the
+// pane multiplexer: $cmd connects a subprocess directly to this
+// process's own stdin/stdout/stderr (see evalPassthroughStmt), which the
+// TUI can't support safely — tui.App.Run puts the terminal in raw mode
+// and the alt screen for its entire session and runs a background
+// goroutine that keeps reading os.Stdin for its own input decoding the
+// whole time, so a subprocess sharing that fd would race it for every
+// keystroke rather than receiving them reliably, on top of writing into
+// a screen buffer the TUI still thinks it owns. The plain line REPL
+// (cmd/9sh's repl(), reached via -repl or non-terminal stdin) has
+// neither hazard — a bare bufio.Scanner loop, no raw mode, nothing else
+// ever reads stdin — so it never calls this and $cmd runs there
+// unmodified. "" (the default) means $cmd is allowed.
+func (e *Env) SetPassthroughBlocked(reason string) {
+	e.root().passthroughBlocked = reason
+}
+
+// PassthroughBlocked returns the reason set by SetPassthroughBlocked, or
+// "" if $cmd is allowed to run normally.
+func (e *Env) PassthroughBlocked() string {
+	return e.root().passthroughBlocked
 }
 
 // JobRoot returns the namespace path prefix job creation should use —

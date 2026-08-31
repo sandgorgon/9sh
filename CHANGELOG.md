@@ -8,6 +8,33 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- New `$cmd` syntax: runs an external command connected directly to the
+  real terminal's stdin/stdout/stderr, with no job created and no output
+  capture — for programs `%cmd` structurally can't support because it's
+  always job-tracked (a job's streams are in-memory buffers, never a
+  real TTY), like `vim`, `ssh`, or another interactive REPL. A dedicated
+  statement (not an expression), so it can't appear inside a pipe or as
+  a call argument. Available in the plain REPL (`-repl`) and scripts;
+  refused with a clear error inside the pane multiplexer's kyu REPL
+  pane, where it would race the TUI's own raw-mode stdin reader for
+  every keystroke — use a shell pane (`+ shell`) there instead.
+
+### Fixed
+
+- Job records now back `stdout`/`stderr` as live, read-only fields
+  (alongside the existing `status`/`wait`/`ctl`/`argv`/`env`), so
+  `(%cmd &) | wait` gives access to both streams the same way a
+  foreground `%cmd` already returns stdout.
+- A bare foreground `%cmd`'s stderr is no longer silently dropped — it's
+  now read back from the job and forwarded to 9sh's own stderr, the
+  same as a direct-exec (no-namespace) `%cmd` already did.
+- The REPL (both `-repl` and the TUI kyu pane) now prints a `%cmd`
+  result's actual output instead of the `<N bytes>` summary used
+  elsewhere — a bare `%cmd` at the prompt is exactly the case where real
+  output is wanted.
+
 ## [0.3.1] - 2026-08-30
 
 ### Added

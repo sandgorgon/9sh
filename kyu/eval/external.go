@@ -230,6 +230,10 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 // $cmd's whole purpose is streaming directly to the real terminal, not
 // producing something later kyu code could inspect.
 func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error) {
+	if reason := env.PassthroughBlocked(); reason != "" {
+		return value.ErrorVal{Msg: fmt.Sprintf("$%s: %s", st.Name, reason)}, nil
+	}
+
 	args := make([]string, len(st.Args))
 	for i, a := range st.Args {
 		v, err := evalExpr(a, env)

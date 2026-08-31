@@ -68,6 +68,15 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 - `|` is a structured pipe by default (`where`/`select`/`sort_by`/
   `group_by`/`each`/...), not raw bytes — `%` is the sigil that marks
   "this call is bytes, not structured data."
+- `$cmd` runs a command connected directly to this terminal — for
+  anything `%cmd` structurally can't support because it's job-tracked
+  (`vim`, `ssh`, another REPL: programs that need a live TTY, not a
+  buffer read back after the fact). No job, no captured value, and it
+  can't appear inside a pipe. Only available in the plain REPL (`-repl`)
+  or a script — the pane multiplexer already has its own answer for a
+  live terminal (a shell pane, `+ shell`), and `$cmd` there would race
+  the multiplexer for the terminal itself, so it's refused with a clear
+  error instead.
 
 Run a job on another 9sh, over mutual TLS, with no separate remote-job
 protocol:

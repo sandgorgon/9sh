@@ -230,6 +230,14 @@ const (
 // bootstrapSession for what "" versus a real-but-recorder-less dir
 // means here.
 func runTUI(env *eval.Env, sessionDir string) error {
+	// $cmd (kyu's real-TTY passthrough, ast.PassthroughStmt) would race
+	// tui.App.Run's own raw-mode stdin reader for every keystroke and
+	// write into a screen buffer the TUI still thinks it owns -- see
+	// Env.SetPassthroughBlocked's doc comment. Every kyu-repl pane this
+	// session creates (including ones opened later via split) shares
+	// this same root env, so one call here covers all of them.
+	env.SetPassthroughBlocked("not supported inside the TUI pane (would corrupt terminal input/output) — open a Shell pane instead, or run this from 9sh's plain REPL (-repl) or a script")
+
 	m := pane.New(env, sessionDir, pane.KyuReplSpec("kyu", env))
 	app := tui.NewApp(m, 80, 24) // Run resizes to the real terminal size on start
 	defer app.Close()

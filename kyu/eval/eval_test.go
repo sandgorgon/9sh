@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/sandgorgon/9sh/job"
@@ -297,6 +298,24 @@ func TestPassthroughInheritsRealStdio(t *testing.T) {
 	}
 	if len(mgr.List()) != 0 {
 		t.Fatalf("$cmd must not create a job, got %d", len(mgr.List()))
+	}
+}
+
+// TestPassthroughBlockedByEnv locks in cmd/9sh's TUI guard: SetPassthroughBlocked
+// makes $cmd fail with an ErrorVal instead of touching os.Stdin/Stdout/
+// Stderr at all -- see Env.SetPassthroughBlocked's doc comment for why
+// the TUI needs this (a real subprocess sharing the terminal would race
+// tui.App.Run's own raw-mode stdin reader).
+func TestPassthroughBlockedByEnv(t *testing.T) {
+	env := jobsEnv(t)
+	env.SetPassthroughBlocked("not supported here")
+	v := runEnv(t, `$echo "should not run"`, env)
+	ev, ok := v.(value.ErrorVal)
+	if !ok {
+		t.Fatalf("want ErrorVal, got %#v", v)
+	}
+	if !strings.Contains(ev.Msg, "not supported here") {
+		t.Fatalf("error = %q, want it to mention the blocked reason", ev.Msg)
 	}
 }
 

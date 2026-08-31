@@ -15,6 +15,7 @@ import (
 
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/value"
+	"github.com/sandgorgon/9sh/pathresolve"
 )
 
 // runExternal evaluates a `%cmd arg...` external/legacy-binary call. in is
@@ -315,6 +316,22 @@ func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error)
 	cmd := exec.Command(st.Name, args...)
 	cmd.Dir = env.Cwd() // "" leaves it unset, os/exec's own "inherit" default
 	cmd.Env = envVars   // nil (no /env bound) leaves it unset too, same default
+	// exec.Command already resolved st.Name against 9sh's own real PATH
+	// above (cmd.Path) -- irrelevant if envVars carries its own PATH
+	// (kyu's setenv, via /env), which the cmd.Env assignment just above
+	// never affects since Go only consults PATH at construction time.
+	// Re-resolve using envVars's PATH instead (falls back to the real
+	// exec.LookPath when there's no PATH entry in envVars, so this is a
+	// no-op when there's nothing to override), and clear any stale
+	// lookup failure from the first attempt — Start() otherwise returns
+	// that unconditionally before ever using cmd.Path. See package
+	// pathresolve's doc comment.
+	if resolved, err := pathresolve.LookPath(st.Name, envVars); err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("$%s: %v", st.Name, err)}, nil
+	} else {
+		cmd.Path = resolved
+		cmd.Err = nil
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

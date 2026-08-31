@@ -18,6 +18,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/sandgorgon/9sh/pathresolve"
 )
 
 type State string
@@ -338,6 +340,23 @@ func (j *Job) startSubprocess(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	if len(env) > 0 {
 		cmd.Env = env
+	}
+	// exec.CommandContext already resolved argv[0] against *this
+	// process's* own PATH above (cmd.Path) -- irrelevant if env carries
+	// its own PATH override (kyu's setenv, via /env), which a bare
+	// Cmd.Env assignment never affects since Go only consults PATH at
+	// construction time. Re-resolve using env's PATH instead (falling
+	// back to the real exec.LookPath when env has no PATH entry, so
+	// this is a no-op when there's nothing to override) and clear any
+	// stale lookup failure from the first attempt, which Start()
+	// otherwise returns unconditionally before ever using cmd.Path. See
+	// package pathresolve's doc comment.
+	if resolved, err := pathresolve.LookPath(argv[0], env); err != nil {
+		j.finish(StateFailed, nil, "", err.Error())
+		return nil // the failure is job status, not a ctl-command error — matches cmd.Start()'s own failure handling below
+	} else {
+		cmd.Path = resolved
+		cmd.Err = nil
 	}
 	cmd.Dir = cwd
 	cmd.Stdin = j.stdinR

@@ -35,7 +35,12 @@ once a first tagged release is cut.
   own convention — env vars as real, bind-able, browsable files, seeded
   from 9sh's own process environment at startup) rather than hidden
   shell state. `%cmd`/`%cmd &`/`$cmd` subprocesses all see the current
-  `/env` contents, not just an inherited snapshot.
+  `/env` contents, not just an inherited snapshot — including
+  `setenv("PATH", ...)`, which actually changes which binary gets
+  resolved (a new `pathresolve` package, since Go's own command lookup
+  otherwise always uses 9sh's own real `PATH`, before any per-command
+  environment override is applied), not just what a child process sees
+  about its own environment.
 - `-repl`'s Ctrl-C now interrupts the currently running `%cmd`/`$cmd`
   (a real `SIGINT`, same as a normal shell) instead of killing the whole
   9sh process — previously there was no signal handling at all, so

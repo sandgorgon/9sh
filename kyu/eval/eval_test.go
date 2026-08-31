@@ -716,6 +716,87 @@ func TestSetenvAffectsPassthrough(t *testing.T) {
 	}
 }
 
+// writeProbeScript creates a tiny executable shell script named
+// "probe-tool" in dir, printing marker to stdout -- a command that
+// exists ONLY in dir, nowhere on this test process's own real PATH, so
+// finding it at all proves setenv("PATH", ...) actually changed command
+// *resolution*, not just what a child sees about its own environment
+// (the gap pathresolve.LookPath exists to close -- see its doc comment).
+func writeProbeScript(t *testing.T, dir, marker string) {
+	t.Helper()
+	path := dir + "/probe-tool"
+	script := "#!/bin/sh\necho -n " + marker + "\n"
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestSetenvPathAffectsForegroundCommandResolution(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	dir := t.TempDir()
+	writeProbeScript(t, dir, "found-it")
+	env := jobsAndEnvVarsEnv(t)
+
+	// Without the override, the tool genuinely can't be found -- proves
+	// the later success isn't a coincidence of it already being on this
+	// test process's real PATH.
+	if v := runEnv(t, `%probe-tool`, env); !isErrorVal(v) {
+		t.Fatalf("expected ErrorVal before setenv(PATH), got %#v", v)
+	}
+
+	runEnv(t, `setenv("PATH", "`+dir+`")`, env)
+	v := runEnv(t, `%probe-tool`, env)
+	if string(v.(value.Bytes)) != "found-it" {
+		t.Fatalf("stdout = %q, want %q", v, "found-it")
+	}
+}
+
+func TestSetenvPathAffectsBackgroundJobResolution(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	dir := t.TempDir()
+	writeProbeScript(t, dir, "found-it-bg")
+	env := jobsAndEnvVarsEnv(t)
+	runEnv(t, `setenv("PATH", "`+dir+`")`, env)
+
+	v := runEnv(t, `j := %probe-tool &
+j | wait
+j.stdout`, env)
+	if string(v.(value.Bytes)) != "found-it-bg" {
+		t.Fatalf("stdout = %q, want %q", v, "found-it-bg")
+	}
+}
+
+func TestSetenvPathAffectsPassthroughResolution(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	dir := t.TempDir()
+	writeProbeScript(t, dir, "found-it-dollar")
+	env := jobsAndEnvVarsEnv(t)
+	runEnv(t, `setenv("PATH", "`+dir+`")`, env)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+	runEnv(t, `$probe-tool`, env)
+	os.Stdout = origStdout
+	w.Close()
+
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stdout: %v", err)
+	}
+	if string(captured) != "found-it-dollar" {
+		t.Fatalf("stdout = %q, want %q", captured, "found-it-dollar")
+	}
+}
+
+func isErrorVal(v value.Value) bool {
+	_, ok := v.(value.ErrorVal)
+	return ok
+}
+
 // TestForegroundExternalCallInheritsProcessEnv above already locks in
 // that a job without /env bound (jobsEnv, not jobsAndEnvVarsEnv) still
 // inherits this test process's own environment unchanged — envSlice

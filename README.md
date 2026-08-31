@@ -85,7 +85,9 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 - `getenv(name)`/`setenv(name, value)`/`unsetenv(name)` read and write
   real files under `/env` — Plan 9's own convention (environment
   variables *are* namespace files), not hidden shell state. `%ls /env`
-  to see what's there.
+  to see what's there. `setenv("PATH", ...)` genuinely changes which
+  binary `%cmd`/`$cmd` resolve, not just what a subprocess sees about
+  its own environment.
 
 Run a job on another 9sh, over mutual TLS, with no separate remote-job
 protocol:

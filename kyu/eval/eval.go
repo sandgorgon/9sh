@@ -64,6 +64,8 @@ func evalStmt(s ast.Stmt, env *Env) (value.Value, error) {
 		return evalAssign(st, env)
 	case *ast.BindStmt:
 		return evalBindStmt(st, env)
+	case *ast.PassthroughStmt:
+		return evalPassthroughStmt(st, env)
 	default:
 		return nil, fmt.Errorf("eval: unknown statement type %T", s)
 	}

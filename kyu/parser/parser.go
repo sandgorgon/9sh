@@ -89,6 +89,9 @@ func (p *Parser) parseStmt() ast.Stmt {
 	if p.cur.Kind == token.BIND {
 		return p.parseBindStmt()
 	}
+	if p.cur.Kind == token.DOLLAR {
+		return p.parsePassthroughStmt()
+	}
 	if p.cur.Kind == token.IDENT && p.peek.Kind == token.DEFINE {
 		return p.parseDefineStmt()
 	}
@@ -531,6 +534,35 @@ func (p *Parser) parseExternalCall() ast.Expr {
 			return nil
 		}
 		call.Args = append(call.Args, arg)
+	}
+	return call
+}
+
+// parsePassthroughStmt parses `$cmd arg1 arg2 ...` — see
+// ast.PassthroughStmt's doc comment for why this is a Stmt, not an Expr
+// (and thus never reached from parsePrimary/parseExpr). Argument parsing
+// mirrors parseExternalCall exactly, including reuse of
+// endsExternalCallArgs for the same argument/statement boundary.
+func (p *Parser) parsePassthroughStmt() ast.Stmt {
+	tok := p.cur
+	p.next() // consume '$'
+	if p.cur.Kind != token.IDENT {
+		p.errorf("expected command name after '$', got %s", p.cur.Kind)
+		return nil
+	}
+	name := p.cur.Literal
+	call := &ast.PassthroughStmt{Tok: tok, Name: name}
+	for !endsExternalCallArgs(p.peek.Kind) {
+		p.next()
+		arg := p.parsePrefix()
+		if arg == nil {
+			return nil
+		}
+		call.Args = append(call.Args, arg)
+	}
+	if p.peek.Kind == token.AMP {
+		p.errorf("'&' is not supported on $cmd — it already runs directly against the terminal, not through /jobs")
+		return nil
 	}
 	return call
 }

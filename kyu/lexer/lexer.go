@@ -87,7 +87,7 @@ func (l *Lexer) Next() token.Token {
 	switch {
 	case isDigit(r):
 		return l.lexNumber(line, col)
-	case isLetter(r) && l.lastKind == token.PERCENT:
+	case isLetter(r) && (l.lastKind == token.PERCENT || l.lastKind == token.DOLLAR):
 		return l.lexExternalName(line, col)
 	case isLetter(r):
 		return l.lexIdent(line, col)
@@ -122,6 +122,10 @@ func (l *Lexer) Next() token.Token {
 			return l.emitAt(token.PERCENT, "%", line, col)
 		}
 		return l.emitAt(token.MOD, "%", line, col)
+	case '$':
+		// unlike '%', '$' has no competing infix meaning to disambiguate
+		// from — it's always the passthrough-command sigil.
+		return l.emitAt(token.DOLLAR, "$", line, col)
 	case '+':
 		return l.emitAt(token.PLUS, "+", line, col)
 	case '-':

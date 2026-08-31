@@ -19,6 +19,7 @@ const (
 	DEFINE   // :=
 	PIPE     // |
 	PERCENT  // %  (external/legacy command sigil, only valid immediately before an IDENT)
+	DOLLAR   // $  (raw-passthrough command sigil, only valid immediately before an IDENT)
 	PLUS     // +
 	MINUS    // -
 	STAR     // *
@@ -108,6 +109,8 @@ func (k Kind) String() string {
 		return "|"
 	case PERCENT:
 		return "%"
+	case DOLLAR:
+		return "$"
 	case PLUS:
 		return "+"
 	case MINUS:

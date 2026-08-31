@@ -212,6 +212,48 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 	return value.Bytes(out), nil
 }
 
+// evalPassthroughStmt runs `$cmd arg...` (ast.PassthroughStmt): unlike
+// runExternal/runExternalDirect/runExternalViaJob, it never touches
+// /jobs at all — no job record, no growBuf capture, no session history
+// — and connects the subprocess directly to 9sh's own stdin/stdout/
+// stderr. That's the whole point: a job's streams are in-memory buffers
+// (job.go) that only exist for the caller to read back after the fact,
+// which can't support a program that needs a live TTY (vim, ssh, a
+// REPL) or output that must appear as it happens rather than after the
+// job finishes. Args are evaluated exactly like runExternal's.
+//
+// Exit-code handling mirrors runExternalDirect: a process that starts
+// but exits non-zero is ordinary shell-level data (not a kyu-level
+// error), so cmd.Wait's error is discarded; only a failure to start the
+// process at all becomes a value.ErrorVal. There is no captured value to
+// return either way — the statement always evaluates to Null — since
+// $cmd's whole purpose is streaming directly to the real terminal, not
+// producing something later kyu code could inspect.
+func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error) {
+	args := make([]string, len(st.Args))
+	for i, a := range st.Args {
+		v, err := evalExpr(a, env)
+		if err != nil {
+			return nil, err
+		}
+		s, err := argString(v)
+		if err != nil {
+			return nil, fmt.Errorf("$%s: argument %d: %w", st.Name, i, err)
+		}
+		args[i] = s
+	}
+
+	cmd := exec.Command(st.Name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("$%s: %v", st.Name, err)}, nil
+	}
+	_ = cmd.Wait() // non-zero exit is ordinary data, not a Go-level error here
+	return value.Null{}, nil
+}
+
 func argString(v value.Value) (string, error) {
 	switch x := v.(type) {
 	case value.String:

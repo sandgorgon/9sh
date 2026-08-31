@@ -252,6 +252,24 @@ type AssignStmt struct {
 	Val    Expr
 }
 
+// PassthroughStmt is `$cmd arg1 arg2 ...` — an external command run with
+// 9sh's own stdin/stdout/stderr connected directly, not through /jobs:
+// no job record, no output capture, no session history. It exists for
+// programs %cmd (ExternalCall) can't support at all — anything needing a
+// live TTY (vim, ssh, a REPL) or output that must stream as it happens —
+// since ExternalCall always routes through a job whose stdin/stdout/
+// stderr are in-memory buffers (job.go), never the real terminal.
+// Statement-only, like BindStmt: it produces no capturable kyu value, so
+// unlike ExternalCall it's never offered as a primary-expression option
+// in parsePrefix — only parseStmt reaches parsePassthroughStmt — which
+// makes it structurally impossible to appear inside a pipe or as an
+// operand of a larger expression, rather than merely discouraged.
+type PassthroughStmt struct {
+	Tok  token.Token
+	Name string
+	Args []Expr
+}
+
 // BindStmt is `bind SRC, DST[, before|after|replace]` — a namespace verb,
 // a real keyword (not an ordinary function) per kyu's design: it mutates
 // the calling process's own namespace. Disposition defaults to "replace"
@@ -264,12 +282,14 @@ type BindStmt struct {
 	Disposition string // "before" | "after" | "replace"
 }
 
-func (*ExprStmt) stmtNode()   {}
-func (*DefineStmt) stmtNode() {}
-func (*AssignStmt) stmtNode() {}
-func (*BindStmt) stmtNode()   {}
+func (*ExprStmt) stmtNode()        {}
+func (*DefineStmt) stmtNode()      {}
+func (*AssignStmt) stmtNode()      {}
+func (*BindStmt) stmtNode()        {}
+func (*PassthroughStmt) stmtNode() {}
 
-func (*ExprStmt) node()   {}
-func (*DefineStmt) node() {}
-func (*AssignStmt) node() {}
-func (*BindStmt) node()   {}
+func (*ExprStmt) node()        {}
+func (*DefineStmt) node()      {}
+func (*AssignStmt) node()      {}
+func (*BindStmt) node()        {}
+func (*PassthroughStmt) node() {}

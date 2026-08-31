@@ -98,6 +98,14 @@ func TestPercentSigilVsModulo(t *testing.T) {
 	assertKinds(t, `10 % 3`, []token.Kind{token.INT, token.MOD, token.INT, token.EOF})
 }
 
+func TestDollarSigil(t *testing.T) {
+	// unlike '%', '$' has no infix meaning to disambiguate from -- it's
+	// always the passthrough-command sigil, and the command name after it
+	// lexes the same way (lexExternalName) as after '%'.
+	assertKinds(t, `$vim foo`, []token.Kind{token.DOLLAR, token.IDENT, token.IDENT, token.EOF})
+	assertKinds(t, `$docker-compose up`, []token.Kind{token.DOLLAR, token.IDENT, token.IDENT, token.EOF})
+}
+
 func TestExternalCommandNameAllowsHyphens(t *testing.T) {
 	// unlike a kyu identifier, a command name right after '%' may contain
 	// hyphens (docker-compose, apt-get, ...) with no subtraction ambiguity.

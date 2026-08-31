@@ -266,6 +266,48 @@ func TestExternalCallBadCommand(t *testing.T) {
 	}
 }
 
+// TestPassthroughInheritsRealStdio locks in $cmd's whole reason for
+// existing: unlike %cmd (always job-tracked, output buffered into a
+// growBuf and only returned after the job finishes — see
+// runExternalViaJob), $cmd connects the subprocess directly to 9sh's
+// own stdout/stderr, with no job created at all.
+func TestPassthroughInheritsRealStdio(t *testing.T) {
+	skipUnlessOnPath(t, "echo")
+	env, mgr := jobsEnvWithManager(t)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+	v := runEnv(t, `$echo "hello-passthrough"`, env)
+	os.Stdout = origStdout
+	w.Close()
+
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stdout: %v", err)
+	}
+	if string(captured) != "hello-passthrough\n" {
+		t.Fatalf("stdout = %q, want %q", captured, "hello-passthrough\n")
+	}
+	if _, ok := v.(value.Null); !ok {
+		t.Fatalf("want value.Null (nothing to capture), got %#v", v)
+	}
+	if len(mgr.List()) != 0 {
+		t.Fatalf("$cmd must not create a job, got %d", len(mgr.List()))
+	}
+}
+
+func TestPassthroughBadCommandIsErrorVal(t *testing.T) {
+	env := jobsEnv(t)
+	v := runEnv(t, `$this-command-does-not-exist-9sh`, env)
+	if _, ok := v.(value.ErrorVal); !ok {
+		t.Fatalf("want ErrorVal for a missing command, got %#v", v)
+	}
+}
+
 func skipUnlessOnPath(t *testing.T, name string) {
 	t.Helper()
 	if _, err := exec.LookPath(name); err != nil {

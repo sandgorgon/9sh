@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-01
+
 ### Added
 
 - New `$cmd` syntax: runs an external command connected directly to the

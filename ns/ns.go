@@ -149,6 +149,44 @@ func (ns *Namespace) BindPath(ctx context.Context, srcPaths []string, dst string
 	return n.addLayers(layers, disp)
 }
 
+// Unbind clears everything bound at path — kyu's `unbind`, the inverse
+// of bind. Only removes what's directly bound at path itself; a child
+// path with its own separate bind (e.g. /local/sub, if that was itself
+// bound independently) is untouched. Unbinding a path with nothing
+// bound there is an error, not a silent no-op — matching bind's own
+// error-on-misuse convention (a bad bind aborts hard too, not an
+// ordinary in-stream ErrorVal like a missing file would be).
+func (ns *Namespace) Unbind(path string) error {
+	n, ok := ns.findNode(path)
+	if !ok {
+		return fmt.Errorf("ns: unbind: nothing bound at %s", path)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.layers) == 0 {
+		return fmt.Errorf("ns: unbind: nothing bound at %s", path)
+	}
+	n.layers = nil
+	return nil
+}
+
+// findNode walks the explicit tree to path without creating anything,
+// unlike ensureNode — Unbind shouldn't invent a node just to discover
+// there was never anything there.
+func (ns *Namespace) findNode(path string) (*node, bool) {
+	n := ns.root
+	for _, part := range splitPath(path) {
+		n.mu.RLock()
+		child, ok := n.children[part]
+		n.mu.RUnlock()
+		if !ok {
+			return nil, false
+		}
+		n = child
+	}
+	return n, true
+}
+
 func (n *node) addLayers(newLayers []*layer, disp Disposition) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()

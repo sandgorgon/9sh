@@ -51,6 +51,18 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("glob", &Builtin{Name: "glob", Fn: func(args []value.Value) (value.Value, error) {
 		return biGlob(env, args)
 	}})
+	// exit_code needs the calling Env's LastExitCode -- bash's $?
+	// equivalent; see Env.SetLastExitCode's doc comment.
+	env.Define("exit_code", &Builtin{Name: "exit_code", Fn: func(args []value.Value) (value.Value, error) {
+		if len(args) != 0 {
+			return nil, fmt.Errorf("exit_code: expected no arguments, got %d", len(args))
+		}
+		code := env.LastExitCode()
+		if code == nil {
+			return value.Null{}, nil
+		}
+		return value.Int(*code), nil
+	}})
 	return env
 }
 
@@ -86,6 +98,8 @@ func evalStmt(s ast.Stmt, env *Env) (value.Value, error) {
 		return evalAssign(st, env)
 	case *ast.BindStmt:
 		return evalBindStmt(st, env)
+	case *ast.UnbindStmt:
+		return evalUnbindStmt(st, env)
 	case *ast.PassthroughStmt:
 		return evalPassthroughStmt(st, env)
 	default:

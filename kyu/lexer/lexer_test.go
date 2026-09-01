@@ -98,6 +98,10 @@ func TestPercentSigilVsModulo(t *testing.T) {
 	assertKinds(t, `10 % 3`, []token.Kind{token.INT, token.MOD, token.INT, token.EOF})
 }
 
+func TestUnbindKeyword(t *testing.T) {
+	assertKinds(t, `unbind /local`, []token.Kind{token.UNBIND, token.PATH, token.EOF})
+}
+
 func TestWhileBreakContinueKeywords(t *testing.T) {
 	assertKinds(t, `while true { break }`,
 		[]token.Kind{token.WHILE, token.TRUE, token.LBRACE, token.BREAK, token.RBRACE, token.EOF})

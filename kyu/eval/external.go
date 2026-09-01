@@ -77,6 +77,8 @@ func runExternalDirect(env *Env, name string, args []string, in value.Value) (va
 	env.SetInterruptHandler(func() { cmd.Process.Signal(os.Interrupt) })
 	defer env.SetInterruptHandler(nil)
 	_ = cmd.Wait() // non-zero exit is ordinary data, not a Go-level error here
+	code := cmd.ProcessState.ExitCode()
+	env.SetLastExitCode(&code)
 
 	return value.Bytes(stdout.Bytes()), nil
 }
@@ -241,6 +243,7 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 	if st.State == "failed" {
 		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %s", name, st.Err)}, nil
 	}
+	env.SetLastExitCode(st.ExitCode) // see Env.SetLastExitCode's doc comment
 
 	stdoutFile, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, id, "stdout")...)
 	if err != nil {
@@ -347,6 +350,8 @@ func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error)
 	env.SetInterruptHandler(func() { cmd.Process.Signal(os.Interrupt) })
 	defer env.SetInterruptHandler(nil)
 	_ = cmd.Wait() // non-zero exit is ordinary data, not a Go-level error here
+	code := cmd.ProcessState.ExitCode()
+	env.SetLastExitCode(&code)
 	return value.Null{}, nil
 }
 

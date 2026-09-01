@@ -134,7 +134,7 @@ func TestPipeWithClosureAndFieldAccess(t *testing.T) {
 	if !ok {
 		t.Fatalf("want Closure arg, got %#v", call.Args[0])
 	}
-	if len(clo.Params) != 1 || clo.Params[0] != "j" {
+	if len(clo.Params) != 1 || clo.Params[0].Name != "j" {
 		t.Errorf("want params [j], got %v", clo.Params)
 	}
 	if len(clo.Body) != 1 {
@@ -367,6 +367,44 @@ func TestBindStmtInsideBlock(t *testing.T) {
 	}
 	if _, ok := ie.Then[0].(*ast.BindStmt); !ok {
 		t.Fatalf("want BindStmt inside block, got %T", ie.Then[0])
+	}
+}
+
+func TestUnbindStmt(t *testing.T) {
+	prog := parseOK(t, `unbind /local`)
+	us, ok := prog.Stmts[0].(*ast.UnbindStmt)
+	if !ok {
+		t.Fatalf("want UnbindStmt, got %T", prog.Stmts[0])
+	}
+	dst, ok := us.Dst.(*ast.PathLit)
+	if !ok || dst.Val != "/local" {
+		t.Fatalf("want dst=/local, got %#v", us.Dst)
+	}
+}
+
+func TestClosureDefaultParams(t *testing.T) {
+	prog := parseOK(t, `{ |a, b = 10| a + b }`)
+	clo := prog.Stmts[0].(*ast.ExprStmt).X.(*ast.Closure)
+	if len(clo.Params) != 2 {
+		t.Fatalf("want 2 params, got %d", len(clo.Params))
+	}
+	if clo.Params[0].Name != "a" || clo.Params[0].Default != nil {
+		t.Errorf("want a with no default, got %#v", clo.Params[0])
+	}
+	if clo.Params[1].Name != "b" || clo.Params[1].Default == nil {
+		t.Errorf("want b with a default, got %#v", clo.Params[1])
+	}
+	lit, ok := clo.Params[1].Default.(*ast.IntLit)
+	if !ok || lit.Val != 10 {
+		t.Fatalf("want b's default = 10, got %#v", clo.Params[1].Default)
+	}
+}
+
+func TestClosureDefaultMustTrailIsParseError(t *testing.T) {
+	p := New(`{ |a = 1, b| a + b }`)
+	p.ParseProgram()
+	if len(p.Errors()) == 0 {
+		t.Fatal("a required param after a defaulted one should be a parse error")
 	}
 }
 

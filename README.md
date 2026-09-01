@@ -99,6 +99,25 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   Single directory only, no recursive `**`, and always an explicit
   path — kyu has no notion of a "current namespace directory" (`cd`'s
   cwd is a separate, OS-path-only concept, just for subprocesses).
+- `unbind DST` clears whatever's bound at `DST` — the inverse of
+  `bind`, same statement-not-function shape (a namespace-mutating verb
+  stays a keyword). Unbinding something never bound is an error.
+- Closures take default parameters: `{ |a, b = 10| a + b }` — a later
+  default may reference an earlier parameter (`{ |a, b = a| ... }`).
+  Named, self-recursive, and mutually-recursive functions already work
+  today via plain `name := { ... }` (a name is resolved when the
+  closure is *called*, not frozen at creation), so there's no separate
+  `func` keyword — default params were the one genuine capability gap.
+- `format("hello {}, you're {}", name, age)` — positional `{}`
+  interpolation, not new string-literal syntax; the placeholder count
+  must exactly match the argument count. Pipeable like anything else:
+  `name | format("hello {}")`.
+- `exit_code()` — bash's `$?`, spelled as a function since `$` is
+  already kyu's real-TTY passthrough sigil. Tracks only the last
+  *foreground* `%cmd`/`$cmd` — a backgrounded `%cmd &`'s exit code is
+  already on its own job record (`j.status.exit_code`, `j | wait`).
+- A script's own arguments are visible as `args` (a `List` of `String`)
+  — `9sh script.kyu foo bar` sees `args == ["foo", "bar"]`.
 
 Run a job on another 9sh, over mutual TLS, with no separate remote-job
 protocol:

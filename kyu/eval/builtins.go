@@ -47,6 +47,7 @@ var builtins = map[string]BuiltinFn{
 	"trim":      biTrim,
 	"replace":   biReplace,
 	"contains":  biContains,
+	"format":    biFormat,
 }
 
 // biHost returns this machine's hostname — the design doc's own example
@@ -739,6 +740,45 @@ func biReplace(args []value.Value) (value.Value, error) {
 		return nil, fmt.Errorf("replace: new argument must be a string, got %s", rest[1].Kind())
 	}
 	return value.String(strings.ReplaceAll(string(s), string(oldS), string(newS))), nil
+}
+
+// biFormat implements format(template, values...): each "{}" in
+// template is replaced, in order, by the next value's .String() —
+// simple positional interpolation rather than new string-literal
+// syntax (no lexer/parser changes needed at all), consistent with how
+// this session has generally preferred a builtin over new grammar
+// where the two give the same capability. template's placeholder count
+// must exactly match len(values) — a mismatch is a hard error, the
+// same "strict argument count" stance select's field-name check
+// already takes, to catch a wrong-count typo rather than silently
+// truncate/leave placeholders unfilled.
+//
+// values is also where a pipe's appended input value lands (e.g.
+// `name | format("hello {}")`, matching every other builtin's
+// "explicit args..., then the input" convention) -- there's no special
+// casing for it here since a single trailing positional value is
+// exactly what values already handles.
+func biFormat(args []value.Value) (value.Value, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("format: expected a template argument")
+	}
+	tmpl, ok := args[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("format: template argument must be a string, got %s", args[0].Kind())
+	}
+	values := args[1:]
+	parts := strings.Split(string(tmpl), "{}")
+	if len(parts)-1 != len(values) {
+		return nil, fmt.Errorf("format: template has %d placeholder(s), got %d value(s)", len(parts)-1, len(values))
+	}
+	var b strings.Builder
+	for i, p := range parts {
+		b.WriteString(p)
+		if i < len(values) {
+			b.WriteString(values[i].String())
+		}
+	}
+	return value.String(b.String()), nil
 }
 
 func biContains(args []value.Value) (value.Value, error) {

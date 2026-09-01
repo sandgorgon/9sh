@@ -89,6 +89,9 @@ func (p *Parser) parseStmt() ast.Stmt {
 	if p.cur.Kind == token.BIND {
 		return p.parseBindStmt()
 	}
+	if p.cur.Kind == token.UNBIND {
+		return p.parseUnbindStmt()
+	}
 	if p.cur.Kind == token.DOLLAR {
 		return p.parsePassthroughStmt()
 	}
@@ -191,6 +194,19 @@ func (p *Parser) parseBindStmt() ast.Stmt {
 		disp = p.cur.Literal
 	}
 	return &ast.BindStmt{Tok: tok, Src: src, Dst: dst, Disposition: disp}
+}
+
+// parseUnbindStmt parses `unbind DST` — a single expression, unlike
+// bind's SRC, DST[, disposition], since there's nothing to graft and no
+// disposition to choose.
+func (p *Parser) parseUnbindStmt() ast.Stmt {
+	tok := p.cur
+	p.next() // consume 'unbind'
+	dst := p.parseExpr(LOWEST)
+	if dst == nil {
+		return nil
+	}
+	return &ast.UnbindStmt{Tok: tok, Dst: dst}
 }
 
 func isDispositionWord(s string) bool {
@@ -447,10 +463,29 @@ func (p *Parser) parseRecordLitFrom(tok token.Token, firstName token.Token) ast.
 func (p *Parser) parseClosure(tok token.Token) ast.Expr {
 	p.next() // cur: '{' -> opening '|'
 	p.next() // cur: opening '|' -> first param (or closing '|' if none)
-	var params []string
+	var params []ast.Param
+	sawDefault := false
 	for p.cur.Kind == token.IDENT {
-		params = append(params, p.cur.Literal)
-		p.next()
+		name := p.cur.Literal
+		var def ast.Expr
+		if p.peek.Kind == token.ASSIGN {
+			p.next() // cur: name -> '='
+			p.next() // cur: '=' -> start of default expr
+			// PIPE_, not LOWEST: '|' is both the closure param list's own
+			// closing delimiter and the pipe infix operator, so parsing
+			// at LOWEST would swallow the closing '|' as a pipe
+			// continuation instead of stopping there.
+			def = p.parseExpr(PIPE_)
+			if def == nil {
+				return nil
+			}
+			sawDefault = true
+		} else if sawDefault {
+			p.errorf("parameter %q has no default, but an earlier parameter does — defaults must trail", name)
+			return nil
+		}
+		params = append(params, ast.Param{Name: name, Default: def})
+		p.next() // cur: param name, or default expr's last token -> ',' or '|'
 		if p.cur.Kind == token.COMMA {
 			p.next()
 		}
@@ -463,12 +498,12 @@ func (p *Parser) parseClosure(tok token.Token) ast.Expr {
 	return p.parseClosureBodyFromCur(tok, params)
 }
 
-func (p *Parser) parseClosureBody(tok token.Token, params []string) ast.Expr {
+func (p *Parser) parseClosureBody(tok token.Token, params []ast.Param) ast.Expr {
 	p.next() // move onto first body token
 	return p.parseClosureBodyFromCur(tok, params)
 }
 
-func (p *Parser) parseClosureBodyFromCur(tok token.Token, params []string) ast.Expr {
+func (p *Parser) parseClosureBodyFromCur(tok token.Token, params []ast.Param) ast.Expr {
 	body := p.parseBlock()
 	if !p.expectPeekOrCur(token.RBRACE) {
 		return nil

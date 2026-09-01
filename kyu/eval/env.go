@@ -21,6 +21,7 @@ type Env struct {
 	passthroughBlocked string            // process-wide, like ns; see SetPassthroughBlocked
 	cwd                string            // process-wide, like ns; see SetCwd
 	interruptHandler   func()            // process-wide, like ns; see SetInterruptHandler
+	lastExitCode       *int              // process-wide, like ns; see SetLastExitCode
 }
 
 // ProxyRecorderFunc is called once a job created via `@host{}` (a "proxy"
@@ -129,6 +130,28 @@ func (e *Env) SetInterruptHandler(fn func()) {
 // nil if nothing interruptible is currently running.
 func (e *Env) InterruptHandler() func() {
 	return e.root().interruptHandler
+}
+
+// SetLastExitCode records a foreground %cmd/$cmd's exit code — bash's
+// $? equivalent, exposed as the exit_code() builtin rather than literal
+// `$?` syntax, which would collide with $cmd's own sigil. Process-wide
+// like the namespace, updated only by a foreground external-command
+// call that actually ran to completion (runExternalDirect,
+// runExternalViaJob, evalPassthroughStmt) — never by an ordinary kyu
+// expression, a backgrounded %cmd&, or a failed-to-start process (that
+// case is already visible as an ErrorVal at the call site, and has no
+// real exit code to report). A background job's exit code is already
+// reachable via its own record (j.status.exit_code, j | wait) — this
+// is specifically the "last foreground command" convenience, mirroring
+// what bash's $? tracks.
+func (e *Env) SetLastExitCode(code *int) {
+	e.root().lastExitCode = code
+}
+
+// LastExitCode returns the value set by SetLastExitCode, or nil if no
+// foreground external command has completed yet this session.
+func (e *Env) LastExitCode() *int {
+	return e.root().lastExitCode
 }
 
 // JobRoot returns the namespace path prefix job creation should use —

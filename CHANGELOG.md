@@ -64,6 +64,27 @@ once a first tagged release is cut.
   Single-directory matching only (no recursive `**`), always an
   explicit namespace path — kyu has no "current namespace directory"
   concept to resolve a bare `*.go` against.
+- `unbind DST` — the inverse of `bind`, clearing whatever's bound
+  there. New `ns.Namespace.Unbind`, plus a kyu-level statement (a
+  namespace-mutating verb stays a keyword, matching `bind` itself, not
+  an ordinary builtin function).
+- Closures gain default parameters (`{ |a, b = 10| a + b }`), evaluated
+  per-call so a later default may reference an earlier parameter
+  (`{ |a, b = a| ... }`). No separate named-function syntax: `name :=
+  { ... }` already supports self- and mutual recursion (a name is
+  resolved when the closure is *called*, not frozen at its creation),
+  so default params were the one real capability gap, not a missing
+  `func` keyword.
+- `format(template, values...)` — positional `{}` string
+  interpolation as a builtin, not new string-literal syntax (no
+  lexer/parser changes).
+- `exit_code()` — bash's `$?`, tracking only the last foreground
+  `%cmd`/`$cmd` (a backgrounded `%cmd &`'s exit code is already on its
+  own job record). Spelled as a function, not literal `$?` syntax,
+  since `$` is already `$cmd`'s own sigil.
+- A script's own arguments are now visible as `args` (a `List` of
+  `String`) in the script's environment — `9sh script.kyu foo bar`
+  sees `args == ["foo", "bar"]`.
 
 ### Fixed
 

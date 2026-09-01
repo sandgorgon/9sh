@@ -68,6 +68,27 @@ func evalBindStmt(st *ast.BindStmt, env *Env) (value.Value, error) {
 	return value.Null{}, nil
 }
 
+// evalUnbindStmt implements `unbind DST`, the inverse of bind — see
+// ast.UnbindStmt's doc comment on why it's a statement, not a builtin.
+func evalUnbindStmt(st *ast.UnbindStmt, env *Env) (value.Value, error) {
+	namespace := env.Namespace()
+	if namespace == nil {
+		return nil, fmt.Errorf("unbind: no namespace attached to this environment")
+	}
+	dstVal, err := evalExpr(st.Dst, env)
+	if err != nil {
+		return nil, err
+	}
+	dstPath, ok := dstVal.(value.Path)
+	if !ok {
+		return nil, fmt.Errorf("unbind: destination must be a path, got %s", dstVal.Kind())
+	}
+	if err := namespace.Unbind(string(dstPath)); err != nil {
+		return nil, err
+	}
+	return value.Null{}, nil
+}
+
 // pathsOf converts a bind SRC value (a plain Path, or an NSUnion from a
 // `a + b` namespace-union expression) into the ordered path list
 // ns.Namespace.BindPath wants.

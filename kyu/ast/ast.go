@@ -95,8 +95,20 @@ type ListLit struct {
 // to pipe-stage functions like where/select/each.
 type Closure struct {
 	Tok    token.Token
-	Params []string
+	Params []Param
 	Body   []Stmt
+}
+
+// Param is one closure parameter — `a` (Default nil, required) or
+// `a = expr` (optional; expr is evaluated per-call, in the same
+// left-to-right-built call scope, so a later default may reference an
+// earlier parameter — e.g. `{|a, b = a| ...}`). Once a parameter has a
+// default, every parameter after it must too (the parser enforces
+// this) — the same "defaults must trail" rule most languages use, so
+// positional-by-index calling still has an unambiguous meaning.
+type Param struct {
+	Name    string
+	Default Expr
 }
 
 // FieldAccess is `expr.name`.
@@ -313,14 +325,25 @@ type BindStmt struct {
 	Disposition string // "before" | "after" | "replace"
 }
 
+// UnbindStmt is `unbind DST` — the inverse of bind, clearing whatever's
+// bound directly at DST. A namespace verb like bind itself (see
+// BindStmt's doc comment on why those stay keywords, not builtins), so
+// this does too, rather than an unbind(path) function.
+type UnbindStmt struct {
+	Tok token.Token
+	Dst Expr
+}
+
 func (*ExprStmt) stmtNode()        {}
 func (*DefineStmt) stmtNode()      {}
 func (*AssignStmt) stmtNode()      {}
 func (*BindStmt) stmtNode()        {}
+func (*UnbindStmt) stmtNode()      {}
 func (*PassthroughStmt) stmtNode() {}
 
 func (*ExprStmt) node()        {}
 func (*DefineStmt) node()      {}
 func (*AssignStmt) node()      {}
 func (*BindStmt) node()        {}
+func (*UnbindStmt) node()      {}
 func (*PassthroughStmt) node() {}

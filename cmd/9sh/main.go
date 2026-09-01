@@ -77,6 +77,10 @@ func run() int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		// Everything after the script path itself is the script's own
+		// argument list, kyu-visible as `args` (a List of String) --
+		// `9sh script.kyu foo bar` sees args = ["foo", "bar"].
+		env.Define("args", scriptArgsList(args[1:]))
 		if !runSource(string(src), env) {
 			return 1
 		}
@@ -287,6 +291,16 @@ func runTUI(env *eval.Env, sessionDir string) error {
 	defer fmt.Print(disablePaste)
 
 	return app.Run()
+}
+
+// scriptArgsList builds the kyu-visible `args` value from a script's
+// own argv (everything after the script path itself, flag.Args()[1:]).
+func scriptArgsList(scriptArgs []string) *value.List {
+	out := make([]value.Value, len(scriptArgs))
+	for i, a := range scriptArgs {
+		out[i] = value.String(a)
+	}
+	return value.NewList(out)
 }
 
 func runSource(src string, env *eval.Env) bool {

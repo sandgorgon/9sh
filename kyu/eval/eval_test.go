@@ -220,6 +220,90 @@ add(2, 3)`); v.(value.Int) != 5 {
 	}
 }
 
+func TestClosureDefaultParamUsedWhenOmitted(t *testing.T) {
+	if v := run(t, `add := { |a, b = 10| a + b }
+add(2)`); v.(value.Int) != 12 {
+		t.Errorf("got %v, want 12 (2 + default 10)", v)
+	}
+}
+
+func TestClosureDefaultParamOverriddenWhenSupplied(t *testing.T) {
+	if v := run(t, `add := { |a, b = 10| a + b }
+add(2, 5)`); v.(value.Int) != 7 {
+		t.Errorf("got %v, want 7 (2 + explicit 5)", v)
+	}
+}
+
+func TestClosureDefaultParamCanReferenceEarlierParam(t *testing.T) {
+	if v := run(t, `f := { |a, b = a| a + b }
+f(4)`); v.(value.Int) != 8 {
+		t.Errorf("got %v, want 8 (4 + default b=a=4)", v)
+	}
+}
+
+func TestClosureTooFewArgsWithoutDefaultsErrors(t *testing.T) {
+	runErr(t, `f := { |a, b = 10| a + b }
+f()`)
+}
+
+func TestClosureRecursionStillWorksWithDefaults(t *testing.T) {
+	v := run(t, `fact := { |n, acc = 1| if n <= 1 { acc } else { fact(n - 1, n * acc) } }
+fact(5)`)
+	if v.(value.Int) != 120 {
+		t.Errorf("got %v, want 120", v)
+	}
+}
+
+func TestFormat(t *testing.T) {
+	if v := run(t, `format("hello {}, you are {}", "world", 42)`); v.(value.String) != "hello world, you are 42" {
+		t.Errorf("got %v, want %q", v, "hello world, you are 42")
+	}
+	if v := run(t, `"world" | format("hello {}")`); v.(value.String) != "hello world" {
+		t.Errorf("piped got %v, want %q", v, "hello world")
+	}
+}
+
+func TestFormatPlaceholderCountMismatchErrors(t *testing.T) {
+	runErr(t, `format("hello {}", "a", "b")`)
+	runErr(t, `format("hello {} {}", "a")`)
+}
+
+func TestExitCodeNilBeforeAnyForegroundCommand(t *testing.T) {
+	if v := run(t, `exit_code()`); v.Kind() != "null" {
+		t.Errorf("got %v, want null", v)
+	}
+}
+
+func TestExitCodeAfterForegroundExternalCall(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	v := runEnv(t, `%sh "-c" "exit 3"
+exit_code()`, env)
+	if v.(value.Int) != 3 {
+		t.Errorf("got %v, want 3", v)
+	}
+}
+
+func TestExitCodeAfterDirectExecFallback(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := NewGlobalEnv(nil) // no namespace: runExternalDirect path
+	v := runEnv(t, `%sh "-c" "exit 7"
+exit_code()`, env)
+	if v.(value.Int) != 7 {
+		t.Errorf("got %v, want 7", v)
+	}
+}
+
+func TestExitCodeAfterPassthrough(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	runEnv(t, `$sh "-c" "exit 5"`, env)
+	v := runEnv(t, `exit_code()`, env)
+	if v.(value.Int) != 5 {
+		t.Errorf("got %v, want 5", v)
+	}
+}
+
 func TestWherePipeline(t *testing.T) {
 	src := `jobs := [{name: "a", ok: true}, {name: "b", ok: false}, {name: "c", ok: true}]
 jobs | where { |j| j.ok } | count()`
@@ -599,6 +683,37 @@ func TestKyuBindGraftsExistingNamespacePath(t *testing.T) {
 	if _, err := walkAll(ctx, root, []string{"j2", "clone"}); err != nil {
 		t.Fatalf("walk /j2/clone after bind: %v", err)
 	}
+}
+
+func TestUnbindWithoutNamespaceErrors(t *testing.T) {
+	runErr(t, `unbind /a`)
+}
+
+func TestUnbindNothingBoundIsError(t *testing.T) {
+	env := jobsEnv(t)
+	runEnvErr(t, `unbind /nothing-here`, env)
+}
+
+func TestUnbindRemovesWhatWasBound(t *testing.T) {
+	env := jobsEnv(t)
+	runEnv(t, `bind /jobs, /j2`, env)
+
+	namespace := env.Namespace()
+	ctx := context.Background()
+	root, err := namespace.Attach(ctx, "u", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if _, err := walkAll(ctx, root, []string{"j2", "clone"}); err != nil {
+		t.Fatalf("walk /j2/clone after bind: %v", err)
+	}
+
+	runEnv(t, `unbind /j2`, env)
+	if _, err := walkAll(ctx, root, []string{"j2", "clone"}); err == nil {
+		t.Fatal("expected /j2/clone to be unreachable after unbind, but walk succeeded")
+	}
+	// unbinding again (nothing left there now) is an error, not a no-op
+	runEnvErr(t, `unbind /j2`, env)
 }
 
 func TestBackgroundJobLifecycle(t *testing.T) {

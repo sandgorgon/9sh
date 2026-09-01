@@ -410,22 +410,62 @@ func evalBinary(x *ast.BinaryExpr, env *Env) (value.Value, error) {
 	}
 }
 
+// evalLogical implements `&&`/`||`, short-circuiting on the same
+// "truth" evalTruth computes for each operand — ordinary value.Truthy
+// for a plain expression, but a bare %cmd operand's truth is its own
+// exit code instead (see evalTruth's doc comment): `%grep "x" f &&
+// %echo "found"` only echoes if grep actually exited 0, not merely
+// because it produced some (possibly empty, always-truthy-as-Bytes)
+// stdout. Always returns a plain Bool, in both modes — restructure
+// with `if` if you want the actual value of whichever side ran.
 func evalLogical(x *ast.BinaryExpr, env *Env) (value.Value, error) {
-	l, err := evalExpr(x.Left, env)
+	lOK, err := evalTruth(x.Left, env)
 	if err != nil {
 		return nil, err
 	}
-	if x.Op == token.AND && !value.Truthy(l) {
+	if x.Op == token.AND && !lOK {
 		return value.Bool(false), nil
 	}
-	if x.Op == token.OR && value.Truthy(l) {
+	if x.Op == token.OR && lOK {
 		return value.Bool(true), nil
 	}
-	r, err := evalExpr(x.Right, env)
+	rOK, err := evalTruth(x.Right, env)
 	if err != nil {
 		return nil, err
 	}
-	return value.Bool(value.Truthy(r)), nil
+	return value.Bool(rOK), nil
+}
+
+// evalTruth evaluates e and reports its "truth" for `&&`/`||`. A bare
+// %cmd call (*ast.ExternalCall) — checked at the AST level, not by
+// inspecting the runtime value, so a %cmd result already captured in a
+// variable (`x := %cmd1; x && ...`) is unaffected and uses ordinary
+// value.Truthy like anything else — is true only if it actually exited
+// 0: a failure to even start the process is an ErrorVal (checked
+// directly, since a start failure never updates LastExitCode at all),
+// and a process that started but exited non-zero is checked via
+// env.LastExitCode(), which the same evalExpr call just below updated
+// synchronously (runExternalDirect/runExternalViaJob/evalPassthroughStmt
+// all set it before returning). This composes correctly across a
+// longer chain (`%cmd1 && %cmd2 && %cmd3`, parsed left-associatively as
+// `(%cmd1 && %cmd2) && %cmd3`) without any special-casing beyond
+// "check whichever operand a given evalLogical call is looking at":
+// the inner pair's result is a plain Bool, whose ordinary truthiness
+// already reflects whether that inner chain succeeded, and $cmd can't
+// appear here at all since it's a statement, not an expression.
+func evalTruth(e ast.Expr, env *Env) (bool, error) {
+	v, err := evalExpr(e, env)
+	if err != nil {
+		return false, err
+	}
+	if _, ok := e.(*ast.ExternalCall); ok {
+		if _, isErr := v.(value.ErrorVal); isErr {
+			return false, nil
+		}
+		code := env.LastExitCode()
+		return code != nil && *code == 0, nil
+	}
+	return value.Truthy(v), nil
 }
 
 func evalComparison(op token.Kind, l, r value.Value) (value.Value, error) {

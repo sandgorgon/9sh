@@ -86,6 +86,22 @@ once a first tagged release is cut.
   `String`) in the script's environment — `9sh script.kyu foo bar`
   sees `args == ["foo", "bar"]`.
 
+### Changed
+
+- `&&`/`||` now chain by real exit status when an operand is a bare
+  `%cmd` call — `%cmd1 && %cmd2` runs `%cmd2` only if `%cmd1` exited 0
+  (`||`: only if it didn't), matching a shell. Previously `%cmd`'s
+  result (its stdout `Bytes`) was always truthy regardless of exit
+  code, so `&&`/`||` silently ran unconditionally rather than actually
+  gating on success/failure — every other operand kind (a stored
+  `%cmd` result included, once captured in a variable) still uses
+  ordinary value-truthiness, unchanged. The chain's own result is
+  always a `Bool`; a command's actual output isn't surfaced through
+  `&&`/`||` at all (chaining is for control flow, not visibility) — use
+  `if exit_code() == 0 { %cmd2 }` for that. Fixing this also closed a
+  parser gap: `%cmd`'s argument-list parsing didn't know `&&`/`||` end
+  the argument list, so `%cmd && ...` used to fail to parse at all.
+
 ### Fixed
 
 - Job records now back `stdout`/`stderr` as live, read-only fields

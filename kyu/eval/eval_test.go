@@ -304,6 +304,90 @@ func TestExitCodeAfterPassthrough(t *testing.T) {
 	}
 }
 
+func TestLogicalAndRunsRightOnlyIfLeftCommandSucceeded(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	// left succeeds (exit 0) -> right runs, its own exit code (0) is
+	// the chain's result
+	if v := runEnv(t, `%sh "-c" "exit 0" && %sh "-c" "exit 0"`, env); v.(value.Bool) != true {
+		t.Errorf("got %v, want true (both succeeded)", v)
+	}
+	// left fails -> right must NOT run at all; use a marker file to
+	// prove it, not just the chain's own boolean result
+	dir := t.TempDir()
+	marker := dir + "/ran"
+	runEnv(t, `%sh "-c" "exit 1" && %sh "-c" "touch `+marker+`"`, env)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("right side ran even though the left command failed")
+	}
+}
+
+func TestLogicalAndFailsIfRightCommandFails(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	v := runEnv(t, `%sh "-c" "exit 0" && %sh "-c" "exit 1"`, env)
+	if v.(value.Bool) != false {
+		t.Errorf("got %v, want false -- the chain's own final command failed", v)
+	}
+}
+
+func TestLogicalOrRunsRightOnlyIfLeftCommandFailed(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	if v := runEnv(t, `%sh "-c" "exit 0" || %sh "-c" "exit 1"`, env); v.(value.Bool) != true {
+		t.Errorf("got %v, want true (left already succeeded, right never ran)", v)
+	}
+	if v := runEnv(t, `%sh "-c" "exit 1" || %sh "-c" "exit 0"`, env); v.(value.Bool) != true {
+		t.Errorf("got %v, want true (left failed, right ran and succeeded)", v)
+	}
+	if v := runEnv(t, `%sh "-c" "exit 1" || %sh "-c" "exit 1"`, env); v.(value.Bool) != false {
+		t.Errorf("got %v, want false (both failed)", v)
+	}
+}
+
+func TestLogicalChainOfThreeCommands(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	v := runEnv(t, `%sh "-c" "exit 0" && %sh "-c" "exit 0" && %sh "-c" "exit 1"`, env)
+	if v.(value.Bool) != false {
+		t.Errorf("got %v, want false -- third command in the chain failed", v)
+	}
+}
+
+func TestLogicalAndBadCommandCountsAsFailure(t *testing.T) {
+	env := jobsEnv(t)
+	dir := t.TempDir()
+	marker := dir + "/ran"
+	runEnv(t, `%this-command-does-not-exist-9sh && %sh "-c" "touch `+marker+`"`, env)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("right side ran even though the left command failed to start")
+	}
+}
+
+// TestLogicalAndStoredCommandResultUsesPlainTruthiness locks in the
+// "storing a %cmd result first is an explicit opt-out" design: once a
+// %cmd's result is captured in a variable, && / || see it as an
+// ordinary (always-truthy-as-Bytes) value, not exit-status-aware --
+// only a bare %cmd written directly as an operand gets that treatment.
+func TestLogicalAndStoredCommandResultUsesPlainTruthiness(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	v := runEnv(t, `x := %sh "-c" "exit 1"
+x && true`, env)
+	if v.(value.Bool) != true {
+		t.Errorf("got %v, want true -- x is just Bytes (always truthy), exit code not consulted once stored", v)
+	}
+}
+
+func TestLogicalAndPlainValuesUnaffected(t *testing.T) {
+	if v := run(t, `1 < 2 && 2 < 3`); v.(value.Bool) != true {
+		t.Errorf("got %v, want true", v)
+	}
+	if v := run(t, `false && true`); v.(value.Bool) != false {
+		t.Errorf("got %v, want false", v)
+	}
+}
+
 func TestWherePipeline(t *testing.T) {
 	src := `jobs := [{name: "a", ok: true}, {name: "b", ok: false}, {name: "c", ok: true}]
 jobs | where { |j| j.ok } | count()`

@@ -118,6 +118,16 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   already on its own job record (`j.status.exit_code`, `j | wait`).
 - A script's own arguments are visible as `args` (a `List` of `String`)
   — `9sh script.kyu foo bar` sees `args == ["foo", "bar"]`.
+- `%cmd1 && %cmd2` / `%cmd1 || %cmd2` chain by real exit status, like a
+  shell — `&&`'s right side runs only if the left command exited 0;
+  `||`'s only if it didn't. Only a *bare* `%cmd` operand gets this —
+  `x := %cmd1; x && ...` sees `x` as an ordinary (always-truthy)
+  `Bytes` value instead, since storing the result first is an explicit
+  opt-out. The chain's own result is always a plain `Bool`, never
+  whichever command's output — chaining is for control flow, not for
+  seeing output; use `if exit_code() == 0 { %cmd2 }` when you want the
+  latter, since a plain `if`'s block result is what actually gets
+  printed at the REPL.
 
 Run a job on another 9sh, over mutual TLS, with no separate remote-job
 protocol:

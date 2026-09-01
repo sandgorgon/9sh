@@ -186,6 +186,28 @@ func TestExternalCall(t *testing.T) {
 	}
 }
 
+// TestExternalCallArgsStopAtLogicalOperators locks in that %cmd's
+// argument-list parsing terminates at && / ||, not swallows them as an
+// (invalid) argument -- endsExternalCallArgs' whole reason for
+// existing per its own doc comment (a new operator silently getting
+// swallowed as an argument), which is exactly what happened here
+// before token.AND/token.OR were added to it.
+func TestExternalCallArgsStopAtLogicalOperators(t *testing.T) {
+	prog := parseOK(t, `%grep "x" file && %echo "found"`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	be, ok := es.X.(*ast.BinaryExpr)
+	if !ok || be.Op != token.AND {
+		t.Fatalf("want a top-level && BinaryExpr, got %#v", es.X)
+	}
+	left, ok := be.Left.(*ast.ExternalCall)
+	if !ok || len(left.Args) != 2 {
+		t.Fatalf("want left=ExternalCall with 2 args, got %#v", be.Left)
+	}
+	if _, ok := be.Right.(*ast.ExternalCall); !ok {
+		t.Fatalf("want right=ExternalCall, got %#v", be.Right)
+	}
+}
+
 func TestExternalCallInPipe(t *testing.T) {
 	prog := parseOK(t, `jobs | %grep "foo"`)
 	es := prog.Stmts[0].(*ast.ExprStmt)

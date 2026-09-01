@@ -553,7 +553,8 @@ func (p *Parser) parseListOrTableLit() ast.Expr {
 func endsExternalCallArgs(k token.Kind) bool {
 	switch k {
 	case token.NEWLINE, token.SEMI, token.EOF, token.PIPE, token.AMP,
-		token.RPAREN, token.RBRACE, token.RBRACKET, token.COMMA:
+		token.RPAREN, token.RBRACE, token.RBRACKET, token.COMMA,
+		token.AND, token.OR:
 		return true
 	}
 	return false

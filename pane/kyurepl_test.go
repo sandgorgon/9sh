@@ -289,6 +289,313 @@ func TestKyuReplHistoryDisabledMidMultilineInput(t *testing.T) {
 	}
 }
 
+func TestKyuReplSearchFindsMatchingHistoryEntry(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, `"alpha"`)
+	sendEnter(w)
+	sendRunes(w, `"beta"`)
+	sendEnter(w)
+
+	sendCtrl(w, 'r')
+	if !w.searchMode {
+		t.Fatal("Ctrl-R should enter search mode")
+	}
+	sendRunes(w, "alp")
+	if w.searchIndex >= len(w.history) || w.history[w.searchIndex] != `"alpha"` {
+		t.Fatalf("search for %q matched index %d, want the \"alpha\" entry", "alp", w.searchIndex)
+	}
+}
+
+func TestKyuReplSearchRepeatedCtrlRGoesFurtherBack(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, `"match one"`)
+	sendEnter(w)
+	sendRunes(w, `"match two"`)
+	sendEnter(w)
+
+	sendCtrl(w, 'r')
+	sendRunes(w, "match")
+	if w.history[w.searchIndex] != `"match two"` {
+		t.Fatalf("first match = %q, want the most recent (\"match two\")", w.history[w.searchIndex])
+	}
+	sendCtrl(w, 'r')
+	if w.history[w.searchIndex] != `"match one"` {
+		t.Fatalf("second Ctrl-R match = %q, want the older entry (\"match one\")", w.history[w.searchIndex])
+	}
+}
+
+func TestKyuReplSearchEnterSubmitsMatch(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "1 + 1")
+	sendEnter(w)
+
+	sendCtrl(w, 'r')
+	sendRunes(w, "1 + 1")
+	sendEnter(w)
+
+	if w.searchMode {
+		t.Fatal("Enter should exit search mode")
+	}
+	if got := lastLine(t, w); got.text != "2" {
+		t.Fatalf("last line = %q, want 2 (the matched \"1 + 1\" actually ran)", got.text)
+	}
+	if w.input != "" {
+		t.Fatalf("input after a submitting Enter should be cleared, got %q", w.input)
+	}
+}
+
+func TestKyuReplSearchEscLoadsMatchWithoutSubmitting(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "1 + 1")
+	sendEnter(w)
+	linesBeforeSearch := len(w.lines)
+
+	sendCtrl(w, 'r')
+	sendRunes(w, "1 + 1")
+	sendKey(w, input.KeyEsc)
+
+	if w.searchMode {
+		t.Fatal("Esc should exit search mode")
+	}
+	if w.input != "1 + 1" {
+		t.Fatalf("input after Esc = %q, want the matched entry loaded for further editing", w.input)
+	}
+	if len(w.lines) != linesBeforeSearch {
+		t.Fatalf("Esc should not submit/evaluate anything, transcript grew from %d to %d lines", linesBeforeSearch, len(w.lines))
+	}
+}
+
+// spansText concatenates a line's spans back into plain text -- every
+// test below checks this equals the original input, the invariant
+// highlightSpans's own doc comment promises.
+func spansText(spans []replSpan) string {
+	var b strings.Builder
+	for _, sp := range spans {
+		b.WriteString(sp.text)
+	}
+	return b.String()
+}
+
+func TestHighlightSpansKeywordStringIdent(t *testing.T) {
+	src := `if x == "hi" { true }`
+	spans := highlightSpans(src)[1]
+	if got := spansText(spans); got != src {
+		t.Fatalf("spans reconstruct to %q, want %q", got, src)
+	}
+	var gotIf, gotStr, gotIdent bool
+	for _, sp := range spans {
+		switch {
+		case sp.text == "if" && sp.style == keywordStyle:
+			gotIf = true
+		case sp.text == `"hi"` && sp.style == stringStyle:
+			gotStr = true
+		case sp.text == "x" && sp.style == resultStyle:
+			gotIdent = true
+		}
+	}
+	if !gotIf {
+		t.Errorf("expected an \"if\" span styled as a keyword, got %#v", spans)
+	}
+	if !gotStr {
+		t.Errorf(`expected a "hi" span (with quotes) styled as a string, got %#v`, spans)
+	}
+	if !gotIdent {
+		t.Errorf("expected an \"x\" span styled unstyled (identifier), got %#v", spans)
+	}
+}
+
+func TestHighlightSpansStringWithEscapeReconstructsRawText(t *testing.T) {
+	// the raw source is 10 runes ("a\nb" with literal backslash-n,
+	// plus quotes) -- the *decoded* Literal is only 3 runes (a, \n, b)
+	// -- stringRawLen has to use the raw length, not len(Literal).
+	src := `"a\nb"`
+	spans := highlightSpans(src)[1]
+	if got := spansText(spans); got != src {
+		t.Fatalf("spans reconstruct to %q, want %q (raw source, not decoded)", got, src)
+	}
+}
+
+func TestHighlightSpansSigilsAndPath(t *testing.T) {
+	src := `%ls "/local"`
+	spans := highlightSpans(src)[1]
+	if got := spansText(spans); got != src {
+		t.Fatalf("spans reconstruct to %q, want %q", got, src)
+	}
+	var gotSigil bool
+	for _, sp := range spans {
+		if sp.text == "%" && sp.style == sigilStyle {
+			gotSigil = true
+		}
+	}
+	if !gotSigil {
+		t.Errorf("expected a \"%%\" span styled as a sigil, got %#v", spans)
+	}
+}
+
+func TestHighlightSpansMultiLineAssignsCorrectLine(t *testing.T) {
+	src := "while true {\nbreak\n}"
+	byLine := highlightSpans(src)
+	if got := spansText(byLine[1]); got != "while true {" {
+		t.Errorf("line 1 = %q, want %q", got, "while true {")
+	}
+	if got := spansText(byLine[2]); got != "break" {
+		t.Errorf("line 2 = %q, want %q", got, "break")
+	}
+	if got := spansText(byLine[3]); got != "}" {
+		t.Errorf("line 3 = %q, want %q", got, "}")
+	}
+	var gotWhile, gotBreak bool
+	for _, sp := range byLine[1] {
+		if sp.text == "while" && sp.style == keywordStyle {
+			gotWhile = true
+		}
+	}
+	for _, sp := range byLine[2] {
+		if sp.text == "break" && sp.style == keywordStyle {
+			gotBreak = true
+		}
+	}
+	if !gotWhile || !gotBreak {
+		t.Errorf("expected while/break both styled as keywords on their own lines, got %#v / %#v", byLine[1], byLine[2])
+	}
+}
+
+func TestHighlightSpansLexErrorStillReconstructsText(t *testing.T) {
+	// an unterminated string is a real lex-time situation (the lexer
+	// just runs to EOF looking for the closing quote) -- highlighting
+	// must not panic or drop text even when input isn't valid syntax.
+	src := `"unterminated`
+	spans := highlightSpans(src)[1]
+	if got := spansText(spans); got != src {
+		t.Fatalf("spans reconstruct to %q, want %q", got, src)
+	}
+}
+
+func TestHighlightSpansEmptyInput(t *testing.T) {
+	if spans := highlightSpans("")[1]; len(spans) != 0 {
+		t.Errorf("empty input should produce no spans, got %#v", spans)
+	}
+}
+
+func TestKyuReplLiveInputHasHighlightSpans(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, `if true`)
+	lines, _, _ := w.renderInput()
+	if len(lines) != 1 || lines[0].spans == nil {
+		t.Fatalf("expected the live input line to carry highlight spans, got %#v", lines)
+	}
+	if got := spansText(lines[0].spans); got != "9sh> if true" {
+		t.Fatalf("spans reconstruct to %q, want %q", got, "9sh> if true")
+	}
+}
+
+func TestKyuReplTabCompletesUniqueKeyword(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "whil")
+	sendKey(w, input.KeyTab)
+	if w.input != "while" {
+		t.Fatalf("input = %q, want %q (the only candidate starting with \"whil\")", w.input, "while")
+	}
+	if w.cursor != len(w.runes()) {
+		t.Fatalf("cursor = %d, want it right after the completed text (%d)", w.cursor, len(w.runes()))
+	}
+}
+
+func TestKyuReplTabCompletesBuiltin(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "wher")
+	sendKey(w, input.KeyTab)
+	if w.input != "where" {
+		t.Fatalf("input = %q, want %q", w.input, "where")
+	}
+}
+
+func TestKyuReplTabCompletesUserDefinedVariable(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "myvar123 := 5")
+	sendEnter(w)
+
+	sendRunes(w, "myvar")
+	sendKey(w, input.KeyTab)
+	if w.input != "myvar123" {
+		t.Fatalf("input = %q, want %q (a variable defined earlier this session)", w.input, "myvar123")
+	}
+}
+
+func TestKyuReplTabFillsCommonPrefixThenCyclesOnRepeat(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "xfoo := 1")
+	sendEnter(w)
+	sendRunes(w, "xfoobar := 2")
+	sendEnter(w)
+
+	sendRunes(w, "x")
+	sendKey(w, input.KeyTab)
+	if w.input != "xfoo" {
+		t.Fatalf("first Tab: input = %q, want the common prefix %q", w.input, "xfoo")
+	}
+
+	sendKey(w, input.KeyTab)
+	if w.input != "xfoo" && w.input != "xfoobar" {
+		t.Fatalf("repeated Tab: input = %q, want one of the two candidates", w.input)
+	}
+	first := w.input
+	sendKey(w, input.KeyTab)
+	if w.input == first {
+		t.Fatalf("a third Tab should cycle to the *other* candidate, still got %q", w.input)
+	}
+	// wraps back around to the first cycled candidate
+	sendKey(w, input.KeyTab)
+	if w.input != first {
+		t.Fatalf("cycling should wrap around: got %q, want back to %q", w.input, first)
+	}
+}
+
+func TestKyuReplTabNoMatchesIsNoop(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "zzz_no_such_thing")
+	before := w.input
+	sendKey(w, input.KeyTab)
+	if w.input != before {
+		t.Fatalf("input changed to %q with no matching candidates, want unchanged (%q)", w.input, before)
+	}
+}
+
+func TestKyuReplTabCycleResetsOnUnrelatedKey(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "xfoo := 1")
+	sendEnter(w)
+	sendRunes(w, "xfoobar := 2")
+	sendEnter(w)
+
+	sendRunes(w, "x")
+	sendKey(w, input.KeyTab) // fills to "xfoo"
+	sendRunes(w, "z")        // unrelated typing -- input is now "xfooz"
+	if w.completionCandidates != nil {
+		t.Fatal("typing a non-Tab key should clear the completion cycle state")
+	}
+}
+
+// TestKyuReplClaimsRawTab locks in a real, previously-missing piece of
+// wiring: tui.App.HandleInput intercepts Tab globally for pane-focus
+// navigation *before* it ever reaches a widget's own HandleEvent,
+// unless the focused widget implements tui.RawKeyClaimer and
+// WantsRawTab() returns true (see that interface's own doc comment).
+// Without this, completeTab works perfectly in every direct-HandleEvent
+// test above and is still silently unreachable dead code in the real
+// app -- this test would have caught that, none of the others could.
+func TestKyuReplClaimsRawTab(t *testing.T) {
+	w := newTestReplWidget(t)
+	var _ tui.RawKeyClaimer = w // compile-time: must implement the interface
+	if !w.WantsRawTab() {
+		t.Fatal("kyuReplWidget must claim raw Tab, or completeTab is unreachable through tui.App")
+	}
+	want := input.KeyEvent{Rune: '\\', Mod: input.ModCtrl}
+	if got := w.ReleaseKey(); got != want {
+		t.Errorf("ReleaseKey() = %+v, want Ctrl+\\ (%+v), matching widget.Terminal's own convention", got, want)
+	}
+}
+
 func TestKyuReplPasteInsertsTextAtCursor(t *testing.T) {
 	w := newTestReplWidget(t)
 	sendRunes(w, "ac")

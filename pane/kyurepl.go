@@ -1,6 +1,7 @@
 package pane
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/sandgorgon/tui/cell"
@@ -8,7 +9,9 @@ import (
 	"github.com/sandgorgon/tui/tui"
 
 	"github.com/sandgorgon/9sh/kyu/eval"
+	"github.com/sandgorgon/9sh/kyu/lexer"
 	"github.com/sandgorgon/9sh/kyu/parser"
+	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/kyu/value"
 )
 
@@ -16,6 +19,19 @@ var (
 	promptStyle = cell.Style{Fg: cell.ANSIColor(6)}
 	resultStyle = cell.Style{}
 	errorStyle  = cell.Style{Fg: cell.ANSIColor(1)}
+
+	// Live-input syntax-highlighting palette — see highlightSpans. Kept
+	// distinct from promptStyle/errorStyle/cursorStyle's own colors
+	// (cyan/red/yellow) so a token's color always means the same thing
+	// regardless of where else that color shows up in the pane.
+	keywordStyle = cell.Style{Fg: cell.ANSIColor(5)} // magenta
+	stringStyle  = cell.Style{Fg: cell.ANSIColor(2)} // green
+	numberStyle  = cell.Style{Fg: cell.ANSIColor(3)} // yellow (foreground here, unlike cursorStyle's yellow background — visually distinct)
+	pathStyle    = cell.Style{Fg: cell.ANSIColor(4)} // blue
+	// sigilStyle is bold cyan, not plain cyan (promptStyle) — %/$/@ are
+	// kyu's own "this is special" markers, worth standing out even from
+	// the prompt's already-cyan "9sh> ".
+	sigilStyle = cell.Style{Fg: cell.ANSIColor(6), Attr: cell.AttrBold}
 
 	// cursorStyle is an explicit, theme-independent block color (ANSI
 	// yellow bg, black fg) rather than bare AttrReverse against the
@@ -51,6 +67,19 @@ func kyuReplNode(id int, env *eval.Env) tui.Node {
 }
 
 type replLine struct {
+	text  string
+	style cell.Style
+	// spans, when non-nil, overrides text/style for rendering (see
+	// Paint): per-token styling for a live (not-yet-submitted) input
+	// line — see highlightSpans. nil for every transcript line
+	// (results/errors already evaluated), which render exactly as
+	// before this existed; concatenating a spans slice's own text
+	// fields always reconstructs the line's plain text exactly, so
+	// text/style stay meaningful fallbacks even on a spans line.
+	spans []replSpan
+}
+
+type replSpan struct {
 	text  string
 	style cell.Style
 }
@@ -101,6 +130,30 @@ type kyuReplWidget struct {
 	// resizing.
 	scrollOffset int
 	lastHeight   int
+
+	// searchMode is Ctrl-R (reverse history search, bash's
+	// reverse-i-search). While true, handleKey routes almost every key
+	// to search-specific handling instead of the normal editing cases —
+	// see handleSearchKey. searchIndex is the index into history the
+	// current searchQuery matched (len(history) = "no match yet, at the
+	// very end"); searchQuery is re-searched from the end of history on
+	// every change (not incrementally from searchIndex), matching
+	// bash's own behavior, so backspacing the query can find a more
+	// recent match again rather than only ever searching further back.
+	searchMode  bool
+	searchQuery string
+	searchIndex int
+
+	// completionCandidates/completionFragmentStart/completionCycle
+	// track an in-progress Tab-completion cycle (see completeTab): a
+	// second, immediately-repeated Tab with the same fragment cycles
+	// through the same candidate list instead of recomputing it, the
+	// same way bash cycles through matches on repeated Tab. Any other
+	// key clears completionCandidates, so a later, unrelated Tab always
+	// starts a fresh completion rather than continuing a stale cycle.
+	completionCandidates    []string
+	completionFragmentStart int
+	completionCycle         int
 }
 
 func (w *kyuReplWidget) Reconcile(props any) bool { return true }
@@ -121,6 +174,13 @@ func (w *kyuReplWidget) Paint(p *cell.Painter) {
 	end := min(start+height, len(visible))
 	shown := visible[start:end]
 	for y, ln := range shown {
+		if ln.spans != nil {
+			x := 0
+			for _, sp := range ln.spans {
+				x += p.Text(x, y, sp.text, sp.style)
+			}
+			continue
+		}
 		p.Text(0, y, ln.text, ln.style)
 	}
 
@@ -149,12 +209,135 @@ func (w *kyuReplWidget) Paint(p *cell.Painter) {
 	}
 }
 
+// ---- live syntax highlighting (renderInput's input lines only — see
+// replLine.spans' own doc comment on why transcript lines are untouched) ----
+
+// tokenStyle maps a lexed token.Kind to its highlight color. Anything
+// not listed (identifiers, operators, punctuation) renders unstyled,
+// same as resultStyle's existing default.
+func tokenStyle(k token.Kind) (cell.Style, bool) {
+	switch k {
+	case token.IF, token.ELSE, token.WHILE, token.BREAK, token.CONTINUE,
+		token.BIND, token.UNBIND, token.TRUE, token.FALSE, token.NULL:
+		return keywordStyle, true
+	case token.STRING:
+		return stringStyle, true
+	case token.INT, token.FLOAT, token.DURATION:
+		return numberStyle, true
+	case token.PATH:
+		return pathStyle, true
+	case token.PERCENT, token.DOLLAR, token.AT:
+		return sigilStyle, true
+	}
+	return cell.Style{}, false
+}
+
+// stringRawLen reports how many runes of *raw* source (both quotes,
+// plus any escape sequences like \n/\"/\\ in their two-rune raw form,
+// not their decoded one) a STRING token starting at line[start] (which
+// must be the opening '"') actually spans. token.Token.Literal for a
+// STRING is already-*decoded* content — kyu/lexer's lexString unescapes
+// as it scans (see its own doc comment) — so unlike every other token
+// kind, its rune count alone can't be used to find where the raw token
+// ends; this mirrors lexString's own escape-aware walk, purely for
+// length.
+func stringRawLen(line []rune, start int) int {
+	if start >= len(line) || line[start] != '"' {
+		return 1 // defensive: shouldn't happen for a real STRING token
+	}
+	i := start + 1
+	for i < len(line) && line[i] != '"' {
+		if line[i] == '\\' && i+1 < len(line) {
+			i += 2
+			continue
+		}
+		i++
+	}
+	if i < len(line) {
+		i++ // closing quote
+	}
+	return i - start
+}
+
+// highlightSpans lexes the full (possibly multi-line) input text once
+// and returns each line's highlighted spans, keyed by 1-indexed line
+// number (matching token.Token.Line — kyu/lexer.New starts both line
+// and col at 1). Every line's spans, concatenated, reconstruct that
+// line's own raw text exactly: a gap between consecutive tokens (plain
+// whitespace, or a discarded "# comment" — kyu/lexer's
+// skipSpaceAndComments treats both the same, never emitting a token for
+// either) becomes its own unstyled span, so this degrades gracefully
+// through a lex error too — an ILLEGAL token still carries a real
+// Line/Col/Literal, it just doesn't match any case in tokenStyle.
+func highlightSpans(input string) map[int][]replSpan {
+	lines := strings.Split(input, "\n")
+	lineRunes := make([][]rune, len(lines))
+	for i, l := range lines {
+		lineRunes[i] = []rune(l)
+	}
+	cursors := make([]int, len(lines)) // rune position reached so far, per line
+
+	out := map[int][]replSpan{}
+	l := lexer.New(input)
+	for {
+		tok := l.Next()
+		if tok.Kind == token.EOF {
+			break
+		}
+		if tok.Kind == token.NEWLINE {
+			continue
+		}
+		lineIdx := tok.Line - 1
+		if lineIdx < 0 || lineIdx >= len(lineRunes) {
+			continue // defensive: shouldn't happen given New's 1-indexing
+		}
+		rs := lineRunes[lineIdx]
+		start := tok.Col - 1
+		if start < 0 || start > len(rs) {
+			continue // defensive
+		}
+		if start > cursors[lineIdx] {
+			out[tok.Line] = append(out[tok.Line], replSpan{text: string(rs[cursors[lineIdx]:start]), style: resultStyle})
+		}
+		length := len([]rune(tok.Literal))
+		if tok.Kind == token.STRING {
+			length = stringRawLen(rs, start)
+		}
+		end := min(start+length, len(rs))
+		style, ok := tokenStyle(tok.Kind)
+		if !ok {
+			style = resultStyle
+		}
+		out[tok.Line] = append(out[tok.Line], replSpan{text: string(rs[start:end]), style: style})
+		cursors[lineIdx] = end
+	}
+	for i, rs := range lineRunes {
+		if cursors[i] < len(rs) {
+			out[i+1] = append(out[i+1], replSpan{text: string(rs[cursors[i]:]), style: resultStyle})
+		}
+	}
+	return out
+}
+
 // renderInput builds the visible replLines for the in-progress
 // (possibly multi-line) input, with the same "9sh> " / "...  " prompt
 // convention as cmd/9sh's line REPL, and reports which of those lines
 // (0-indexed within just the input portion) and column (promptWidth
-// included) the cursor sits at.
+// included) the cursor sits at. In search mode (see searchStep) it
+// instead renders bash's familiar single-line "(search)`query`: match"
+// prompt — search doesn't support multi-line input, so there's no
+// continuation-prompt case to handle here.
 func (w *kyuReplWidget) renderInput() (lines []replLine, cursorLine, cursorCol int) {
+	if w.searchMode {
+		matched := ""
+		if w.searchIndex < len(w.history) {
+			matched = w.history[w.searchIndex]
+		}
+		text := "(search)`" + w.searchQuery + "`: " + matched
+		return []replLine{{text: text, style: promptStyle}}, 0, len([]rune(text))
+	}
+
+	highlighted := highlightSpans(w.input)
 	rs := w.runes()
 	lineStart := 0
 	col := 0
@@ -166,7 +349,14 @@ func (w *kyuReplWidget) renderInput() (lines []replLine, cursorLine, cursorCol i
 		if len(lines) > 0 {
 			prefix = "...  "
 		}
-		lines = append(lines, replLine{text: prefix + string(rs[lineStart:i]), style: promptStyle})
+		lineText := string(rs[lineStart:i])
+		lineNum := len(lines) + 1 // 1-indexed, matches token.Token.Line
+		var spans []replSpan
+		if hl := highlighted[lineNum]; len(hl) > 0 {
+			spans = append(spans, replSpan{text: prefix, style: promptStyle})
+			spans = append(spans, hl...)
+		}
+		lines = append(lines, replLine{text: prefix + lineText, style: promptStyle, spans: spans})
 		if w.cursor >= lineStart && w.cursor <= i {
 			cursorLine = len(lines) - 1
 			col = w.cursor - lineStart
@@ -197,10 +387,35 @@ func (w *kyuReplWidget) HandleEvent(e input.Event) tui.Cmd {
 // handleKey returns a Cmd only for the copy bindings (see
 // tui.CopyToClipboard) — every other case mutates the widget directly
 // and returns nil, same as before this needed a return value at all.
+// Ctrl-R is checked before everything else, whether or not search mode
+// is already active (it means "start searching" the first time,
+// "search further back" on every press after) — see searchStep. Once
+// in search mode, every other key routes to handleSearchKey instead of
+// the normal editing switch below; bash's own reverse-i-search doesn't
+// support arbitrary mid-search editing either, so this doesn't try to.
 func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	ctrl := ke.Mod&input.ModCtrl != 0
 	alt := ke.Mod&input.ModAlt != 0
+
+	if ctrl && ke.Rune == 'r' {
+		w.searchStep()
+		return nil
+	}
+	if w.searchMode {
+		return w.handleSearchKey(ke)
+	}
+
+	// A Tab-completion cycle (see completeTab) only continues on an
+	// *immediately repeated* Tab — any other key means the user moved
+	// on, so a later, unrelated Tab must start a fresh completion
+	// rather than resuming a stale one.
+	if ke.Key != input.KeyTab {
+		w.completionCandidates = nil
+	}
+
 	switch {
+	case ke.Key == input.KeyTab && !ctrl && !alt:
+		w.completeTab()
 	case ke.Key == input.KeyEnter:
 		w.submit()
 	case ke.Key == input.KeyBackspace:
@@ -479,6 +694,81 @@ func (w *kyuReplWidget) historyNext() {
 	w.cursor = len(w.runes())
 }
 
+// ---- reverse history search (Ctrl-R) ----
+
+// searchStep is Ctrl-R: enters reverse history search if not already
+// in it (searchIndex starts at len(history), "no match yet"), or
+// advances to an older match with the same query if already searching
+// — bash's "press Ctrl-R again to go further back".
+func (w *kyuReplWidget) searchStep() {
+	if !w.searchMode {
+		w.searchMode = true
+		w.searchQuery = ""
+		w.searchIndex = len(w.history)
+		return
+	}
+	w.searchFrom(w.searchIndex - 1)
+}
+
+// searchFrom scans history backward from start (inclusive) for the
+// first entry containing searchQuery, updating searchIndex on a match.
+// No match leaves searchIndex wherever it already was, so renderInput
+// simply keeps showing the last successful match — the simplest
+// correct behavior, rather than a separate "no match" display state.
+func (w *kyuReplWidget) searchFrom(start int) {
+	if w.searchQuery == "" {
+		return
+	}
+	for i := start; i >= 0; i-- {
+		if strings.Contains(w.history[i], w.searchQuery) {
+			w.searchIndex = i
+			return
+		}
+	}
+}
+
+// handleSearchKey handles every key while searchMode is active —
+// called from handleKey once Ctrl-R itself (handled unconditionally
+// there, whether or not search is already active) has been ruled out.
+func (w *kyuReplWidget) handleSearchKey(ke input.KeyEvent) tui.Cmd {
+	switch {
+	case ke.Key == input.KeyEnter:
+		w.exitSearch(true)
+	case ke.Key == input.KeyEsc:
+		w.exitSearch(false)
+	case ke.Key == input.KeyBackspace:
+		if rs := []rune(w.searchQuery); len(rs) > 0 {
+			w.searchQuery = string(rs[:len(rs)-1])
+			w.searchFrom(len(w.history) - 1)
+		}
+	case ke.Rune != 0 && ke.Key == input.KeyNone && ke.Mod == 0:
+		w.searchQuery += string(ke.Rune)
+		w.searchFrom(len(w.history) - 1)
+	}
+	return nil
+}
+
+// exitSearch leaves search mode with whatever's currently matched
+// loaded as the input (if there was ever a match — otherwise w.input
+// is simply whatever it already was before search started, since
+// searchStep never touches it). doSubmit (Enter) additionally runs it
+// through the real submit()/evaluate() path, matching bash's
+// reverse-i-search, where Enter runs the found command immediately;
+// Esc (doSubmit false) just leaves it in the input line for further
+// editing, cursor at the end, the same placement historyPrev already
+// uses.
+func (w *kyuReplWidget) exitSearch(doSubmit bool) {
+	w.searchMode = false
+	if w.searchIndex < len(w.history) {
+		w.input = w.history[w.searchIndex]
+		w.cursor = len(w.runes())
+	}
+	w.searchQuery = ""
+	if doSubmit {
+		w.submit()
+	}
+}
+
 // submit inserts a newline at the cursor and keeps editing if the
 // resulting input isn't balanced yet (parser.BracketDepth), or
 // evaluates and clears it otherwise. Inserting at the cursor rather
@@ -566,6 +856,110 @@ func resultLines(v value.Value) []replLine {
 	return lines
 }
 
+// ---- tab completion ----
+
+// kyuKeywords is every kyu keyword — kept in sync by hand with
+// kyu/token/token.go's own (unexported) keywords map, since a list
+// this short and this rarely changing doesn't justify a new exported
+// API just for tab completion to reach it.
+var kyuKeywords = []string{
+	"if", "else", "while", "break", "continue", "bind", "unbind",
+	"true", "false", "null",
+}
+
+// isIdentRune is the narrower word-boundary tab completion needs:
+// isWordRune (cursor movement/kill commands) treats any non-whitespace
+// character, punctuation included, as part of a "word" — wrong for
+// extracting the identifier fragment being typed, which should stop
+// right at a '(' or '.' immediately before it. Matches kyu/lexer's own
+// identifier-char rules.
+func isIdentRune(r rune) bool {
+	return r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// currentIdentBounds returns the rune index the identifier fragment
+// immediately before the cursor starts at — equal to w.cursor itself
+// if the cursor isn't right after an identifier character at all (e.g.
+// right after a space or '('), meaning "complete from scratch," every
+// candidate a match.
+func (w *kyuReplWidget) currentIdentBounds() (start int) {
+	rs := w.runes()
+	start = w.cursor
+	for start > 0 && isIdentRune(rs[start-1]) {
+		start--
+	}
+	return start
+}
+
+// completeTab is Tab: fills in the longest common prefix of every
+// candidate (env.Names() — every user variable and builtin, see its
+// own doc comment — plus kyuKeywords) matching the identifier fragment
+// before the cursor, or — on an *immediately repeated* Tab with the
+// same fragment start (handleKey clears completionCandidates on any
+// other key) — cycles to the next candidate in that same list instead,
+// wrapping around. Matches classic bash/zsh completion: no dropdown/
+// menu UI, just in-place text replacement.
+func (w *kyuReplWidget) completeTab() {
+	start := w.currentIdentBounds()
+
+	if w.completionCandidates != nil && w.completionFragmentStart == start {
+		w.completionCycle = (w.completionCycle + 1) % len(w.completionCandidates)
+		w.replaceRange(start, w.cursor, w.completionCandidates[w.completionCycle])
+		return
+	}
+
+	fragment := string(w.runes()[start:w.cursor])
+	var candidates []string
+	for _, n := range w.env.Names() {
+		if strings.HasPrefix(n, fragment) {
+			candidates = append(candidates, n)
+		}
+	}
+	for _, kw := range kyuKeywords {
+		if strings.HasPrefix(kw, fragment) {
+			candidates = append(candidates, kw)
+		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	sort.Strings(candidates)
+
+	w.completionCandidates = candidates
+	w.completionFragmentStart = start
+	w.completionCycle = 0
+	w.replaceRange(start, w.cursor, commonPrefix(candidates))
+}
+
+// replaceRange replaces runes [start, end) with replacement, leaving
+// the cursor right after the inserted text — the same cursor-advance
+// behavior insertText already gives ordinary typing.
+func (w *kyuReplWidget) replaceRange(start, end int, replacement string) {
+	rs := w.runes()
+	merged := make([]rune, 0, len(rs)-(end-start)+len(replacement))
+	merged = append(merged, rs[:start]...)
+	merged = append(merged, []rune(replacement)...)
+	merged = append(merged, rs[end:]...)
+	w.input = string(merged)
+	w.cursor = start + len([]rune(replacement))
+}
+
+// commonPrefix returns the longest string every element of ss starts
+// with. ss must be non-empty; the result is ss[0] itself when there's
+// only one candidate (a unique match completes fully on the first Tab).
+func commonPrefix(ss []string) string {
+	prefix := ss[0]
+	for _, s := range ss[1:] {
+		for !strings.HasPrefix(s, prefix) {
+			prefix = prefix[:len(prefix)-1]
+			if prefix == "" {
+				return ""
+			}
+		}
+	}
+	return prefix
+}
+
 func trimmedNonEmpty(s string) bool {
 	for _, r := range s {
 		if r != ' ' && r != '\t' && r != '\n' && r != '\r' {
@@ -577,3 +971,19 @@ func trimmedNonEmpty(s string) bool {
 
 func (w *kyuReplWidget) Focusable() bool         { return true }
 func (w *kyuReplWidget) SetFocused(focused bool) { w.focused = focused }
+
+// WantsRawTab/ReleaseKey implement tui.RawKeyClaimer. Without this,
+// tui.App.HandleInput intercepts Tab globally for pane-focus
+// navigation before it's ever forwarded to HandleEvent at all (see its
+// own doc comment) — completeTab would be silently unreachable dead
+// code in the real app despite working correctly in every direct-call
+// unit test, since those bypass App.HandleInput entirely. Ctrl+\,
+// matching widget.Terminal's own default release key (see its
+// TerminalOptions.ReleaseKey), so shell panes and kyu-repl panes share
+// one "how do I get my keyboard focus back" muscle memory — not Esc,
+// which this widget already uses for a different purpose (exiting
+// reverse history search, see exitSearch).
+func (w *kyuReplWidget) WantsRawTab() bool { return true }
+func (w *kyuReplWidget) ReleaseKey() input.KeyEvent {
+	return input.KeyEvent{Rune: '\\', Mod: input.ModCtrl}
+}

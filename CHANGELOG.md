@@ -85,6 +85,20 @@ once a first tagged release is cut.
 - A script's own arguments are now visible as `args` (a `List` of
   `String`) in the script's environment — `9sh script.kyu foo bar`
   sees `args == ["foo", "bar"]`.
+- The TUI's kyu REPL pane gains tab completion (`Tab` — variables,
+  builtins, and keywords; fills the longest common match, cycles
+  through candidates on repeated `Tab`), reverse history search
+  (Ctrl+R, bash's reverse-i-search), and live syntax highlighting of
+  the input line as you type (already-submitted transcript lines are
+  untouched — a live editing aid, not a retroactive recolor). Scoped
+  to the TUI pane only: `-repl`'s plain `bufio.Scanner` has no raw
+  terminal mode and no way to intercept a single keystroke or
+  re-render mid-line, so giving it the same features would mean
+  building it a real line editor first — a separate, larger
+  undertaking, not done here. The pane now claims Tab for its own use
+  (`tui.RawKeyClaimer`) rather than the usual global pane-focus
+  navigation — `Ctrl+\` releases focus back to that, the same trade
+  shell panes already make for real tab-completion in a hosted shell.
 
 ### Changed
 

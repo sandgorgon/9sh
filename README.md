@@ -214,6 +214,9 @@ click into it):
 | Key | Does |
 |---|---|
 | `Enter` | Submit, or keep editing if brackets are still open |
+| `Tab` | Complete the identifier before the cursor (variables, builtins, keywords) — fills the longest common match, cycles through candidates on repeated `Tab` |
+| Ctrl+R | Reverse history search (bash's reverse-i-search) — type to search, `Enter` runs the match immediately, `Esc` loads it into the input line without running it, repeated Ctrl+R searches further back |
+| Ctrl+\\ | Release keyboard focus back to navigating panes/title bars/the control strip — `Tab`'s normally-global pane-navigation meaning is claimed by this pane's own completion instead, the same trade shell panes already make for real tab-completion in the hosted shell |
 | `←`/`→`, Ctrl+`←`/`→` | Move the cursor by character / by word |
 | `Home`/`End`, Ctrl+A/Ctrl+E | Jump to the start/end of the current line |
 | `Backspace`/`Delete` | Delete before/after the cursor |
@@ -232,6 +235,12 @@ Ctrl+C and Ctrl+Shift+C on a plain letter key — only a kitty-keyboard-
 protocol-aware terminal can tell them apart, which isn't something to
 assume. Alt+C for "just the visible part" sidesteps that ambiguity
 entirely.
+
+The input line is syntax-highlighted live as you type (keywords,
+strings, numbers, paths, and the `%`/`$`/`@` sigils each get their own
+color) — the already-submitted transcript above it doesn't, by design;
+this is a live editing aid, not a retroactive recolor of everything
+ever printed.
 
 No undo/redo, and no multi-line-aware history recall (Up/Down inside
 an open multi-line continuation navigate lines, not history) —

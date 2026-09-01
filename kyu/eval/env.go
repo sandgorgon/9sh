@@ -183,6 +183,28 @@ func (e *Env) Get(name string) (value.Value, bool) {
 	return nil, false
 }
 
+// Names returns every name visible from e — this scope's own vars, then
+// every enclosing scope's, deduplicated. Used for tab completion (see
+// pane/kyurepl.go's completeTab), not by eval itself. This already
+// covers every builtin for free: where/select/... (the plain builtins
+// map, kyu/eval/builtins.go) and checkout/cd/getenv/setenv/unsetenv/
+// glob/exit_code (the specially-registered ones, NewGlobalEnv) are all
+// just ordinary env.Define-populated entries on the root Env — there's
+// no separate "list of builtins" concept to expose here.
+func (e *Env) Names() []string {
+	seen := map[string]bool{}
+	var out []string
+	for n := e; n != nil; n = n.parent {
+		for name := range n.vars {
+			if !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
 // Define binds name in this scope (kyu's `:=`), shadowing any outer binding.
 func (e *Env) Define(name string, v value.Value) {
 	e.vars[name] = v

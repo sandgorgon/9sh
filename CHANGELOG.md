@@ -8,6 +8,17 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-03
+
+### Fixed
+
+- Docs: the README's kyu-repl Tab row only described identifier
+  completion, missing the `%`/`$`-sigil PATH-command behavior added in
+  0.4.5. The in-app help screen (opened with `?`) was also missing Tab
+  completion, Ctrl+R reverse history search, and Ctrl+\ release-focus
+  for the kyu-repl pane entirely — a pre-existing gap from when those
+  first shipped, not something 0.4.5 introduced.
+
 ## [0.4.5] - 2026-09-03
 
 ### Added

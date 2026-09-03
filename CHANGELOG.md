@@ -8,6 +8,15 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-03
+
+### Added
+
+- `pwd()` builtin: reads the working directory `cd()` set directly from
+  in-process state (`Env.Cwd()`), instead of needing to shell out to
+  `%pwd`. Falls back to the real `os.Getwd()` before `cd()` has ever
+  been called, so it's truthful from startup.
+
 ## [0.4.1] - 2026-09-02
 
 ### Fixed

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1021,6 +1022,47 @@ func TestPwdReflectsCd(t *testing.T) {
 	v := runEnv(t, `pwd()`, env)
 	if string(v.(value.String)) != dir {
 		t.Fatalf("pwd() = %q, want %q", v, dir)
+	}
+}
+
+// TestCdRelativePathResolvesAgainstCwd locks in the fix for a relative
+// cd(...) argument being os.Stat-ed (and stored) unresolved -- it used
+// to check the real OS process's own working directory instead of
+// kyu's virtual cwd, and on success stored the bare relative string, so
+// a later pwd() reported a fragment like "sub" instead of a real path.
+func TestCdRelativePathResolvesAgainstCwd(t *testing.T) {
+	base := t.TempDir()
+	sub := filepath.Join(base, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := NewGlobalEnv(nil)
+	runEnv(t, `cd("`+base+`")`, env)
+	runEnv(t, `cd("sub")`, env)
+	v := runEnv(t, `pwd()`, env)
+	if string(v.(value.String)) != sub {
+		t.Fatalf("pwd() = %q, want %q", v, sub)
+	}
+}
+
+// TestCdRelativePathResolvesAgainstOsGetwdBeforeAnyCd covers the same
+// resolution when cd() has never been called yet, so effectiveCwd falls
+// back to the real process's os.Getwd() as the base.
+func TestCdRelativePathResolvesAgainstOsGetwdBeforeAnyCd(t *testing.T) {
+	start, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(start, "testdata_cd_relative")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(sub) })
+	env := NewGlobalEnv(nil)
+	runEnv(t, `cd("testdata_cd_relative")`, env)
+	v := runEnv(t, `pwd()`, env)
+	if string(v.(value.String)) != sub {
+		t.Fatalf("pwd() = %q, want %q", v, sub)
 	}
 }
 

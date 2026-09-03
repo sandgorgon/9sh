@@ -8,6 +8,17 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-03
+
+### Fixed
+
+- `cd(path)`: a relative `path` is now resolved against the current
+  virtual cwd (falling back to the real `os.Getwd()` before `cd()` has
+  ever been called), instead of being checked against — and, on
+  success, stored as — the real OS process's own unrelated working
+  directory. Previously `cd("/a")` followed by `cd("b")` landed `pwd()`
+  on the literal string `"b"` instead of `/a/b`.
+
 ## [0.4.2] - 2026-09-03
 
 ### Added

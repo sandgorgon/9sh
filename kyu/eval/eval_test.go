@@ -1002,6 +1002,28 @@ j.stdout`, env)
 	}
 }
 
+func TestPwdFallsBackToOsGetwdBeforeCd(t *testing.T) {
+	env := NewGlobalEnv(nil)
+	wantDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := runEnv(t, `pwd()`, env)
+	if string(v.(value.String)) != wantDir {
+		t.Fatalf("pwd() = %q, want %q (os.Getwd fallback)", v, wantDir)
+	}
+}
+
+func TestPwdReflectsCd(t *testing.T) {
+	dir := t.TempDir()
+	env := NewGlobalEnv(nil)
+	runEnv(t, `cd("`+dir+`")`, env)
+	v := runEnv(t, `pwd()`, env)
+	if string(v.(value.String)) != dir {
+		t.Fatalf("pwd() = %q, want %q", v, dir)
+	}
+}
+
 func TestGetenvSetenvUnsetenvRoundTrip(t *testing.T) {
 	env := jobsAndEnvVarsEnv(t)
 	if v := runEnv(t, `getenv("NINESH_TEST_VAR")`, env); v.(value.String) != "" {

@@ -32,3 +32,24 @@ func biCd(env *Env, args []value.Value) (value.Value, error) {
 	env.SetCwd(string(path))
 	return value.Null{}, nil
 }
+
+// biPwd implements `pwd()`. Mirrors Env.Cwd() directly rather than
+// shelling out to `%pwd` — cwd is already in-process kyu state (see
+// SetCwd's doc comment), so reading it back shouldn't need a subprocess
+// round trip. Falls back to the real os.Getwd() when cd has never been
+// called (Env.Cwd() == ""), matching what a subprocess would inherit —
+// see Env.Cwd's doc comment — so pwd() is truthful from startup, not
+// just after a first cd().
+func biPwd(env *Env, args []value.Value) (value.Value, error) {
+	if len(args) != 0 {
+		return nil, fmt.Errorf("pwd: expected no arguments, got %d", len(args))
+	}
+	if cwd := env.Cwd(); cwd != "" {
+		return value.String(cwd), nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("pwd: %v", err)}, nil
+	}
+	return value.String(cwd), nil
+}

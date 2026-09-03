@@ -35,6 +35,11 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("cd", &Builtin{Name: "cd", Fn: func(args []value.Value) (value.Value, error) {
 		return biCd(env, args)
 	}})
+	// pwd needs the calling Env itself (to read Cwd()) — same
+	// closure-capture shape as cd above. See cd.go's biPwd doc comment.
+	env.Define("pwd", &Builtin{Name: "pwd", Fn: func(args []value.Value) (value.Value, error) {
+		return biPwd(env, args)
+	}})
 	// getenv/setenv/unsetenv need the calling Env's namespace — same
 	// closure-capture shape as cd/checkout above. See envvars.go.
 	env.Define("getenv", &Builtin{Name: "getenv", Fn: func(args []value.Value) (value.Value, error) {

@@ -81,7 +81,9 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   construct; recursion via a self-referencing closure still works too.
 - `cd(path)` sets the working directory `%cmd`/`$cmd` subprocesses run
   in — per-session state (like `bind`), not a real `chdir`, since every
-  pane in a TUI session shares one process.
+  pane in a TUI session shares one process. `pwd()` reads it back
+  in-process (no `%pwd` subprocess needed), falling back to the real
+  `os.Getwd()` before the first `cd()`.
 - `getenv(name)`/`setenv(name, value)`/`unsetenv(name)` read and write
   real files under `/env` — Plan 9's own convention (environment
   variables *are* namespace files), not hidden shell state. `%ls /env`

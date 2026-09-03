@@ -8,6 +8,16 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-02
+
+### Fixed
+
+- Lexer: a command name right after `%`/`$` that starts with a digit
+  (e.g. `9ed`, `9term` — Plan-9-style tool names) is now recognized as
+  the external-call sigil form instead of falling through to the `%`
+  modulo operator, which produced `unexpected token %("%")` at
+  statement start.
+
 ## [0.4.0] - 2026-09-01
 
 ### Added

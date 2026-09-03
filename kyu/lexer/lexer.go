@@ -85,10 +85,10 @@ func (l *Lexer) Next() token.Token {
 	r := l.peek()
 
 	switch {
+	case (isLetter(r) || isDigit(r)) && (l.lastKind == token.PERCENT || l.lastKind == token.DOLLAR):
+		return l.lexExternalName(line, col)
 	case isDigit(r):
 		return l.lexNumber(line, col)
-	case isLetter(r) && (l.lastKind == token.PERCENT || l.lastKind == token.DOLLAR):
-		return l.lexExternalName(line, col)
 	case isLetter(r):
 		return l.lexIdent(line, col)
 	case r == '"':
@@ -118,7 +118,7 @@ func (l *Lexer) Next() token.Token {
 		}
 		return l.emitAt(token.PIPE, "|", line, col)
 	case '%':
-		if !endsValue(l.lastKind) && isLetter(l.peek()) {
+		if !endsValue(l.lastKind) && (isLetter(l.peek()) || isDigit(l.peek())) {
 			return l.emitAt(token.PERCENT, "%", line, col)
 		}
 		return l.emitAt(token.MOD, "%", line, col)

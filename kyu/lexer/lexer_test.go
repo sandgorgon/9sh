@@ -98,6 +98,15 @@ func TestPercentSigilVsModulo(t *testing.T) {
 	assertKinds(t, `10 % 3`, []token.Kind{token.INT, token.MOD, token.INT, token.EOF})
 }
 
+func TestExternalCommandNameMayStartWithDigit(t *testing.T) {
+	// Plan-9-style tool names (9ed, 9term, ...) start with a digit; the '%'/'$'
+	// sigil must still disambiguate as the external-call form rather than
+	// falling back to modulo, and the digit-led name must lex as one IDENT
+	// rather than splitting into an INT and a trailing identifier.
+	assertKinds(t, `%9ed foo`, []token.Kind{token.PERCENT, token.IDENT, token.IDENT, token.EOF})
+	assertKinds(t, `$9term foo`, []token.Kind{token.DOLLAR, token.IDENT, token.IDENT, token.EOF})
+}
+
 func TestUnbindKeyword(t *testing.T) {
 	assertKinds(t, `unbind /local`, []token.Kind{token.UNBIND, token.PATH, token.EOF})
 }

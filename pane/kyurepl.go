@@ -1,6 +1,7 @@
 package pane
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/kyu/value"
+	"github.com/sandgorgon/9sh/pathresolve"
 )
 
 var (
@@ -891,16 +893,63 @@ func (w *kyuReplWidget) currentIdentBounds() (start int) {
 	return start
 }
 
+// currentExternalNameBounds reports whether the cursor sits inside an
+// external-command-name fragment — right after a '%' or '$' sigil,
+// kyu's external-call syntax (see kyu/lexer's lexExternalName) — and if
+// so, the rune index it starts at. Unlike an ordinary kyu identifier,
+// this fragment allows internal hyphens (docker-compose, apt-get, ...),
+// matching lexExternalName's own character set; that's the only reason
+// this isn't just currentIdentBounds with an extra check.
+func (w *kyuReplWidget) currentExternalNameBounds() (start int, ok bool) {
+	rs := w.runes()
+	start = w.cursor
+	for start > 0 && (isIdentRune(rs[start-1]) || rs[start-1] == '-') {
+		start--
+	}
+	if start == 0 {
+		return 0, false
+	}
+	sigil := rs[start-1]
+	return start, sigil == '%' || sigil == '$'
+}
+
+// externalNameCandidates lists every PATH executable whose name starts
+// with fragment, resolving PATH the same way a %cmd/$cmd actually would
+// (env.EnvSlice's /env-backed view, not this process's own real PATH —
+// see pathresolve's doc comment) so completion never offers a name the
+// command wouldn't actually resolve to.
+func (w *kyuReplWidget) externalNameCandidates(fragment string) []string {
+	envVars, err := w.env.EnvSlice(context.Background())
+	if err != nil {
+		return nil
+	}
+	var candidates []string
+	for _, n := range pathresolve.Names(envVars) {
+		if strings.HasPrefix(n, fragment) {
+			candidates = append(candidates, n)
+		}
+	}
+	return candidates
+}
+
 // completeTab is Tab: fills in the longest common prefix of every
-// candidate (env.Names() — every user variable and builtin, see its
-// own doc comment — plus kyuKeywords) matching the identifier fragment
-// before the cursor, or — on an *immediately repeated* Tab with the
-// same fragment start (handleKey clears completionCandidates on any
-// other key) — cycles to the next candidate in that same list instead,
-// wrapping around. Matches classic bash/zsh completion: no dropdown/
-// menu UI, just in-place text replacement.
+// candidate matching the fragment before the cursor, or — on an
+// *immediately repeated* Tab with the same fragment start (handleKey
+// clears completionCandidates on any other key) — cycles to the next
+// candidate in that same list instead, wrapping around. Matches classic
+// bash/zsh completion: no dropdown/menu UI, just in-place text
+// replacement.
+//
+// Right after a '%'/'$' sigil the candidates are PATH executables (see
+// currentExternalNameBounds/externalNameCandidates); everywhere else
+// they're env.Names() — every user variable and builtin, see its own
+// doc comment — plus kyuKeywords.
 func (w *kyuReplWidget) completeTab() {
-	start := w.currentIdentBounds()
+	externalStart, isExternal := w.currentExternalNameBounds()
+	start := externalStart
+	if !isExternal {
+		start = w.currentIdentBounds()
+	}
 
 	if w.completionCandidates != nil && w.completionFragmentStart == start {
 		w.completionCycle = (w.completionCycle + 1) % len(w.completionCandidates)
@@ -910,14 +959,18 @@ func (w *kyuReplWidget) completeTab() {
 
 	fragment := string(w.runes()[start:w.cursor])
 	var candidates []string
-	for _, n := range w.env.Names() {
-		if strings.HasPrefix(n, fragment) {
-			candidates = append(candidates, n)
+	if isExternal {
+		candidates = w.externalNameCandidates(fragment)
+	} else {
+		for _, n := range w.env.Names() {
+			if strings.HasPrefix(n, fragment) {
+				candidates = append(candidates, n)
+			}
 		}
-	}
-	for _, kw := range kyuKeywords {
-		if strings.HasPrefix(kw, fragment) {
-			candidates = append(candidates, kw)
+		for _, kw := range kyuKeywords {
+			if strings.HasPrefix(kw, fragment) {
+				candidates = append(candidates, kw)
+			}
 		}
 	}
 	if len(candidates) == 0 {

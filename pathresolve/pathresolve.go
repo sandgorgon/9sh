@@ -53,6 +53,42 @@ func LookPath(name string, env []string) (string, error) {
 	return "", fmt.Errorf("%s: executable file not found in PATH", name)
 }
 
+// Names returns the base names of every executable file found on any
+// PATH directory in env (same "NAME=VALUE" shape as LookPath, and the
+// same fallback to this process's own real PATH when env has no PATH
+// entry). A name found in more than one PATH directory is only listed
+// once — matching LookPath's own first-match-wins resolution order,
+// since that's the actual binary a completed name would run. Used for
+// tab-completing an external command name (%cmd/$cmd), so the order
+// doesn't matter beyond that: callers that want a stable order sort it
+// themselves.
+func Names(env []string) []string {
+	pathVar, ok := lookupEnv(env, "PATH")
+	if !ok {
+		pathVar = os.Getenv("PATH")
+	}
+	seen := make(map[string]bool)
+	var names []string
+	for _, dir := range filepath.SplitList(pathVar) {
+		if dir == "" {
+			dir = "." // POSIX shell convention: an empty PATH entry means cwd
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, ent := range entries {
+			name := ent.Name()
+			if seen[name] || !isExecutable(filepath.Join(dir, name)) {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func lookupEnv(env []string, key string) (string, bool) {
 	prefix := key + "="
 	for _, kv := range env {

@@ -1,6 +1,8 @@
 package pane
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -519,6 +521,96 @@ func TestKyuReplTabCompletesUserDefinedVariable(t *testing.T) {
 	sendKey(w, input.KeyTab)
 	if w.input != "myvar123" {
 		t.Fatalf("input = %q, want %q (a variable defined earlier this session)", w.input, "myvar123")
+	}
+}
+
+// writeFakeExecutable creates dir/name as an executable file — enough
+// for pathresolve.isExecutable, which only checks the mode bits, not
+// that the file is actually runnable.
+func writeFakeExecutable(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("writing fake executable %s: %v", name, err)
+	}
+}
+
+// newTestReplWidget's Env has no /env bound (eval.NewGlobalEnv(nil)'s
+// namespace is nil), so EnvSlice returns (nil, nil) and
+// externalNameCandidates falls back to pathresolve.Names(nil) — this
+// process's own real os.Getenv("PATH"). t.Setenv here is what lets
+// these tests control that fallback deterministically instead of
+// depending on whatever happens to be on the test runner's real PATH.
+
+func TestKyuReplTabCompletesExternalCommandAfterPercentSigil(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeExecutable(t, dir, "widget-tool")
+	t.Setenv("PATH", dir)
+
+	w := newTestReplWidget(t)
+	sendRunes(w, "%widget")
+	sendKey(w, input.KeyTab)
+	if w.input != "%widget-tool" {
+		t.Fatalf("input = %q, want %q", w.input, "%widget-tool")
+	}
+}
+
+func TestKyuReplTabCompletesExternalCommandAfterDollarSigil(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeExecutable(t, dir, "widget-tool")
+	t.Setenv("PATH", dir)
+
+	w := newTestReplWidget(t)
+	sendRunes(w, "$widget")
+	sendKey(w, input.KeyTab)
+	if w.input != "$widget-tool" {
+		t.Fatalf("input = %q, want %q", w.input, "$widget-tool")
+	}
+}
+
+func TestKyuReplTabExternalCommandFragmentIncludesHyphen(t *testing.T) {
+	// lexExternalName allows internal hyphens in an external command
+	// name (docker-compose, apt-get, ...) -- the fragment scan here
+	// must match that, or a Tab typed mid-name would only replace the
+	// text after the last hyphen instead of the whole name.
+	dir := t.TempDir()
+	writeFakeExecutable(t, dir, "apt-get")
+	t.Setenv("PATH", dir)
+
+	w := newTestReplWidget(t)
+	sendRunes(w, "%apt-g")
+	sendKey(w, input.KeyTab)
+	if w.input != "%apt-get" {
+		t.Fatalf("input = %q, want %q", w.input, "%apt-get")
+	}
+}
+
+func TestKyuReplTabExternalCommandNoMatchIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeExecutable(t, dir, "widget-tool")
+	t.Setenv("PATH", dir)
+
+	w := newTestReplWidget(t)
+	sendRunes(w, "%zzz_no_such_thing")
+	before := w.input
+	sendKey(w, input.KeyTab)
+	if w.input != before {
+		t.Fatalf("input changed to %q with no matching PATH executable, want unchanged (%q)", w.input, before)
+	}
+}
+
+func TestKyuReplTabExternalCommandIgnoresNonExecutableFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "widget-notes"), []byte("not a program"), 0o644); err != nil {
+		t.Fatalf("writing non-executable file: %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	w := newTestReplWidget(t)
+	sendRunes(w, "%widget")
+	before := w.input
+	sendKey(w, input.KeyTab)
+	if w.input != before {
+		t.Fatalf("input changed to %q, want unchanged (%q) -- a non-executable file must not be offered as a completion", w.input, before)
 	}
 }
 

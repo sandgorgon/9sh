@@ -20,6 +20,13 @@ import (
 // so callers that don't have /env keep today's inherit-everything
 // behavior unchanged rather than erroring or running with an empty
 // environment.
+// EnvSlice is envSlice's exported form — for callers outside package
+// eval that need the same "NAME=VALUE" view of /env (pane's tab
+// completion, resolving PATH the same way a %cmd/$cmd would).
+func (e *Env) EnvSlice(ctx context.Context) ([]string, error) {
+	return envSlice(ctx, e.Namespace())
+}
+
 func envSlice(ctx context.Context, namespace *ns.Namespace) ([]string, error) {
 	if namespace == nil {
 		return nil, nil

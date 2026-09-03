@@ -8,6 +8,18 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-03
+
+### Fixed
+
+- Pane multiplexer: a shell pane's output now appears right after
+  pressing Enter, instead of needing one more unrelated keypress to
+  force a redraw. `widget.Terminal`'s pty output updates its internal
+  screen state in a background goroutine, but that only became visible
+  the next time the app happened to render a frame for some other
+  reason — nothing was driving a periodic redraw while a shell pane
+  was live.
+
 ## [0.4.3] - 2026-09-03
 
 ### Fixed

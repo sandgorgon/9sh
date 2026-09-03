@@ -619,14 +619,77 @@ func TestSplitPaneMsgWithChosenSpecBuildsRightSibling(t *testing.T) {
 
 	next, cmd := m.Update(splitPaneMsg{id: id, dir: layout.Vertical, spec: ShellSpec("shell")})
 	m = next.(Model)
-	if cmd != nil {
-		t.Fatal("splitting with a shell spec should not produce a Cmd (no initial load needed)")
+	// A new shell pane starts a shellRedrawTickCmd chain (no separate
+	// initial-load Cmd exists for KindShell) — see
+	// TestSplitPaneWithShellSpecStartsShellRedrawTick for that behavior
+	// in isolation.
+	if cmd == nil {
+		t.Fatal("splitting with a shell spec should produce a Cmd (the shell redraw tick)")
 	}
 	if len(m.panes) != 2 {
 		t.Fatalf("got %d panes, want 2", len(m.panes))
 	}
 	if m.panes[1].kind != KindShell {
 		t.Fatalf("new sibling kind = %v, want KindShell", m.panes[1].kind)
+	}
+}
+
+// TestSplitPaneWithShellSpecStartsShellRedrawTick locks in the fix for
+// shell-pane output only becoming visible after an unrelated keypress
+// forced a redraw (widget.Terminal's pty output updates its internal
+// state in a background goroutine, invisible until the App next
+// renders a frame for any other reason — see shellRedrawTickCmd's doc
+// comment). Splitting off a shell pane should start exactly one
+// self-rescheduling tick chain, not zero and not more than one.
+func TestSplitPaneWithShellSpecStartsShellRedrawTick(t *testing.T) {
+	m := New(nil, "", KyuReplSpec("kyu", nil))
+	id := m.panes[0].id
+
+	next, cmd := m.Update(splitPaneMsg{id: id, dir: layout.Vertical, spec: ShellSpec("shell")})
+	m = next.(Model)
+	if !m.shellTickRunning {
+		t.Fatal("shellTickRunning should be true once a shell pane exists")
+	}
+	if cmd == nil {
+		t.Fatal("expected a non-nil Cmd starting the shell redraw tick")
+	}
+	if _, ok := cmd().(shellRedrawTickMsg); !ok {
+		t.Fatalf("expected the Cmd to eventually produce shellRedrawTickMsg, got %T", cmd())
+	}
+
+	// A second shell pane must not start a second chain.
+	id2 := m.panes[1].id
+	_, cmd2 := m.Update(splitPaneMsg{id: id2, dir: layout.Vertical, spec: ShellSpec("shell2")})
+	if cmd2 != nil {
+		t.Fatal("a second shell pane should not start a redundant tick chain")
+	}
+}
+
+// TestShellRedrawTickStopsOnceNoShellPaneRemains confirms the tick
+// chain reschedules itself while a shell pane is mounted and stops
+// (clearing shellTickRunning) once the last one closes, rather than
+// ticking forever in the background.
+func TestShellRedrawTickStopsOnceNoShellPaneRemains(t *testing.T) {
+	m := New(nil, "", ShellSpec("shell"))
+	m.shellTickRunning = true
+
+	next, cmd := m.Update(shellRedrawTickMsg{})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("expected the tick to reschedule itself while a shell pane remains")
+	}
+	if !m.shellTickRunning {
+		t.Fatal("shellTickRunning should stay true while rescheduling")
+	}
+
+	m.panes[0].kind = KindKyuRepl // simulate the shell pane having closed/changed
+	next, cmd = m.Update(shellRedrawTickMsg{})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("expected the tick to stop once no shell pane remains")
+	}
+	if m.shellTickRunning {
+		t.Fatal("shellTickRunning should be cleared once the tick stops")
 	}
 }
 

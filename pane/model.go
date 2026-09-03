@@ -49,6 +49,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
@@ -222,6 +223,13 @@ type Model struct {
 	// panes sitting along a Vertical axis the way minimize is.
 	zoomedID int
 
+	// shellTickRunning tracks whether a shellRedrawTickCmd chain is
+	// already in flight, so a shell pane created later (splitPaneMsg/
+	// addPaneMsg) doesn't start a redundant second chain alongside one
+	// New/Init already started for an earlier shell pane. See
+	// shellRedrawTickCmd's doc comment for why this exists at all.
+	shellTickRunning bool
+
 	// helpOpen is whether the built-in help screen (see help.go) is
 	// currently shown, as a widget.Modal overlay in View() — toggled by
 	// the control strip's "help" button (toggleHelpMsg) or closed from
@@ -269,7 +277,64 @@ func New(env *eval.Env, sessionDir string, specs ...Spec) Model {
 	for _, s := range specs {
 		m = m.withNewPane(s)
 	}
+	// Init (called separately by the App, from this same starting
+	// Model) starts the actual first shellRedrawTickCmd when a seed
+	// spec is a shell pane; set the flag here so it's already true
+	// before Update ever runs, keeping the two in sync from frame one.
+	m.shellTickRunning = hasShellPane(m)
 	return m
+}
+
+// hasShellPane reports whether any pane currently hosts a live
+// widget.Terminal — see shellRedrawTickCmd's doc comment.
+func hasShellPane(m Model) bool {
+	for _, p := range m.panes {
+		if p.kind == KindShell {
+			return true
+		}
+	}
+	return false
+}
+
+type shellRedrawTickMsg struct{}
+
+// shellRedrawInterval balances "shell output shows up promptly" against
+// redraw overhead — see shellRedrawTickCmd's doc comment.
+const shellRedrawInterval = 50 * time.Millisecond
+
+// shellRedrawTickCmd self-reschedules (see shellRedrawTickMsg's
+// handling in Update) for as long as at least one KindShell pane is
+// mounted. widget.Terminal's own doc comment explains why this is
+// needed: a hosted pty's output updates the widget's internal
+// vt.Screen state continuously in a background goroutine, but that
+// only becomes visible the next time the App happens to render a
+// frame for any other reason. Without this, a shell pane's output
+// from a command only appeared after some unrelated keypress forced a
+// redraw (e.g. the *next* Enter, not the one that ran the command).
+func shellRedrawTickCmd() tui.Cmd {
+	return func() tui.Msg {
+		time.Sleep(shellRedrawInterval)
+		return shellRedrawTickMsg{}
+	}
+}
+
+// withShellTickIfNeeded starts a shellRedrawTickCmd chain alongside
+// cmd when spec just created a new KindShell pane and no chain is
+// already running on next — see shellRedrawTickCmd's doc comment.
+// Shared by every pane-creation path (splitPaneMsg, both addPaneMsg
+// branches) so they can't each start their own redundant chain.
+func withShellTickIfNeeded(next Model, spec Spec, cmd tui.Cmd) (Model, tui.Cmd) {
+	if spec.Kind != KindShell || next.shellTickRunning {
+		return next, cmd
+	}
+	next.shellTickRunning = true
+	if cmd == nil {
+		// The common case (KindShell has no initial-load Cmd of its
+		// own) — avoid an unnecessary tui.Batch wrapper around just
+		// one Cmd.
+		return next, shellRedrawTickCmd()
+	}
+	return next, tui.Batch(cmd, shellRedrawTickCmd())
 }
 
 func (m Model) withNewPane(s Spec) Model {
@@ -589,6 +654,9 @@ func (m Model) Init() tui.Cmd {
 			cmds = append(cmds, listSessionCmd(p.id, p.sessionDir))
 		}
 	}
+	if m.shellTickRunning {
+		cmds = append(cmds, shellRedrawTickCmd())
+	}
 	return tui.Batch(cmds...)
 }
 
@@ -677,7 +745,7 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		if newPane == nil {
 			return next, nil
 		}
-		return next, initialLoadCmd(newPane, mm.spec)
+		return withShellTickIfNeeded(next, mm.spec, initialLoadCmd(newPane, mm.spec))
 	case resizePaneMsg:
 		return m.resizePane(mm.id, mm.delta), nil
 	case toggleMinimizeMsg:
@@ -703,7 +771,7 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		if !ok {
 			next := m.withNewPane(mm.spec)
 			newPane := next.panes[len(next.panes)-1]
-			return next, initialLoadCmd(newPane, mm.spec)
+			return withShellTickIfNeeded(next, mm.spec, initialLoadCmd(newPane, mm.spec))
 		}
 		dir := m.nextSplitDir
 		next, newPane := m.splitPane(target, dir, mm.spec)
@@ -711,7 +779,7 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		if newPane == nil {
 			return next, nil
 		}
-		return next, initialLoadCmd(newPane, mm.spec)
+		return withShellTickIfNeeded(next, mm.spec, initialLoadCmd(newPane, mm.spec))
 	case quitRequestedMsg:
 		return m, tui.Quit()
 	case toggleThemeMsg:
@@ -790,6 +858,17 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 			}
 			p.sessionCursor = clamp(p.sessionCursor, 0, max0(len(p.sessionRows)-1))
 		}
+	case shellRedrawTickMsg:
+		// shellTickRunning (set wherever a chain starts — New/Init and
+		// withShellTickIfNeeded) keeps this to a single chain at a
+		// time; reschedule while a shell pane still needs it, or clear
+		// the flag and let it die so a shell pane added later starts a
+		// fresh chain instead of finding one it thinks is still running.
+		if hasShellPane(m) {
+			return m, shellRedrawTickCmd()
+		}
+		m.shellTickRunning = false
+		return m, nil
 	}
 	return m, nil
 }

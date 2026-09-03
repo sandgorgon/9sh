@@ -8,6 +8,19 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-03
+
+### Added
+
+- Kyu-repl pane: Tab now completes external command names against real
+  `PATH` executables right after a `%`/`$` sigil, instead of only
+  offering user variables/builtins/keywords in that position. Resolved
+  through the same `/env`-backed `PATH` a `%cmd`/`$cmd` would actually
+  use, so completion never offers a name the command wouldn't resolve
+  to; the fragment scan allows internal hyphens (`docker-compose`,
+  `apt-get`), matching how the lexer itself reads an external command
+  name.
+
 ## [0.4.4] - 2026-09-03
 
 ### Fixed

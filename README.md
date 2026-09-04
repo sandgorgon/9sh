@@ -125,6 +125,12 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 - `unbind DST` clears whatever's bound at `DST` — the inverse of
   `bind`, same statement-not-function shape (a namespace-mutating verb
   stays a keyword). Unbinding something never bound is an error.
+- `help(name)` — e.g. `help("bind")` — returns that builtin/keyword's
+  signature and description as a `Record`; `help()` with no arguments
+  returns every documented entry as a `Table`. The pane multiplexer's
+  `?` screen renders the exact same table as its language-reference
+  section (press `2` there to jump straight to it), so the two can't
+  drift apart.
 - Closures take default parameters: `{ |a, b = 10| a + b }` — a later
   default may reference an earlier parameter (`{ |a, b = a| ... }`).
   Named, self-recursive, and mutually-recursive functions already work

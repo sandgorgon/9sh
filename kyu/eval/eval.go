@@ -68,6 +68,15 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 		}
 		return value.Int(*code), nil
 	}})
+	// vars/unset need the calling Env itself (to walk/mutate its scope
+	// chain) — same closure-capture shape as cd/checkout above. See
+	// vars.go's biVars/biUnset doc comments.
+	env.Define("vars", &Builtin{Name: "vars", Fn: func(args []value.Value) (value.Value, error) {
+		return biVars(env, args)
+	}})
+	env.Define("unset", &Builtin{Name: "unset", Fn: func(args []value.Value) (value.Value, error) {
+		return biUnset(env, args)
+	}})
 	return env
 }
 

@@ -94,6 +94,16 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
   `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
   `trim`/`replace`/`contains`/`join`.
+- `vars()` lists your own `:=`-defined kyu variables — name, kind, and
+  live value, as a `Table` (pipeable: `vars() | where kind == "path"`).
+  Unlike `/env`, kyu variables are plain lexical scope, not namespace
+  state, so there's no `%ls`-able equivalent — `vars()` is the only way
+  to see them, and it filters out builtins (they're `env.Define`d the
+  same way, with no separate registry) so it only ever shows what you
+  actually set. `unset(name)` is its companion, kyu variables' answer to
+  `unsetenv`/`unbind`: removes a binding (reporting whether one existed,
+  not erroring on a no-op — closer to `unsetenv`'s forgiving convention
+  than `unbind`'s strict one) and refuses outright to remove a builtin.
 - `glob(pattern)` — e.g. `glob("/local/*.go")` — matches namespace
   entries, not real OS paths (most of the namespace, like `/jobs` or a
   remote `/n/host` mount, has no OS path at all). Returns a `List` of

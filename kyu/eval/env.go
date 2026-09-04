@@ -222,3 +222,18 @@ func (e *Env) Set(name string, v value.Value) bool {
 	}
 	return false
 }
+
+// Delete removes name's binding, searching outward the same way Set
+// does (kyu's `unset`) — the mutation lands in whichever scope actually
+// holds the name, mirroring Set's shadowing rules. Reports whether a
+// binding was found and removed.
+func (e *Env) Delete(name string) bool {
+	if _, ok := e.vars[name]; ok {
+		delete(e.vars, name)
+		return true
+	}
+	if e.parent != nil {
+		return e.parent.Delete(name)
+	}
+	return false
+}

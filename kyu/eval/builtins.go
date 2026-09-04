@@ -34,6 +34,7 @@ var builtins = map[string]BuiltinFn{
 	"dir":       biDir,
 	"host":      biHost,
 	"join_path": biJoinPath,
+	"path":      biPath,
 	"last":      biLast,
 	"skip":      biSkip,
 	"reverse":   biReverse,
@@ -123,6 +124,36 @@ func biDir(args []value.Value) (value.Value, error) {
 		return value.ErrorVal{Msg: fmt.Sprintf("dir: %v", err)}, nil
 	}
 	return value.MountHandle{Addr: string(path), FS: fs}, nil
+}
+
+// biPath converts a String to a Path — the explicit escape hatch for
+// dynamically-built path text (format(...), split/join, getenv(...))
+// that would otherwise have no way to reach bind/checkout/stat/
+// join_path's base, all of which require an actual Path and hard-
+// reject a String (see dial/dir's own doc comments for why the reverse
+// direction is just as strict). An explicit, visible conversion, never
+// implicit coercion — matching how dir()/dial() are themselves the
+// only sanctioned way to cross the Path/String boundary elsewhere in
+// kyu, never a silent guess based on what a value looks like.
+//
+// Requires an absolute string, same as dir(): kyu has no namespace cwd
+// to resolve a relative one against (see the README's "Coming from
+// bash/zsh" section), and every Path literal the lexer itself can ever
+// produce is absolute by construction — a Path token only starts on a
+// leading "/" — so path(str) shouldn't be able to manufacture a kind
+// of Path value nothing else in the language can.
+func biPath(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("path: expected 1 argument (a string), got %d", len(args))
+	}
+	s, ok := args[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("path: expected a string, got %s", args[0].Kind())
+	}
+	if !strings.HasPrefix(string(s), "/") {
+		return nil, fmt.Errorf("path: must be absolute, got %q", string(s))
+	}
+	return value.Path(s), nil
 }
 
 // biJoinPath builds a Path from a base Path plus string segments — the

@@ -35,6 +35,7 @@ var builtins = map[string]BuiltinFn{
 	"host":      biHost,
 	"join_path": biJoinPath,
 	"path":      biPath,
+	"help":      biHelp,
 	"last":      biLast,
 	"skip":      biSkip,
 	"reverse":   biReverse,

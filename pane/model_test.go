@@ -1071,7 +1071,7 @@ func TestHelpButtonShowsHelpContentOnScreen(t *testing.T) {
 		}
 	}
 	forceRenders(app, 1)
-	if buf := app.Buffer().String(); !strings.Contains(buf, "pane multiplexer help") {
+	if buf := app.Buffer().String(); !strings.Contains(buf, "9sh — help") {
 		t.Fatalf("expected help content on screen after activating the help button:\n%s", buf)
 	}
 }

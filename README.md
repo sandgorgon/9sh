@@ -166,7 +166,76 @@ in with zero configuration: the socket path is exported to it as
 
 Drop `common.ky` / `hosts/<hostname>.ky` under `~/.config/9/ns` and 9sh
 runs them at startup, against the same environment, for persistent bind
-rules/aliases/env defaults — see [Design](#design).
+rules/aliases/env defaults — see [Design](#design) and
+[Coming from bash/zsh](#coming-from-bashzsh-there-is-no-current-directory)
+below.
+
+## Coming from bash/zsh: there is no current directory
+
+The single easiest wrong assumption to carry over from a Unix shell is
+that `/local` (or wherever you've `bind`ed things) is "where you are,"
+the way `$PWD` is. It isn't, and the difference is structural, not
+cosmetic:
+
+- **The namespace has no cwd.** Every namespace path — a `bind` target,
+  `glob(...)`, `%ls`, anything typed as a `Path` — is always a full path
+  from the namespace root. There's no implicit context a partial path
+  resolves against, so "what's my current directory in the namespace"
+  isn't a question with an answer; it's a category error, like asking
+  for the current directory of a URL.
+- **`/local` is a bootstrap convenience, not a home.** At startup 9sh
+  grafts the real OS directory it was launched from onto `/local`,
+  purely so a brand-new session has *something* real and browsable —
+  not because `/local` is a designated place you're meant to work from.
+  It's one bind among any others you make, with no special status once
+  you've made your own.
+- **`cd`/`pwd` are real, but they're not about the namespace.** External
+  Unix binaries (`%cmd`/`$cmd`) genuinely need a process cwd to run in —
+  that's an OS-level fact 9sh can't paper over — so `cd(path)`/`pwd()`
+  give them one. It starts out equal to `/local`'s target (both come
+  from the same `os.Getwd()` at launch), which is exactly what makes the
+  two feel like the same concept. They aren't: rebinding `/local` never
+  moves `cd`'s cwd, and `cd()` never touches `/local`'s bind. Treat `cd`
+  as configuration you hand to subprocesses, not as "where you are."
+- **Practical upshot:** always write full namespace paths. There's no
+  relative-path shorthand to reach for, and syntactically a `Path`
+  literal must start with `/` — `bind fdir, /local/f` doesn't parse as
+  "bind the fdir next to me"; `fdir` there is a reference to an
+  undefined variable.
+
+### Example: a starter `common.ky`
+
+A namespace layout is something you build up yourself via dotfiles,
+same as a `.bashrc`'s aliases and `PATH` — there's no single blessed
+default. A minimal starting point:
+
+```
+# ~/.config/9/ns/common.ky — run once at every 9sh startup
+
+# Give the launch directory a name that isn't the bootstrap default.
+bind /local, /work
+
+# dir(path) wraps any host directory into a bindable value — the local
+# sibling to dial(addr) — so this isn't limited to subtrees of wherever
+# 9sh happened to launch from.
+bind dir("/u/some/long/path/locn"), /std/locn
+
+# Best-effort: if nothing's listening yet, this bind fails and
+# dotfiles.Load reports one startup warning — it never blocks the
+# rest of common.ky or hosts/<hostname>.ky from running.
+bind dial("/run/user/1000/9ed/main.sock"), /n/9ed
+```
+
+```
+# ~/.config/9/ns/hosts/build-box.ky — only run on that one host
+
+bind dial("ci.internal:2049"), /n/ci
+```
+
+`dir(path)` requires an absolute host path (kyu has no "current
+directory" to resolve a relative one against — see above) and, like
+`dial`, returns an ordinary `ErrorVal` rather than aborting if the path
+doesn't exist.
 
 ## Using the pane multiplexer
 

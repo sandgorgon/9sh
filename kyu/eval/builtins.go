@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sandgorgon/9p/examples/dirfs"
+
 	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/kyu/value"
 	"github.com/sandgorgon/9sh/remote"
@@ -28,6 +30,7 @@ var builtins = map[string]BuiltinFn{
 	"error":     biError,
 	"wait":      biWait,
 	"dial":      biDial,
+	"dir":       biDir,
 	"host":      biHost,
 	"last":      biLast,
 	"skip":      biSkip,
@@ -88,6 +91,36 @@ func biDial(args []value.Value) (value.Value, error) {
 		return value.ErrorVal{Msg: fmt.Sprintf("dial: %v", err)}, nil
 	}
 	return value.MountHandle{Addr: string(addr), FS: conn.FS()}, nil
+}
+
+// biDir wraps an arbitrary host directory into a MountHandle, the local
+// sibling to biDial: dial reaches a remote/already-listening namespace,
+// dir reaches a real OS directory that isn't already walkable in the
+// current namespace (the launch directory alone gets that for free via
+// /local's own startup bind — see main.go's bootstrap). Same shape as
+// dial in every other respect: `bind dir("/u/some/long/path"), /std/x`,
+// and a bad path is an ordinary in-stream ErrorVal, not a hard Go error.
+//
+// Requires an absolute path, deliberately: kyu's namespace has no notion
+// of "current directory" (see the README's "Coming from bash/zsh"
+// section), so there's no sensible base a relative host path could
+// resolve against without inventing one — reject it instead of guessing.
+func biDir(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("dir: expected 1 argument (a host path), got %d", len(args))
+	}
+	path, ok := args[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("dir: expected a string path, got %s", args[0].Kind())
+	}
+	if !strings.HasPrefix(string(path), "/") {
+		return nil, fmt.Errorf("dir: path must be absolute, got %q", string(path))
+	}
+	fs, err := dirfs.New(string(path))
+	if err != nil {
+		return value.ErrorVal{Msg: fmt.Sprintf("dir: %v", err)}, nil
+	}
+	return value.MountHandle{Addr: string(path), FS: fs}, nil
 }
 
 func lastAsList(args []value.Value, fnName string) (*value.List, []value.Value, error) {

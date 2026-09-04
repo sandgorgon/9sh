@@ -8,6 +8,20 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-09-04
+
+### Fixed
+
+- Pane multiplexer: a pane's title bar now stays highlighted while
+  focus is on any of that pane's own widgets (its content included),
+  not only while the title bar itself is the literal tab-focused
+  widget — previously tabbing from a pane's title onto its own content
+  made the highlight disappear even though you were still working in
+  that pane, including the very first pane at launch, whose title bar
+  showed unfocused despite already having real keyboard input. Bumps
+  `tui` v0.1.13 → v0.5.0 for the new `tui.FocusAware` hook
+  (`sandgorgon/tui#24`).
+
 ## [0.4.7] - 2026-09-03
 
 ### Added

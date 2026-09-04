@@ -8,6 +8,26 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-09-04
+
+### Added
+
+- `stat(path)`/`ls(pattern)` builtins: real namespace file metadata
+  (size, permissions, `is_dir`, mtime/atime, uid/gid), which was
+  always one `Stat(ctx)` call away in the underlying 9P layer but never
+  surfaced to kyu. `stat` returns one `Path`'s properties as a
+  `Record`; `ls(pattern)` is `glob`'s metadata-bearing sibling — same
+  directory-and-pattern matching, returning a `Table` instead of bare
+  `Path`s.
+
+### Fixed
+
+- Docs: several README examples showed `%ls <namespace-path>` (e.g.
+  the Quick Start's own first example) as if it worked — it doesn't
+  and can't: `%cmd` hands a `Path` argument to the real external binary
+  as a literal string, with no namespace resolution. Replaced with
+  `ls`/`glob`, the actual working namespace-native mechanisms.
+
 ## [0.4.8] - 2026-09-04
 
 ### Fixed

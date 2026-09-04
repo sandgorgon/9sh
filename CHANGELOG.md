@@ -8,6 +8,26 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-09-03
+
+### Added
+
+- `dir(path)` builtin: wraps an arbitrary absolute host directory into
+  a bindable value, `dial(addr)`'s local sibling — `bind` could
+  previously only reach the real filesystem through `/local`'s own
+  startup bind, nothing else.
+- `join_path(base, ...segments)` builtin: builds a `Path` from an
+  already-fully-qualified base plus string segments, without
+  introducing any notion of a namespace-relative cwd (kyu deliberately
+  has none — see the new README section below).
+- `vars()` builtin: lists your own `:=`-defined kyu variables as a
+  pipeable `Table` (name/kind/value), filtered clear of builtins.
+  `unset(name)` is its companion removal verb.
+- README: new "Coming from bash/zsh: there is no current directory"
+  section, explaining why kyu's namespace has no cwd concept and what
+  `/local`/`cd()`/`pwd()` actually are — a persistent point of
+  confusion for anyone arriving from a Unix shell.
+
 ## [0.4.6] - 2026-09-03
 
 ### Fixed

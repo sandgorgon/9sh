@@ -228,7 +228,14 @@ cosmetic:
   `work := /local/some/project` once, then `join_path(work, "sub")` as
   often as you like — `base` still has to already be a fully-qualified
   `Path`, so this only ever shortens repetition of a root you already
-  spelled out, never resolves against implicit state.
+  spelled out, never resolves against implicit state. `path(str)`
+  crosses the same `String`/`Path` boundary the other way: dynamically
+  built path text (`format(...)`, `split`/`join`, ...) has no way to
+  reach `bind`/`checkout`/`stat`/`join_path`'s base without it, since
+  all of those hard-require an actual `Path`, never a `String` — same
+  as `dial`/`dir` hard-require a `String`, never a `Path`, in the
+  opposite direction. Both crossings are always an explicit function
+  call, never an implicit guess based on what a value looks like.
 
 ### Example: a starter `common.ky`
 

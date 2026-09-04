@@ -52,7 +52,7 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 
 ```
 9sh> bind /local, /work
-9sh> glob("/work/*.go")
+9sh> ls("/work/*.go")
 9sh> j := %sleep "5" &
 9sh> j.status.state
 "running"
@@ -87,12 +87,12 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 - `getenv(name)`/`setenv(name, value)`/`unsetenv(name)` read and write
   real files under `/env` — Plan 9's own convention (environment
   variables *are* namespace files), not hidden shell state.
-  `glob("/env/*")` to see what's there — a plain `%ls /env` won't work:
-  `%cmd` hands a `Path` argument to the real external binary as a
-  literal string, with no namespace resolution (`/env` has no real OS
-  path at all). `setenv("PATH", ...)` genuinely changes which binary
-  `%cmd`/`$cmd` resolve, not just what a subprocess sees about its own
-  environment.
+  `ls("/env/*")` to see what's there (or `glob("/env/*")` for just the
+  paths) — a plain `%ls /env` won't work: `%cmd` hands a `Path`
+  argument to the real external binary as a literal string, with no
+  namespace resolution (`/env` has no real OS path at all).
+  `setenv("PATH", ...)` genuinely changes which binary `%cmd`/`$cmd`
+  resolve, not just what a subprocess sees about its own environment.
 - Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
   `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
   `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
@@ -114,6 +114,14 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   Single directory only, no recursive `**`, and always an explicit
   path — kyu has no notion of a "current namespace directory" (`cd`'s
   cwd is a separate, OS-path-only concept, just for subprocesses).
+- `stat(path)`/`ls(pattern)` are `glob`'s metadata-bearing siblings:
+  `stat` returns one `Path`'s real properties as a `Record` (`path`,
+  `name`, `size`, `is_dir`, `mode` as an `"rwxr-xr-x"` string, `mtime`/
+  `atime` as Unix-epoch `Int`, `uid`, `gid`); `ls(pattern)` is `glob`'s
+  own directory-and-pattern matching, but returns a `Table` (`List` of
+  those `Record`s) instead of bare `Path`s — the real `ls -la`
+  experience, native to the namespace. `glob` itself is left alone for
+  when you just want plain `Path`s to pipe into `bind`/`checkout`/etc.
 - `unbind DST` clears whatever's bound at `DST` — the inverse of
   `bind`, same statement-not-function shape (a namespace-mutating verb
   stays a keyword). Unbinding something never bound is an error.

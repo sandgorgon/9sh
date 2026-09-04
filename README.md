@@ -201,7 +201,12 @@ cosmetic:
   relative-path shorthand to reach for, and syntactically a `Path`
   literal must start with `/` — `bind fdir, /local/f` doesn't parse as
   "bind the fdir next to me"; `fdir` there is a reference to an
-  undefined variable.
+  undefined variable. `join_path(base, ...segments)` takes the
+  retyping-the-whole-thing edge off that without smuggling in a cwd:
+  `work := /local/some/project` once, then `join_path(work, "sub")` as
+  often as you like — `base` still has to already be a fully-qualified
+  `Path`, so this only ever shortens repetition of a root you already
+  spelled out, never resolves against implicit state.
 
 ### Example: a starter `common.ky`
 
@@ -217,8 +222,11 @@ bind /local, /work
 
 # dir(path) wraps any host directory into a bindable value — the local
 # sibling to dial(addr) — so this isn't limited to subtrees of wherever
-# 9sh happened to launch from.
-bind dir("/u/some/long/path/locn"), /std/locn
+# 9sh happened to launch from. bind it once at a short namespace path,
+# then join_path builds further namespace paths off that alias instead
+# of retyping the host path each time.
+bind dir("/u/some/long/path"), /std/projects
+bind join_path(/std/projects, "locn"), /std/locn
 
 # Best-effort: if nothing's listening yet, this bind fails and
 # dotfiles.Load reports one startup warning — it never blocks the

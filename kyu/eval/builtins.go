@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strings"
 
@@ -32,6 +33,7 @@ var builtins = map[string]BuiltinFn{
 	"dial":      biDial,
 	"dir":       biDir,
 	"host":      biHost,
+	"join_path": biJoinPath,
 	"last":      biLast,
 	"skip":      biSkip,
 	"reverse":   biReverse,
@@ -121,6 +123,41 @@ func biDir(args []value.Value) (value.Value, error) {
 		return value.ErrorVal{Msg: fmt.Sprintf("dir: %v", err)}, nil
 	}
 	return value.MountHandle{Addr: string(path), FS: fs}, nil
+}
+
+// biJoinPath builds a Path from a base Path plus string segments — the
+// answer to "typing a full namespace path every time is a chore" that
+// doesn't reintroduce a namespace-relative cwd (kyu deliberately has
+// none — see the README's "Coming from bash/zsh" section): the base
+// still has to be a real, fully-qualified Path (a literal, or anything
+// else already typed Path — a bind alias stored in a variable, say), so
+// this only ever shortens repetition of an already-explicit root, never
+// resolves against implicit state.
+//
+// Uses "path", not "path/filepath": namespace paths are always "/"
+// -separated regardless of host OS, unlike a real filesystem path (9sh
+// ships darwin binaries too). path.Join also lexically cleans the
+// result (collapsing "." and ".."), same as it would for any other
+// Path literal you might have typed by hand — that can't escape past
+// the namespace root, so it's not treated as a special case here.
+func biJoinPath(args []value.Value) (value.Value, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("join_path: expected a base path and zero or more string segments, got 0 arguments")
+	}
+	base, ok := args[0].(value.Path)
+	if !ok {
+		return nil, fmt.Errorf("join_path: first argument must be a path, got %s", args[0].Kind())
+	}
+	segs := make([]string, len(args))
+	segs[0] = string(base)
+	for i, a := range args[1:] {
+		s, ok := a.(value.String)
+		if !ok {
+			return nil, fmt.Errorf("join_path: segment %d must be a string, got %s", i+1, a.Kind())
+		}
+		segs[i+1] = string(s)
+	}
+	return value.Path(path.Join(segs...)), nil
 }
 
 func lastAsList(args []value.Value, fnName string) (*value.List, []value.Value, error) {

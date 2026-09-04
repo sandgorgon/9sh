@@ -8,6 +8,21 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-09-04
+
+### Added
+
+- `help(name)`/`help()` builtin: returns a builtin/keyword's signature
+  and description as a `Record` (or every entry as a `Table` with no
+  argument), read from a single hand-maintained table shared with the
+  pane multiplexer's `?` screen.
+- The `?` help screen now has three sections instead of just
+  keybindings: the original keybinding reference, a full kyu language
+  reference (generated from the same table `help()` reads, so the two
+  can't drift apart), and a plain-text condensation of the README's
+  "Coming from bash/zsh" mental-model section. `1`/`2`/`3` jump
+  straight to a section.
+
 ## [0.4.10] - 2026-09-04
 
 ### Added

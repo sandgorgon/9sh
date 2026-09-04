@@ -68,6 +68,15 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 		}
 		return value.Int(*code), nil
 	}})
+	// stat/ls need the calling Env's namespace — same closure-capture
+	// shape as glob/checkout above. See stat.go's biStat/biLs doc
+	// comments.
+	env.Define("stat", &Builtin{Name: "stat", Fn: func(args []value.Value) (value.Value, error) {
+		return biStat(env, args)
+	}})
+	env.Define("ls", &Builtin{Name: "ls", Fn: func(args []value.Value) (value.Value, error) {
+		return biLs(env, args)
+	}})
 	// vars/unset need the calling Env itself (to walk/mutate its scope
 	// chain) — same closure-capture shape as cd/checkout above. See
 	// vars.go's biVars/biUnset doc comments.

@@ -52,7 +52,7 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 
 ```
 9sh> bind /local, /work
-9sh> %ls "-la" "/work" | %grep "go"
+9sh> glob("/work/*.go")
 9sh> j := %sleep "5" &
 9sh> j.status.state
 "running"
@@ -86,10 +86,13 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   `os.Getwd()` before the first `cd()`.
 - `getenv(name)`/`setenv(name, value)`/`unsetenv(name)` read and write
   real files under `/env` — Plan 9's own convention (environment
-  variables *are* namespace files), not hidden shell state. `%ls /env`
-  to see what's there. `setenv("PATH", ...)` genuinely changes which
-  binary `%cmd`/`$cmd` resolve, not just what a subprocess sees about
-  its own environment.
+  variables *are* namespace files), not hidden shell state.
+  `glob("/env/*")` to see what's there — a plain `%ls /env` won't work:
+  `%cmd` hands a `Path` argument to the real external binary as a
+  literal string, with no namespace resolution (`/env` has no real OS
+  path at all). `setenv("PATH", ...)` genuinely changes which binary
+  `%cmd`/`$cmd` resolve, not just what a subprocess sees about its own
+  environment.
 - Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
   `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
   `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
@@ -97,8 +100,8 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 - `vars()` lists your own `:=`-defined kyu variables — name, kind, and
   live value, as a `Table` (pipeable: `vars() | where kind == "path"`).
   Unlike `/env`, kyu variables are plain lexical scope, not namespace
-  state, so there's no `%ls`-able equivalent — `vars()` is the only way
-  to see them, and it filters out builtins (they're `env.Define`d the
+  state, so there's no `glob()`-able equivalent — `vars()` is the only
+  way to see them, and it filters out builtins (they're `env.Define`d the
   same way, with no separate registry) so it only ever shows what you
   actually set. `unset(name)` is its companion, kyu variables' answer to
   `unsetenv`/`unbind`: removes a binding (reporting whether one existed,
@@ -188,9 +191,10 @@ the way `$PWD` is. It isn't, and the difference is structural, not
 cosmetic:
 
 - **The namespace has no cwd.** Every namespace path — a `bind` target,
-  `glob(...)`, `%ls`, anything typed as a `Path` — is always a full path
-  from the namespace root. There's no implicit context a partial path
-  resolves against, so "what's my current directory in the namespace"
+  `glob(...)`, `checkout(...)`'s first argument, anything typed as a
+  `Path` — is always a full path from the namespace root. There's no
+  implicit context a partial path resolves against, so "what's my
+  current directory in the namespace"
   isn't a question with an answer; it's a category error, like asking
   for the current directory of a URL.
 - **`/local` is a bootstrap convenience, not a home.** At startup 9sh

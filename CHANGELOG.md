@@ -8,6 +8,18 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-09-04
+
+### Added
+
+- `path(str)` builtin: explicit `String` -> `Path` conversion, so
+  dynamically-built path text (`format(...)`, `split`/`join`,
+  `getenv(...)`) can reach `bind`/`checkout`/`stat`/`join_path`'s base
+  — all of which require an actual `Path` and reject a `String`, same
+  as `dial`/`dir` require a `String` and reject a `Path` in the
+  opposite direction. Requires an absolute string, same rule `dir()`
+  already applies.
+
 ## [0.4.9] - 2026-09-04
 
 ### Added

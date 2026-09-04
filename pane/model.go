@@ -237,6 +237,19 @@ type Model struct {
 	// for why Esc/'?'/'q' are safe to claim there but not as a global
 	// hotkey elsewhere in this package).
 	helpOpen bool
+
+	// focusedKey mirrors tui.FocusAware's SetFocusedKey — see that
+	// method's doc comment for why a *string (allocated once in New,
+	// like panes' own []*paneState pointers) rather than a plain string
+	// field: SetFocusedKey is called directly by App.render() on
+	// whatever Model App already holds, entirely outside the normal
+	// "Update returns a new Model value, App replaces a.model" flow
+	// every other field relies on — a plain field's mutation would be
+	// silently discarded the moment SetFocusedKey returns, since every
+	// Update-produced Model is its own copy. Mutating through the
+	// shared pointer instead means every copy of this Model sees the
+	// same underlying string.
+	focusedKey *string
 }
 
 // New builds a Model seeded with the given panes. env is used to build
@@ -259,7 +272,7 @@ type Model struct {
 // the control strip's "theme" button (see themeButton/toggleThemeMsg)
 // does let the user flip Dark/Light by hand, live, without a restart.
 func New(env *eval.Env, sessionDir string, specs ...Spec) Model {
-	m := Model{env: env, sessionDir: sessionDir, theme: style.Default(style.DetectAppearance(os.Getenv)), nextSplitDir: layout.Horizontal}
+	m := Model{env: env, sessionDir: sessionDir, theme: style.Default(style.DetectAppearance(os.Getenv)), nextSplitDir: layout.Horizontal, focusedKey: new(string)}
 	// root is created once, up front, as an (initially empty) Vertical
 	// split — never replaced or re-wrapped afterward. The seed panes
 	// passed in here (specs) are appended straight to it, since there's
@@ -1365,7 +1378,15 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 		titleFill = '─'
 	}
 	titleBar := flatFocusable(paneKey(id, "title"), label, titleFill,
-		func(focused bool) cell.Style { return m.titleStyle(p, focused) },
+		// focused (this exact widget) is OR'd with paneHasFocus(id) (any
+		// widget in this pane) rather than replaced by it: paneHasFocus
+		// reflects the *previous* render's FocusAware report (see its
+		// own doc comment on the one-frame lag), while focused is this
+		// same frame's real answer for the title row specifically — the
+		// OR keeps the title row itself always accurate immediately, and
+		// only leans on the one-frame-behind signal for its sibling
+		// content widget.
+		func(focused bool) cell.Style { return m.titleStyle(p, focused || m.paneHasFocus(id)) },
 		// Every key here is scoped to the title bar specifically, never
 		// a global hotkey, for the same reason minimize already was:
 		// tui.App delivers every key to both Update and the focused
@@ -1522,4 +1543,42 @@ func (m Model) titleStyle(p *paneState, focused bool) cell.Style {
 		return cell.Style{Bg: m.theme.Error, Attr: cell.AttrBold}
 	}
 	return m.barStyle(focused)
+}
+
+// SetFocusedKey implements tui.FocusAware (tui v0.5.0+): App.render()
+// calls this immediately before View() with the Node.Key of whichever
+// focusable widget currently holds keyboard focus (nil if none/unkeyed,
+// or focus is inside an active FocusScope). Stored through focusedKey's
+// shared pointer — see that field's own doc comment for why a plain
+// value-receiver field write wouldn't stick.
+//
+// A non-string key (nil, or any future non-string Key value) clears it
+// to "", never mistaken for a real pane key since paneKey never
+// produces an empty string.
+func (m Model) SetFocusedKey(key any) {
+	if m.focusedKey == nil { // only a bare Model{} bypassing New would hit this
+		return
+	}
+	s, _ := key.(string)
+	*m.focusedKey = s
+}
+
+// paneHasFocus reports whether the most recently reported FocusAware
+// key (see SetFocusedKey) belongs to pane id — true while focus is on
+// any of that pane's own focusables (its content included), not only
+// while its title bar specifically is the literal tab-focused widget.
+// This is what lets a pane's title bar stay highlighted across a Tab
+// press that moves focus from the title row onto the pane's own
+// content, instead of flickering unfocused the instant you're no
+// longer on the title row itself.
+//
+// Prefix-matches against paneKey(id, "") ("pane-<id>-"): safe against
+// an id-prefix collision (pane 1 vs pane 10) since paneKey always
+// inserts a literal "-" right after id, so "pane-1-" is never a prefix
+// of "pane-10-...".
+func (m Model) paneHasFocus(id int) bool {
+	if m.focusedKey == nil {
+		return false
+	}
+	return strings.HasPrefix(*m.focusedKey, paneKey(id, ""))
 }

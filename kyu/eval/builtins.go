@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
@@ -20,45 +21,52 @@ import (
 // evalPipeExpr) the piped-in value is appended as the final argument, so
 // each signature below reads as "explicit args..., then the input".
 var builtins = map[string]BuiltinFn{
-	"where":     biWhere,
-	"select":    biSelect,
-	"sort_by":   biSortBy,
-	"group_by":  biGroupBy,
-	"each":      biEach,
-	"take":      biTake,
-	"first":     biFirst,
-	"count":     biCount,
-	"error":     biError,
-	"wait":      biWait,
-	"dial":      biDial,
-	"dir":       biDir,
-	"host":      biHost,
-	"join_path": biJoinPath,
-	"path":      biPath,
-	"help":      biHelp,
-	"last":      biLast,
-	"skip":      biSkip,
-	"reverse":   biReverse,
-	"uniq":      biUniq,
-	"flatten":   biFlatten,
-	"join":      biJoin,
-	"sum":       biSum,
-	"min":       biMin,
-	"max":       biMax,
-	"avg":       biAvg,
-	"any":       biAny,
-	"all":       biAll,
-	"to_json":   biToJSON,
-	"from_json": biFromJSON,
-	"split":     biSplit,
-	"trim":      biTrim,
-	"replace":   biReplace,
-	"contains":  biContains,
-	"format":    biFormat,
-	"len":       biLen,
-	"repeat":    biRepeat,
-	"pad_left":  biPadLeft,
-	"pad_right": biPadRight,
+	"where":       biWhere,
+	"select":      biSelect,
+	"sort_by":     biSortBy,
+	"group_by":    biGroupBy,
+	"each":        biEach,
+	"take":        biTake,
+	"first":       biFirst,
+	"count":       biCount,
+	"error":       biError,
+	"wait":        biWait,
+	"dial":        biDial,
+	"dir":         biDir,
+	"host":        biHost,
+	"join_path":   biJoinPath,
+	"path":        biPath,
+	"help":        biHelp,
+	"last":        biLast,
+	"skip":        biSkip,
+	"reverse":     biReverse,
+	"uniq":        biUniq,
+	"flatten":     biFlatten,
+	"join":        biJoin,
+	"sum":         biSum,
+	"min":         biMin,
+	"max":         biMax,
+	"avg":         biAvg,
+	"any":         biAny,
+	"all":         biAll,
+	"to_json":     biToJSON,
+	"from_json":   biFromJSON,
+	"split":       biSplit,
+	"trim":        biTrim,
+	"replace":     biReplace,
+	"contains":    biContains,
+	"format":      biFormat,
+	"len":         biLen,
+	"repeat":      biRepeat,
+	"pad_left":    biPadLeft,
+	"pad_right":   biPadRight,
+	"index_of":    biIndexOf,
+	"starts_with": biStartsWith,
+	"ends_with":   biEndsWith,
+	"upper":       biUpper,
+	"lower":       biLower,
+	"to_int":      biToInt,
+	"to_float":    biToFloat,
 }
 
 // biHost returns this machine's hostname — the design doc's own example
@@ -900,19 +908,179 @@ func biFormat(args []value.Value) (value.Value, error) {
 	return value.String(b.String()), nil
 }
 
+// biContains dispatches on the *input's* kind (the trailing argument),
+// not the needle's: a String input is a substring check (needle must be
+// a String), a List input is an element-membership check (needle can be
+// any Value, compared via value.Equal — the same equality == already
+// uses). Kept as one name rather than a separate list_contains, matching
+// how count/first/etc. already work across kinds without a per-kind
+// suffix.
 func biContains(args []value.Value) (value.Value, error) {
-	s, rest, err := lastAsString(args, "contains")
+	if len(args) == 0 {
+		return nil, fmt.Errorf("contains: missing input")
+	}
+	input := args[len(args)-1]
+	rest := args[:len(args)-1]
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("contains: expected 1 needle argument, got %d", len(rest))
+	}
+	switch in := input.(type) {
+	case value.String:
+		needle, ok := rest[0].(value.String)
+		if !ok {
+			return nil, fmt.Errorf("contains: needle argument must be a string, got %s", rest[0].Kind())
+		}
+		return value.Bool(strings.Contains(string(in), string(needle))), nil
+	case *value.List:
+		for _, e := range in.Elems {
+			if value.Equal(e, rest[0]) {
+				return value.Bool(true), nil
+			}
+		}
+		return value.Bool(false), nil
+	default:
+		return nil, fmt.Errorf("contains: expected a string or list/table input, got %s", input.Kind())
+	}
+}
+
+// biIndexOf is contains' position-reporting sibling: a String input finds
+// a substring's first rune index (not byte index — consistent with len's
+// rune-count convention); a List input finds the first element equal to
+// needle (value.Equal, same as contains). -1 when not found, matching the
+// common indexOf/find convention rather than null, so the result stays a
+// plain comparable Int (`index_of(x, lst) >= 0`) without an extra kind
+// check.
+func biIndexOf(args []value.Value) (value.Value, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("index_of: missing input")
+	}
+	input := args[len(args)-1]
+	rest := args[:len(args)-1]
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("index_of: expected 1 needle argument, got %d", len(rest))
+	}
+	switch in := input.(type) {
+	case value.String:
+		needle, ok := rest[0].(value.String)
+		if !ok {
+			return nil, fmt.Errorf("index_of: needle argument must be a string, got %s", rest[0].Kind())
+		}
+		byteIdx := strings.Index(string(in), string(needle))
+		if byteIdx < 0 {
+			return value.Int(-1), nil
+		}
+		return value.Int(len([]rune(string(in)[:byteIdx]))), nil
+	case *value.List:
+		for i, e := range in.Elems {
+			if value.Equal(e, rest[0]) {
+				return value.Int(i), nil
+			}
+		}
+		return value.Int(-1), nil
+	default:
+		return nil, fmt.Errorf("index_of: expected a string or list/table input, got %s", input.Kind())
+	}
+}
+
+func biStartsWith(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "starts_with")
 	if err != nil {
 		return nil, err
 	}
 	if len(rest) != 1 {
-		return nil, fmt.Errorf("contains: expected 1 needle argument, got %d", len(rest))
+		return nil, fmt.Errorf("starts_with: expected 1 prefix argument, got %d", len(rest))
 	}
-	needle, ok := rest[0].(value.String)
+	prefix, ok := rest[0].(value.String)
 	if !ok {
-		return nil, fmt.Errorf("contains: needle argument must be a string, got %s", rest[0].Kind())
+		return nil, fmt.Errorf("starts_with: prefix argument must be a string, got %s", rest[0].Kind())
 	}
-	return value.Bool(strings.Contains(string(s), string(needle))), nil
+	return value.Bool(strings.HasPrefix(string(s), string(prefix))), nil
+}
+
+func biEndsWith(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "ends_with")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("ends_with: expected 1 suffix argument, got %d", len(rest))
+	}
+	suffix, ok := rest[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("ends_with: suffix argument must be a string, got %s", rest[0].Kind())
+	}
+	return value.Bool(strings.HasSuffix(string(s), string(suffix))), nil
+}
+
+func biUpper(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "upper")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("upper: expected no arguments besides input, got %d", len(rest))
+	}
+	return value.String(strings.ToUpper(string(s))), nil
+}
+
+func biLower(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "lower")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("lower: expected no arguments besides input, got %d", len(rest))
+	}
+	return value.String(strings.ToLower(string(s))), nil
+}
+
+// biToInt/biToFloat are kyu's answer to "a script's own args are always
+// String" (README) — otherwise there's no way to do arithmetic on a
+// numeric CLI argument at all. Accepts Int/Float directly too (identity/
+// truncate), matching how kyu's own arithmetic operators already
+// promote between them (see toFloat above), so `to_int(x)` is safe to
+// call without checking x's kind first. An unparseable String is an
+// ErrorVal, not a hard Go error — same "bad input is an expected,
+// in-stream failure" stance from_json already takes, so `?` or `where`
+// can handle it without a try/catch kyu doesn't have.
+func biToInt(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("to_int: expected exactly 1 argument, got %d", len(args))
+	}
+	switch v := args[0].(type) {
+	case value.Int:
+		return v, nil
+	case value.Float:
+		return value.Int(int64(v)), nil
+	case value.String:
+		n, err := strconv.ParseInt(strings.TrimSpace(string(v)), 10, 64)
+		if err != nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("to_int: %q is not a valid integer", string(v))}, nil
+		}
+		return value.Int(n), nil
+	default:
+		return nil, fmt.Errorf("to_int: expected a string, int, or float, got %s", v.Kind())
+	}
+}
+
+func biToFloat(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("to_float: expected exactly 1 argument, got %d", len(args))
+	}
+	switch v := args[0].(type) {
+	case value.Int:
+		return value.Float(v), nil
+	case value.Float:
+		return v, nil
+	case value.String:
+		f, err := strconv.ParseFloat(strings.TrimSpace(string(v)), 64)
+		if err != nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("to_float: %q is not a valid number", string(v))}, nil
+		}
+		return value.Float(f), nil
+	default:
+		return nil, fmt.Errorf("to_float: expected a string, int, or float, got %s", v.Kind())
+	}
 }
 
 // biLen counts runes for a String, elements for a List/Table — the one

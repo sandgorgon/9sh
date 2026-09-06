@@ -15,6 +15,13 @@ once a first tagged release is cut.
   `pad_right` are for building an exact fixed-width line of output
   (aligned columns, a separator rule) without hand-writing a
   self-recursive closure for something this ordinary.
+- `upper`/`lower`/`starts_with`/`ends_with`/`index_of` string builtins,
+  and `contains`/`index_of` now also accept a `List`/`Table` input
+  (element equality) instead of only a String substring check.
+- `to_int`/`to_float` builtins — parse a String into a number (an
+  unparseable one is an `ErrorVal`, not a hard error); previously there
+  was no way to do arithmetic on a script's own `args`, which always
+  arrive as `String`.
 
 ### Fixed
 

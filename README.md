@@ -101,9 +101,15 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
   `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
   `trim`/`replace`/`contains`/`join`/`len`/`repeat`/`pad_left`/
-  `pad_right` — the last four are for building an exact line of output
+  `pad_right`/`upper`/`lower`/`starts_with`/`ends_with`/`index_of` — the
+  `pad_*`/`repeat`/`len` group is for building an exact line of output
   (a fixed-width column, a separator rule) rather than free-text
-  templating, which is what `format` is for.
+  templating, which is what `format` is for. `contains`/`index_of` work
+  on a `List`/`Table` too (element equality), not just a substring
+  check. `to_int(str)`/`to_float(str)` parse a String into a number —
+  otherwise there'd be no way to do arithmetic on a script's own `args`,
+  which are always `String`; an unparseable input is an `ErrorVal`, not
+  a hard error.
 - `vars()` lists your own `:=`-defined kyu variables — name, kind, and
   live value, as a `Table` (pipeable: `vars() | where { |v| v.kind == "path" }`).
   Unlike `/env`, kyu variables are plain lexical scope, not namespace

@@ -694,6 +694,86 @@ func TestPadLeftPadRight(t *testing.T) {
 	runErr(t, `pad_left(5, "", "x")`)
 }
 
+func TestUpperLower(t *testing.T) {
+	if v := run(t, `upper("Hello World")`); v.(value.String) != "HELLO WORLD" {
+		t.Errorf("upper got %q", v)
+	}
+	if v := run(t, `"Hello World" | lower`); v.(value.String) != "hello world" {
+		t.Errorf("lower got %q", v)
+	}
+}
+
+func TestStartsWithEndsWith(t *testing.T) {
+	if v := run(t, `starts_with("He", "Hello")`); v.(value.Bool) != true {
+		t.Errorf("starts_with got %v, want true", v)
+	}
+	if v := run(t, `starts_with("lo", "Hello")`); v.(value.Bool) != false {
+		t.Errorf("starts_with got %v, want false", v)
+	}
+	if v := run(t, `"Hello" | ends_with("lo")`); v.(value.Bool) != true {
+		t.Errorf("ends_with got %v, want true", v)
+	}
+	if v := run(t, `ends_with("He", "Hello")`); v.(value.Bool) != false {
+		t.Errorf("ends_with got %v, want false", v)
+	}
+}
+
+func TestContainsOnList(t *testing.T) {
+	if v := run(t, `[1, 2, 3] | contains(2)`); v.(value.Bool) != true {
+		t.Errorf("contains got %v, want true", v)
+	}
+	if v := run(t, `[1, 2, 3] | contains(9)`); v.(value.Bool) != false {
+		t.Errorf("contains got %v, want false", v)
+	}
+	// string contains behavior is unchanged
+	if v := run(t, `"hello world" | contains("wor")`); v.(value.Bool) != true {
+		t.Errorf("contains(string) got %v, want true", v)
+	}
+}
+
+func TestIndexOf(t *testing.T) {
+	if v := run(t, `index_of("l", "hello")`); v.(value.Int) != 2 {
+		t.Errorf("index_of(string) got %v, want 2", v)
+	}
+	if v := run(t, `index_of("z", "hello")`); v.(value.Int) != -1 {
+		t.Errorf("index_of(string, not found) got %v, want -1", v)
+	}
+	if v := run(t, `[10, 20, 30] | index_of(20)`); v.(value.Int) != 1 {
+		t.Errorf("index_of(list) got %v, want 1", v)
+	}
+	if v := run(t, `[10, 20, 30] | index_of(99)`); v.(value.Int) != -1 {
+		t.Errorf("index_of(list, not found) got %v, want -1", v)
+	}
+}
+
+func TestToIntToFloat(t *testing.T) {
+	if v := run(t, `to_int("42")`); v.(value.Int) != 42 {
+		t.Errorf("to_int got %v, want 42", v)
+	}
+	if v := run(t, `to_int(3.9)`); v.(value.Int) != 3 {
+		t.Errorf("to_int(float) got %v, want 3 (truncated)", v)
+	}
+	if v := run(t, `to_int(5)`); v.(value.Int) != 5 {
+		t.Errorf("to_int(int) got %v, want 5 (identity)", v)
+	}
+	if v := run(t, `to_int("nope")`); v.Kind() != "error" {
+		t.Fatalf("to_int(bad string) got %#v, want ErrorVal", v)
+	}
+	if v := run(t, `to_float("3.14")`); v.(value.Float) != 3.14 {
+		t.Errorf("to_float got %v, want 3.14", v)
+	}
+	if v := run(t, `to_float(5)`); v.(value.Float) != 5 {
+		t.Errorf("to_float(int) got %v, want 5", v)
+	}
+	if v := run(t, `to_float("nope")`); v.Kind() != "error" {
+		t.Fatalf("to_float(bad string) got %#v, want ErrorVal", v)
+	}
+	// a script's own args are always String — this is the load-bearing case
+	if v := run(t, `to_int("5") + 10`); v.(value.Int) != 15 {
+		t.Errorf("to_int arithmetic got %v, want 15", v)
+	}
+}
+
 func TestErrCheckAborts(t *testing.T) {
 	err := runErr(t, `error("boom")?`)
 	if err.Error() != "boom" {

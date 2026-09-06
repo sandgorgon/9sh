@@ -24,7 +24,7 @@ import (
 //
 // Returns a Table (List of *Record, kyu's own convention) — name, kind,
 // and the live value itself — rather than bare names, so the result is
-// pipeable (`vars() | where kind == "path"`) like everything else
+// pipeable (`vars() | where { |v| v.kind == "path" }`) like everything else
 // data-shaped in kyu.
 func biVars(env *Env, args []value.Value) (value.Value, error) {
 	if len(args) != 0 {

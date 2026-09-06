@@ -489,6 +489,20 @@ func TestLast(t *testing.T) {
 	}
 }
 
+func TestLastWithCount(t *testing.T) {
+	v := run(t, `[1, 2, 3, 4, 5] | last(2)`)
+	elems := v.(*value.List).Elems
+	if len(elems) != 2 || elems[0].(value.Int) != 4 || elems[1].(value.Int) != 5 {
+		t.Errorf("got %v, want [4, 5]", v)
+	}
+	if v := run(t, `[1, 2] | last(0)`); len(v.(*value.List).Elems) != 0 {
+		t.Errorf("got %v, want []", v)
+	}
+	if v := run(t, `[1, 2] | last(5)`); len(v.(*value.List).Elems) != 2 {
+		t.Errorf("got %v, want [1, 2] (count larger than list)", v)
+	}
+}
+
 func TestSkip(t *testing.T) {
 	v := run(t, `[1, 2, 3, 4, 5] | skip(2)`)
 	elems := v.(*value.List).Elems

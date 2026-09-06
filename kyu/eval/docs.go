@@ -78,16 +78,16 @@ var builtinDocs = []BuiltinDoc{
 		"Builds an ErrorVal directly — falsy, flows through a pipeline as an ordinary value; a trailing ? promotes it to a hard abort."},
 
 	// Data pipeline
-	{"where", "... | where cond", "Filters a Table/List by a boolean expression evaluated per row."},
-	{"select", "... | select field1, field2, ...", "Projects a Table down to just the named fields."},
-	{"sort_by", "... | sort_by field", "Sorts a Table/List by a field or expression."},
-	{"group_by", "... | group_by field", "Groups a Table by a field into a Table of {key, items} records."},
-	{"each", "... | each closure", "Maps closure over every element, returning a new List/Table."},
-	{"take", "... | take n", "The first n elements."},
+	{"where", `... | where { |row| cond }`, "Filters a Table/List by a boolean expression evaluated per row. where/select/etc. are plain functions, not keywords — the '{ |row| ... }' form is pipe-position sugar for a single-argument call; a named closure needs explicit parens, e.g. where(pred)."},
+	{"select", `... | select("field1", "field2", ...)`, "Projects a Table down to just the named fields (String field-name arguments, not barewords)."},
+	{"sort_by", `... | sort_by("field")`, "Sorts a Table/List by a field name (String), or by a { |row| expr } closure."},
+	{"group_by", `... | group_by("field")`, "Groups a Table by a field name (String), or by a { |row| expr } closure, into a Table of {key, items} records."},
+	{"each", `... | each { |row| expr }`, "Maps closure over every element, returning a new List/Table."},
+	{"take", `... | take(n)`, "The first n elements."},
 	{"first", "... | first", "The first element, or null if empty."},
 	{"count", "... | count", "The number of elements."},
-	{"last", "... | last [n]", "The last element, or the last n elements."},
-	{"skip", "... | skip n", "Every element after the first n."},
+	{"last", `... | last  or  ... | last(n)`, "With no argument, the last element (or null if empty); with a count, a List of the last n elements."},
+	{"skip", `... | skip(n)`, "Every element after the first n."},
 	{"reverse", "... | reverse", "Elements in reverse order."},
 	{"uniq", "... | uniq", "Duplicate elements removed, order preserved."},
 	{"flatten", "... | flatten", "One level of nested Lists flattened into their parent."},
@@ -95,8 +95,8 @@ var builtinDocs = []BuiltinDoc{
 	{"min", "... | min", "The smallest element."},
 	{"max", "... | max", "The largest element."},
 	{"avg", "... | avg", "The mean of a numeric List/field."},
-	{"any", "... | any cond", "True if any element matches cond."},
-	{"all", "... | all cond", "True if every element matches cond."},
+	{"any", `... | any { |row| cond }`, "True if any element matches cond."},
+	{"all", `... | all { |row| cond }`, "True if every element matches cond."},
 	{"to_json", "... | to_json", "Renders a value as a JSON String."},
 	{"from_json", `from_json(str)`, "Parses a JSON String into kyu values."},
 
@@ -129,7 +129,7 @@ func docByName(name string) (BuiltinDoc, bool) {
 
 // docRecord renders one BuiltinDoc as a Record, the same Table-of-
 // Record shape stat/ls/vars already use for structured results —
-// pipeable (`help() | where name == "bind"`), inspectable field by
+// pipeable (`help() | where { |d| d.name == "bind" }`), inspectable field by
 // field, rather than a preformatted block of text.
 func docRecord(d BuiltinDoc) *value.Record {
 	r := value.NewRecord()

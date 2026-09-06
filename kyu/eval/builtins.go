@@ -492,13 +492,26 @@ func biLast(args []value.Value) (value.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(rest) != 0 {
-		return nil, fmt.Errorf("last: expected no arguments besides input, got %d", len(rest))
+	switch len(rest) {
+	case 0:
+		if len(lst.Elems) == 0 {
+			return value.Null{}, nil
+		}
+		return lst.Elems[len(lst.Elems)-1], nil
+	case 1:
+		n, ok := rest[0].(value.Int)
+		if !ok {
+			return nil, fmt.Errorf("last: count argument must be an int, got %s", rest[0].Kind())
+		}
+		if n < 0 {
+			return nil, fmt.Errorf("last: count must be >= 0, got %d", n)
+		}
+		start := max(len(lst.Elems)-int(n), 0)
+		out := append([]value.Value(nil), lst.Elems[start:]...)
+		return value.NewList(out), nil
+	default:
+		return nil, fmt.Errorf("last: expected 0 or 1 count argument, got %d", len(rest))
 	}
-	if len(lst.Elems) == 0 {
-		return value.Null{}, nil
-	}
-	return lst.Elems[len(lst.Elems)-1], nil
 }
 
 func biSkip(args []value.Value) (value.Value, error) {

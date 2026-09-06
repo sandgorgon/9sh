@@ -102,7 +102,7 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
   `trim`/`replace`/`contains`/`join`.
 - `vars()` lists your own `:=`-defined kyu variables — name, kind, and
-  live value, as a `Table` (pipeable: `vars() | where kind == "path"`).
+  live value, as a `Table` (pipeable: `vars() | where { |v| v.kind == "path" }`).
   Unlike `/env`, kyu variables are plain lexical scope, not namespace
   state, so there's no `glob()`-able equivalent — `vars()` is the only
   way to see them, and it filters out builtins (they're `env.Define`d the

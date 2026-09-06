@@ -8,6 +8,26 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Fixed
+
+- `kyu/eval/docs.go`'s `Signature` field for `where`/`select`/`sort_by`/
+  `group_by`/`each`/`any`/`all`/`take`/`skip`/`last` showed bareword
+  pseudo-syntax (e.g. `... | select field1, field2, ...`) that doesn't
+  actually parse — these are plain functions, not keywords, so the real
+  syntax needs call-parens and, for predicates, the `{ |row| ... }`
+  pipe-position closure sugar (e.g. `... | select("field1", "field2")`,
+  `... | where { |row| cond }`). This table is the source for both
+  `help(name)` and the in-app `?` screen's language-reference section,
+  so the wrong syntax was reaching users directly. Also fixed the same
+  bug in README.md's own `vars() | where kind == "path"` example.
+
+### Added
+
+- `last` now accepts an optional count (`... | last(n)`, the last n
+  elements as a List), matching what its doc description already
+  claimed and mirroring `take`/`skip`'s existing count-argument
+  handling — previously `last` rejected any argument at all.
+
 ## [0.4.13] - 2026-09-06
 
 ### Fixed

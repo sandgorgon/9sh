@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-09-06
+
 ### Added
 
 - `len`/`repeat`/`pad_left`/`pad_right` builtins — `len` counts runes

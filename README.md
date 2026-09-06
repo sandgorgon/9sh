@@ -100,7 +100,10 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 - Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
   `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
   `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
-  `trim`/`replace`/`contains`/`join`.
+  `trim`/`replace`/`contains`/`join`/`len`/`repeat`/`pad_left`/
+  `pad_right` — the last four are for building an exact line of output
+  (a fixed-width column, a separator rule) rather than free-text
+  templating, which is what `format` is for.
 - `vars()` lists your own `:=`-defined kyu variables — name, kind, and
   live value, as a `Table` (pipeable: `vars() | where { |v| v.kind == "path" }`).
   Unlike `/env`, kyu variables are plain lexical scope, not namespace

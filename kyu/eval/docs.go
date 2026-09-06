@@ -101,12 +101,16 @@ var builtinDocs = []BuiltinDoc{
 	{"from_json", `from_json(str)`, "Parses a JSON String into kyu values."},
 
 	// Strings
-	{"split", `split(str, sep)`, "Splits a String on sep into a List of String."},
+	{"split", `split(sep, str)`, "Splits a String on sep into a List of String."},
 	{"trim", "trim(str)", "Leading/trailing whitespace removed."},
-	{"replace", `replace(str, old, new)`, "All occurrences of old replaced with new."},
-	{"contains", `contains(str, sub)`, "True if str contains sub."},
+	{"replace", `replace(old, new, str)`, "All occurrences of old replaced with new."},
+	{"contains", `contains(sub, str)`, "True if str contains sub."},
 	{"join", `list | join(sep)`, "Joins a List's elements into one String with sep between them. (Not join_path — that builds a Path from a base plus segments.)"},
 	{"format", `format(tmpl, ...args)`, `Positional "{}" interpolation — the placeholder count must exactly match the argument count.`},
+	{"len", "len(str_or_list)", "Rune count for a String, element count for a List/Table — count's sibling for strings."},
+	{"repeat", `repeat(n, str)`, "str tiled n times, e.g. repeat(5, \"-\") for a separator line."},
+	{"pad_left", `pad_left(width, str)  or  pad_left(width, fill, str)`, `Right-aligns str within width, padding on the left (space by default, or fill if given). No-op if str is already >= width.`},
+	{"pad_right", `pad_right(width, str)  or  pad_right(width, fill, str)`, `Left-aligns str within width, padding on the right. No-op if str is already >= width.`},
 
 	// Control flow / syntax
 	{"while", "while cond { ... }", "kyu's only loop construct, with break/continue. A self-referencing closure also works for recursion."},

@@ -8,6 +8,22 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `len`/`repeat`/`pad_left`/`pad_right` builtins — `len` counts runes
+  for a String or elements for a List/Table; `repeat`/`pad_left`/
+  `pad_right` are for building an exact fixed-width line of output
+  (aligned columns, a separator rule) without hand-writing a
+  self-recursive closure for something this ordinary.
+
+### Fixed
+
+- `kyu/eval/docs.go`'s documented signatures for `split`/`replace`/
+  `contains` had the string argument first (`split(str, sep)`); the
+  real, tested argument order puts it last (`split(sep, str)`), matching
+  every other builtin's "explicit args..., then the pipeable input"
+  convention. Docs corrected to match actual behavior.
+
 ## [0.4.15] - 2026-09-06
 
 ### Fixed

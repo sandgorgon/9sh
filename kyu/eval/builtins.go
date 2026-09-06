@@ -55,6 +55,10 @@ var builtins = map[string]BuiltinFn{
 	"replace":   biReplace,
 	"contains":  biContains,
 	"format":    biFormat,
+	"len":       biLen,
+	"repeat":    biRepeat,
+	"pad_left":  biPadLeft,
+	"pad_right": biPadRight,
 }
 
 // biHost returns this machine's hostname — the design doc's own example
@@ -909,4 +913,112 @@ func biContains(args []value.Value) (value.Value, error) {
 		return nil, fmt.Errorf("contains: needle argument must be a string, got %s", rest[0].Kind())
 	}
 	return value.Bool(strings.Contains(string(s), string(needle))), nil
+}
+
+// biLen counts runes for a String, elements for a List/Table — the one
+// "how big is this" builtin that works on either, unlike count (List/Table
+// only). Rune count, not byte count, matching how the rest of this
+// package already treats string length (split("") | count, before this
+// existed, produced the same number) — imprecise for wide/combining
+// characters, but consistent with every other kyu string operation.
+func biLen(args []value.Value) (value.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("len: expected exactly 1 argument, got %d", len(args))
+	}
+	switch v := args[0].(type) {
+	case value.String:
+		return value.Int(len([]rune(string(v)))), nil
+	case *value.List:
+		return value.Int(len(v.Elems)), nil
+	default:
+		return nil, fmt.Errorf("len: expected a string or list/table, got %s", v.Kind())
+	}
+}
+
+// biRepeat tiles s n times — strings.Repeat, exposed as a builtin since
+// the padding functions below need it and a caller building a separator
+// line ("-" repeated) would otherwise have to hand-write a recursive
+// closure for something this ordinary.
+func biRepeat(args []value.Value) (value.Value, error) {
+	s, rest, err := lastAsString(args, "repeat")
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("repeat: expected 1 count argument, got %d", len(rest))
+	}
+	n, ok := rest[0].(value.Int)
+	if !ok {
+		return nil, fmt.Errorf("repeat: count argument must be an int, got %s", rest[0].Kind())
+	}
+	if n < 0 {
+		return nil, fmt.Errorf("repeat: count must be >= 0, got %d", n)
+	}
+	return value.String(strings.Repeat(string(s), int(n))), nil
+}
+
+// padding computes just the fill runes needed to bring s up to width — the
+// caller concatenates it on whichever side. fill is tiled (not just its
+// first rune) so a multi-rune fill like ".." pads out evenly instead of
+// only ever repeating one character. Empty when s is already >= width.
+func padding(s string, width int, fill string) string {
+	deficit := width - len([]rune(s))
+	if deficit <= 0 {
+		return ""
+	}
+	fillRunes := []rune(fill)
+	out := make([]rune, deficit)
+	for i := range out {
+		out[i] = fillRunes[i%len(fillRunes)]
+	}
+	return string(out)
+}
+
+func padArgs(args []value.Value, fnName string) (s string, width int, fill string, err error) {
+	str, rest, err := lastAsString(args, fnName)
+	if err != nil {
+		return "", 0, "", err
+	}
+	if len(rest) != 1 && len(rest) != 2 {
+		return "", 0, "", fmt.Errorf("%s: expected 1 or 2 arguments (width[, fill]) plus the string, got %d", fnName, len(rest))
+	}
+	w, ok := rest[0].(value.Int)
+	if !ok {
+		return "", 0, "", fmt.Errorf("%s: width argument must be an int, got %s", fnName, rest[0].Kind())
+	}
+	if w < 0 {
+		return "", 0, "", fmt.Errorf("%s: width must be >= 0, got %d", fnName, w)
+	}
+	fillStr := " "
+	if len(rest) == 2 {
+		f, ok := rest[1].(value.String)
+		if !ok {
+			return "", 0, "", fmt.Errorf("%s: fill argument must be a string, got %s", fnName, rest[1].Kind())
+		}
+		if len(f) == 0 {
+			return "", 0, "", fmt.Errorf("%s: fill argument must not be empty", fnName)
+		}
+		fillStr = string(f)
+	}
+	return string(str), int(w), fillStr, nil
+}
+
+// biPadLeft right-aligns s within width — pads on the left, so numbers
+// and other right-aligned columns read naturally (see biPadRight for the
+// left-aligned, ragged-right case: names/labels).
+func biPadLeft(args []value.Value) (value.Value, error) {
+	s, width, fill, err := padArgs(args, "pad_left")
+	if err != nil {
+		return nil, err
+	}
+	return value.String(padding(s, width, fill) + s), nil
+}
+
+// biPadRight left-aligns s within width — pads on the right.
+func biPadRight(args []value.Value) (value.Value, error) {
+	s, width, fill, err := padArgs(args, "pad_right")
+	if err != nil {
+		return nil, err
+	}
+	return value.String(s + padding(s, width, fill)), nil
 }

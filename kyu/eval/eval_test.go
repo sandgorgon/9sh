@@ -646,6 +646,54 @@ func TestSplitTrimReplaceContains(t *testing.T) {
 	}
 }
 
+func TestLen(t *testing.T) {
+	if v := run(t, `len("hello")`); v.(value.Int) != 5 {
+		t.Errorf("len(str) got %v, want 5", v)
+	}
+	if v := run(t, `[1, 2, 3, 4] | len`); v.(value.Int) != 4 {
+		t.Errorf("len(list) got %v, want 4", v)
+	}
+	runErr(t, `len(5)`)
+}
+
+func TestRepeat(t *testing.T) {
+	if v := run(t, `repeat(5, "-")`); v.(value.String) != "-----" {
+		t.Errorf("repeat got %q, want %q", v, "-----")
+	}
+	if v := run(t, `"ab" | repeat(3)`); v.(value.String) != "ababab" {
+		t.Errorf("repeat(piped) got %q, want %q", v, "ababab")
+	}
+	if v := run(t, `repeat(0, "x")`); v.(value.String) != "" {
+		t.Errorf("repeat(0, ...) got %q, want empty", v)
+	}
+	runErr(t, `repeat(-1, "x")`)
+}
+
+func TestPadLeftPadRight(t *testing.T) {
+	if v := run(t, `pad_left(5, "ab")`); v.(value.String) != "   ab" {
+		t.Errorf("pad_left got %q, want %q", v, "   ab")
+	}
+	if v := run(t, `pad_right(5, "ab")`); v.(value.String) != "ab   " {
+		t.Errorf("pad_right got %q, want %q", v, "ab   ")
+	}
+	// already >= width is a no-op, not truncation or doubling
+	if v := run(t, `pad_left(1, "toolong")`); v.(value.String) != "toolong" {
+		t.Errorf("pad_left no-op got %q, want %q", v, "toolong")
+	}
+	if v := run(t, `pad_right(1, "toolong")`); v.(value.String) != "toolong" {
+		t.Errorf("pad_right no-op got %q, want %q", v, "toolong")
+	}
+	// custom multi-rune fill tiles, not just repeats its first rune
+	if v := run(t, `pad_left(6, "0", "42")`); v.(value.String) != "000042" {
+		t.Errorf("pad_left with fill got %q, want %q", v, "000042")
+	}
+	if v := run(t, `"id" | pad_right(4)`); v.(value.String) != "id  " {
+		t.Errorf("pad_right(piped) got %q, want %q", v, "id  ")
+	}
+	runErr(t, `pad_left(-1, "x")`)
+	runErr(t, `pad_left(5, "", "x")`)
+}
+
 func TestErrCheckAborts(t *testing.T) {
 	err := runErr(t, `error("boom")?`)
 	if err.Error() != "boom" {

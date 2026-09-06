@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-09-06
+
 ### Fixed
 
 - `pane/kyurepl.go`'s `resultLines` only split embedded `\n` characters

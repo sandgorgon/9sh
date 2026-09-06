@@ -8,6 +8,20 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-09-06
+
+### Fixed
+
+- v0.4.12's Tab-completion change updated README.md and `docs.go` (the
+  `help(name)`/`?`-screen-section-2 source) but missed `pane/help.go`'s
+  `keybindingHelp` — a separate, hand-maintained block behind the
+  in-app `?` screen's section 1, describing the old (identifiers/
+  external commands only) Tab behavior. Also added a bullet to the
+  README's "Coming from bash/zsh" section (and its `?`-screen
+  condensation, `bashZshHelp`) covering the new `%cmd`/`$cmd`
+  namespace-path guard directly, since that section is exactly where a
+  user would otherwise make the mistake it catches.
+
 ## [0.4.12] - 2026-09-05
 
 ### Fixed

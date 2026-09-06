@@ -8,6 +8,36 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-09-05
+
+### Fixed
+
+- A bare `Path` right after a `%cmd`/`$cmd` command name (`%cat
+  /etc/hosts`) mis-lexed as division (`cat / etc / hosts`) instead of
+  a Path literal — the same disambiguation gap already known and
+  worked around for `bind`'s SRC/DST, never previously hit for
+  external calls. Only the first argument right after the command
+  name is covered; a bareword Path after a non-Path argument (`%grep
+  "foo" /path`) still divides, a known, narrower remaining gap.
+
+### Added
+
+- `%cmd`/`$cmd` now guard against a namespace-only `Path` argument
+  (e.g. `%cat /local/foo`, where `/local` has no real OS path):
+  previously it reached the external binary as a meaningless literal
+  string, either a confusing `ENOENT` from inside the binary's own
+  process or, worse, an unrelated real file at the same string. Now
+  it errors with a clear hint to use `checkout` instead — unless the
+  path resolves to a real filesystem path too, or doesn't resolve in
+  the namespace at all (an ordinary typo still gets the external
+  tool's own honest error).
+- Tab completion inside a bare `Path` literal now offers entries from
+  both the real filesystem and the attached namespace, merged —
+  previously only external-command-name completion (right after a
+  `%`/`$` sigil) existed; a `Path` fragment completed to nothing at
+  all. Directories (real or namespace) get a trailing `/`, matching
+  classic shell completion.
+
 ## [0.4.11] - 2026-09-04
 
 ### Added

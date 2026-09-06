@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.14] - 2026-09-06
+
 ### Fixed
 
 - `kyu/eval/docs.go`'s `Signature` field for `where`/`select`/`sort_by`/

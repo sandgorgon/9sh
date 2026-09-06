@@ -246,6 +246,14 @@ cosmetic:
   as `dial`/`dir` hard-require a `String`, never a `Path`, in the
   opposite direction. Both crossings are always an explicit function
   call, never an implicit guess based on what a value looks like.
+- **Handing a namespace path straight to `%cmd`/`$cmd` is caught, not
+  silently wrong.** The natural first mistake this mental model
+  produces — `%cat /local/foo`, treating `/local` like a real directory
+  a legacy binary can just open — errors with a hint to use `checkout`
+  instead of reaching the binary as a meaningless literal string. Tab
+  completion (inside a bare `Path`) offers both real filesystem and
+  namespace entries, which is exactly how this mistake tends to get
+  typed in the first place.
 
 ### Example: a starter `common.ky`
 

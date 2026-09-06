@@ -111,8 +111,8 @@ var builtinDocs = []BuiltinDoc{
 	// Control flow / syntax
 	{"while", "while cond { ... }", "kyu's only loop construct, with break/continue. A self-referencing closure also works for recursion."},
 	{"if", "if cond { ... } [else { ... }]", "A block's last expression is its value — what prints at the REPL."},
-	{"%cmd", "%cmd arg1 arg2 ...", "Calls an ordinary external/legacy binary. Routes through /jobs when a namespace is attached, so it shows up in session history like any job."},
-	{"$cmd", "$cmd arg1 arg2 ...", "Runs a command connected directly to the real terminal — for programs %cmd can't support (vim, ssh: need a live TTY). No job, no captured value. -repl/scripts only, not the pane multiplexer's kyu-repl."},
+	{"%cmd", "%cmd arg1 arg2 ...", "Calls an ordinary external/legacy binary. Routes through /jobs when a namespace is attached, so it shows up in session history like any job. A Path argument that only resolves in the namespace, not on the real filesystem, errors with a hint to use checkout instead of reaching the binary as a meaningless literal string."},
+	{"$cmd", "$cmd arg1 arg2 ...", "Runs a command connected directly to the real terminal — for programs %cmd can't support (vim, ssh: need a live TTY). No job, no captured value. -repl/scripts only, not the pane multiplexer's kyu-repl. Same namespace-only-Path guard as %cmd."},
 	{"&", "%cmd ... &", `Backgrounds a %cmd as a live job record: j.status, j.ctl = "stop", j | wait.`},
 	{"@host", "@host { ... }", "Re-roots job creation at a dial()'d remote peer's own /jobs for the block — 'proxy jobs,' no separate remote-job protocol."},
 }

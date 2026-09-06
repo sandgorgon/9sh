@@ -90,7 +90,11 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   `ls("/env/*")` to see what's there (or `glob("/env/*")` for just the
   paths) — a plain `%ls /env` won't work: `%cmd` hands a `Path`
   argument to the real external binary as a literal string, with no
-  namespace resolution (`/env` has no real OS path at all).
+  namespace resolution (`/env` has no real OS path at all). Since
+  `/env` isn't bound from anywhere real, `%ls /env` fails with a clear
+  error pointing at `checkout` rather than running at all; a namespace
+  path that happens to coincide with an unrelated real file is the one
+  case this can't catch (see the Design section's "No FUSE").
   `setenv("PATH", ...)` genuinely changes which binary `%cmd`/`$cmd`
   resolve, not just what a subprocess sees about its own environment.
 - Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
@@ -457,6 +461,12 @@ than the full remote-peer trust machinery.
   for free; classic Unix pipeline tools need nothing beyond stdin/
   stdout; tools needing a real seekable path use `checkout` to
   materialize a subtree to a scratch directory and write back on close.
+  A `Path` argument handed straight to `%cmd`/`$cmd` that only resolves
+  in the namespace, not on the real filesystem, is caught with an error
+  pointing at `checkout` rather than reaching the external binary as a
+  meaningless literal string — the one case this can't catch is a
+  namespace path that happens to alias an unrelated real file, since no
+  FUSE means there's no way to tell the two apart from outside.
 - **Structured pipes.** Records and tables flow through `|` by default
   (nushell/PowerShell-style); `%` marks a call into legacy/external
   Bytes-land.

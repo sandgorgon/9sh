@@ -45,6 +45,11 @@ func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, er
 		if err != nil {
 			return nil, err
 		}
+		if p, ok := v.(value.Path); ok {
+			if bad := checkNamespaceOnlyPath(env, "%", x.Name, i, p); bad != nil {
+				return *bad, nil
+			}
+		}
 		s, err := argString(v)
 		if err != nil {
 			return nil, fmt.Errorf("%%%s: argument %d: %w", x.Name, i, err)
@@ -304,6 +309,11 @@ func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error)
 		if err != nil {
 			return nil, err
 		}
+		if p, ok := v.(value.Path); ok {
+			if bad := checkNamespaceOnlyPath(env, "$", st.Name, i, p); bad != nil {
+				return *bad, nil
+			}
+		}
 		s, err := argString(v)
 		if err != nil {
 			return nil, fmt.Errorf("$%s: argument %d: %w", st.Name, i, err)
@@ -353,6 +363,46 @@ func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error)
 	code := cmd.ProcessState.ExitCode()
 	env.SetLastExitCode(&code)
 	return value.Null{}, nil
+}
+
+// checkNamespaceOnlyPath guards the "no FUSE" boundary (see README's
+// Design section): a Path that resolves inside the namespace but not on
+// the real filesystem is invisible to a legacy binary, which will do a
+// plain OS-level open() on the literal string. Silently letting that
+// through means either a confusing ENOENT from inside someone else's
+// binary, or worse, a coincidental hit on an unrelated real file at the
+// same literal path.
+//
+// It only fires when the path resolves in the namespace — an ordinary
+// real-path typo (e.g. %cat /etc/hosst) doesn't exist on disk either,
+// but also doesn't resolve in the namespace, so it falls through
+// unchanged and gets the external tool's own "no such file" error, not
+// this hint. That asymmetry is deliberate: this is a guardrail for one
+// specific, identifiable mistake, not a general path-existence check.
+//
+// Returned as a *value.ErrorVal (nil if nothing's wrong) rather than a
+// Go error, matching runExternal's existing convention that "the
+// process never got to start" is an in-stream kyu failure, not a hard
+// abort — see runExternal's doc comment.
+func checkNamespaceOnlyPath(env *Env, sigil, name string, i int, p value.Path) *value.ErrorVal {
+	namespace := env.Namespace()
+	if namespace == nil {
+		return nil
+	}
+	if _, err := os.Stat(string(p)); err == nil {
+		return nil // a real path -- nothing to warn about
+	}
+	ctx := context.Background()
+	root, err := namespace.Attach(ctx, "9sh", "")
+	if err != nil {
+		return nil // attach failures surface elsewhere already
+	}
+	if _, err := walkAll(ctx, root, splitPath(string(p))); err != nil {
+		return nil // not in the namespace either -- an ordinary bad path
+	}
+	return &value.ErrorVal{Msg: fmt.Sprintf(
+		"%s%s: argument %d (%s) is a namespace path, not a real filesystem path — legacy binaries can't see the namespace directly (no FUSE); use checkout(%s, closure) to get a real path first",
+		sigil, name, i, p, p)}
 }
 
 func argString(v value.Value) (string, error) {

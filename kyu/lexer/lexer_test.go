@@ -91,6 +91,32 @@ func TestPathVsDivision(t *testing.T) {
 	assertKinds(t, `x / y`, []token.Kind{token.IDENT, token.SLASH, token.IDENT, token.EOF})
 }
 
+// TestPathAsExternalCallFirstArg locks in lastWasExternalName's exemption:
+// a bare Path right after a %cmd/$cmd command name must not re-lex as
+// "name / path...", dividing the command name by the path -- the same
+// class of ambiguity TestPathVsDivision's `bind` case already covers, just
+// for the command-name-to-first-argument transition instead of comma-vs-
+// space. Also covers a second bareword Path argument (already-working via
+// the pre-existing "a prior PATH is exempted" rule) so a regression in
+// either exemption shows up here.
+func TestPathAsExternalCallFirstArg(t *testing.T) {
+	assertKinds(t, `%cat /src/greeting.txt`, []token.Kind{
+		token.PERCENT, token.IDENT, token.PATH, token.EOF,
+	})
+	assertKinds(t, `%cat /a/b /c/d`, []token.Kind{
+		token.PERCENT, token.IDENT, token.PATH, token.PATH, token.EOF,
+	})
+	assertKinds(t, `$vim /etc/hosts`, []token.Kind{
+		token.DOLLAR, token.IDENT, token.PATH, token.EOF,
+	})
+	// The known, narrower remaining gap (a bareword Path after a non-Path
+	// argument still divides) -- documented here so a future fix that
+	// closes it updates this test rather than silently leaving it stale.
+	assertKinds(t, `%grep "foo" /path`, []token.Kind{
+		token.PERCENT, token.IDENT, token.STRING, token.SLASH, token.IDENT, token.EOF,
+	})
+}
+
 func TestPercentSigilVsModulo(t *testing.T) {
 	// expression-start '%' immediately before a letter is the external-call sigil
 	assertKinds(t, `%grep foo`, []token.Kind{token.PERCENT, token.IDENT, token.IDENT, token.EOF})

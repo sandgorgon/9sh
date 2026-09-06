@@ -18,6 +18,16 @@ type Lexer struct {
 	// '%' as the modulo operator vs. the %cmd external-call sigil. It also
 	// drives Go-style automatic newline insertion.
 	lastKind token.Kind
+
+	// lastWasExternalName is a third, narrower disambiguation in the same
+	// family as lastKind: true for exactly one token immediately after
+	// lexExternalName produces the %cmd/$cmd command-name IDENT, false
+	// otherwise (including for every other IDENT). Kept separate from
+	// lastKind rather than folded into it because the command name must
+	// still emit as an ordinary token.IDENT (parseExternalCall depends on
+	// that) — this only affects lexSlashOrPath's exemption, not the token's
+	// own Kind. See lexSlashOrPath's doc comment for why it's needed.
+	lastWasExternalName bool
 }
 
 // valuesCanEndStatement/valuesCanPrecedeSlash are the token kinds after which
@@ -268,7 +278,9 @@ func (l *Lexer) lexExternalName(line, col int) token.Token {
 	for isLetter(l.peek()) || isDigit(l.peek()) || l.peek() == '-' {
 		l.advance()
 	}
-	return l.emitAt(token.IDENT, string(l.src[start:l.pos]), line, col)
+	tok := l.emitAt(token.IDENT, string(l.src[start:l.pos]), line, col)
+	l.lastWasExternalName = true
+	return tok
 }
 
 func (l *Lexer) lexIdent(line, col int) token.Token {
@@ -315,9 +327,15 @@ func (l *Lexer) lexString(line, col int) token.Token {
 // literal using only lexer state: a '/' can start a Path only where a value
 // could not have just ended (expression-start position). A prior PATH is
 // exempted: paths aren't divisible, so "bind /a /b" is two path arguments,
-// never a division expression.
+// never a division expression. The command-name IDENT right after a '%'/'$'
+// sigil is exempted the same way (lastWasExternalName): "%cat /path" must
+// not re-lex "/path" as "cat / path" dividing a bareword by a path, since
+// external-call arguments are a juxtaposed positional list, never operands
+// of an infix operator against the command name. This only covers the
+// first argument — a later bareword Path after a non-Path argument (e.g.
+// `%grep "foo" /path`) still hits the general rule, a known, narrower gap.
 func (l *Lexer) lexSlashOrPath(line, col int) token.Token {
-	if endsValue(l.lastKind) && l.lastKind != token.PATH {
+	if endsValue(l.lastKind) && l.lastKind != token.PATH && !l.lastWasExternalName {
 		l.advance()
 		return l.emitAt(token.SLASH, "/", line, col)
 	}
@@ -334,5 +352,6 @@ func (l *Lexer) emit(k token.Kind, lit string) token.Token {
 
 func (l *Lexer) emitAt(k token.Kind, lit string, line, col int) token.Token {
 	l.lastKind = k
+	l.lastWasExternalName = false // see lexExternalName, the one place that overrides this right after
 	return token.Token{Kind: k, Literal: lit, Line: line, Col: col}
 }

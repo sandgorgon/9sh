@@ -835,19 +835,21 @@ func (w *kyuReplWidget) evaluate(src string) {
 }
 
 // resultLines renders a top-level evaluation result as one or more
-// replLines. Bytes is special-cased the same way cmd/9sh's line REPL
-// special-cases it (see that package's printResult): value.Bytes.String()
-// deliberately stays a "<N bytes>" summary everywhere else, but a bare
-// %cmd at the REPL is exactly the case where real output is wanted, not a
-// summary. Split on newlines rather than handing multi-line text to a
-// single replLine — each replLine is one visual row (see scrollOffset/
-// cursor-line math above), so an embedded "\n" would render wrong.
+// replLines, splitting on embedded newlines — each replLine is one visual
+// row (see scrollOffset/cursor-line math above), so handing one a raw "\n"
+// would render wrong (the painter has no notion of a line break mid-row).
+// This applies regardless of Value kind: a plain kyu String (e.g. from
+// `... | join("\n")`) embeds real newlines exactly like external command
+// output does. Bytes is special-cased for its *text*, not its splitting:
+// value.Bytes.String() deliberately stays a "<N bytes>" summary everywhere
+// else, but a bare %cmd at the REPL is exactly the case where real output
+// is wanted, not a summary.
 func resultLines(v value.Value) []replLine {
-	b, ok := v.(value.Bytes)
-	if !ok {
-		return []replLine{{text: v.String(), style: resultStyle}}
+	text := v.String()
+	if b, ok := v.(value.Bytes); ok {
+		text = string(b)
 	}
-	text := strings.TrimSuffix(string(b), "\n")
+	text = strings.TrimSuffix(text, "\n")
 	if text == "" {
 		return nil
 	}

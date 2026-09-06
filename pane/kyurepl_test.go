@@ -52,6 +52,23 @@ func TestKyuReplEvaluatesExpression(t *testing.T) {
 	}
 }
 
+func TestKyuReplStringResultWithEmbeddedNewlinesSplitsAcrossLines(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, `["a", "b", "c"] | join("\n")`)
+	sendEnter(w)
+	n := len(w.lines)
+	if n < 3 {
+		t.Fatalf("got %d transcript lines, want at least 3, got %v", n, w.lines)
+	}
+	got := []string{w.lines[n-3].text, w.lines[n-2].text, w.lines[n-1].text}
+	want := []string{"a", "b", "c"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("line %d = %q, want %q (full: %v)", i, got[i], want[i], w.lines)
+		}
+	}
+}
+
 func TestKyuReplMultiLineInput(t *testing.T) {
 	w := newTestReplWidget(t)
 	sendRunes(w, "if true {")

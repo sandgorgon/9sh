@@ -8,6 +8,18 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pane/kyurepl.go`'s `resultLines` only split embedded `\n` characters
+  into separate transcript rows for `%cmd` output (`value.Bytes`) —
+  every other result kind, including a plain kyu `String` (e.g. from
+  `... | join("\n")`), was handed to a single transcript row as-is.
+  Since a row painter has no notion of a line break mid-row, each
+  embedded newline rendered as a blank/space instead of an actual line
+  break — two consecutive newlines (a template's own `\n` plus
+  `join("\n")`'s separator) showed up as two spaces. `resultLines` now
+  splits on `\n` for any result kind, not just `Bytes`.
+
 ## [0.4.14] - 2026-09-06
 
 ### Fixed

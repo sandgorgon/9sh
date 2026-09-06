@@ -614,6 +614,97 @@ func TestKyuReplTabExternalCommandIgnoresNonExecutableFile(t *testing.T) {
 	}
 }
 
+// TestKyuReplTabCompletesRealFilesystemPath locks in pathCandidates'
+// real-filesystem source: a bare Path fragment (no namespace involved at
+// all -- newTestReplWidget's Env has a nil namespace) completes against
+// an ordinary real directory the same way external-command completion
+// already resolves PATH executables.
+func TestKyuReplTabCompletesRealFilesystemPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "real-file.txt"), []byte("x"), 0644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	w := newTestReplWidget(t)
+	sendRunes(w, filepath.Join(dir, "real-f"))
+	sendKey(w, input.KeyTab)
+	want := filepath.Join(dir, "real-file.txt")
+	if w.input != want {
+		t.Fatalf("input = %q, want %q", w.input, want)
+	}
+}
+
+// TestKyuReplTabCompletesNamespacePath is the namespace-side sibling:
+// /x/a.txt only exists inside the bound namespace (newBrowserTestEnv's
+// dirfs backing directory has a different real path entirely), so this
+// only passes if pathCandidates' namespace source (Env.ListNamespaceDir)
+// is actually contributing, not just the real-filesystem source.
+func TestKyuReplTabCompletesNamespacePath(t *testing.T) {
+	env := newBrowserTestEnv(t)
+	w := &kyuReplWidget{env: env}
+	sendRunes(w, "/x/a")
+	sendKey(w, input.KeyTab)
+	if w.input != "/x/a.txt" {
+		t.Fatalf("input = %q, want %q", w.input, "/x/a.txt")
+	}
+}
+
+// TestKyuReplTabCompletesNamespaceDirWithTrailingSlash locks in that a
+// namespace directory (not just a real one) gets the same trailing '/'
+// convenience real dirs already get, using each entry's Qid.IsDir() —
+// without it, a directory dead-ends after one Tab instead of inviting a
+// second one straight into it.
+func TestKyuReplTabCompletesNamespaceDirWithTrailingSlash(t *testing.T) {
+	env := newBrowserTestEnv(t)
+	w := &kyuReplWidget{env: env}
+	sendRunes(w, "/x/su")
+	sendKey(w, input.KeyTab)
+	if w.input != "/x/sub/" {
+		t.Fatalf("input = %q, want %q", w.input, "/x/sub/")
+	}
+}
+
+// TestKyuReplTabPathCompletionAsExternalCallArgument exercises the
+// motivating end-to-end case: a bare Path typed as a %cmd argument (the
+// kyu/lexer lastWasExternalName fix is what makes this position lex as a
+// Path at all) completes against the namespace, not just standalone.
+func TestKyuReplTabPathCompletionAsExternalCallArgument(t *testing.T) {
+	env := newBrowserTestEnv(t)
+	w := &kyuReplWidget{env: env}
+	sendRunes(w, "%cat /x/a")
+	sendKey(w, input.KeyTab)
+	if w.input != "%cat /x/a.txt" {
+		t.Fatalf("input = %q, want %q", w.input, "%cat /x/a.txt")
+	}
+}
+
+// TestKyuReplTabPathCompletionNoMatchIsNoop mirrors the external-command
+// no-match test: a fragment matching nothing in either source leaves the
+// input untouched rather than, say, clearing it.
+func TestKyuReplTabPathCompletionNoMatchIsNoop(t *testing.T) {
+	env := newBrowserTestEnv(t)
+	w := &kyuReplWidget{env: env}
+	sendRunes(w, "/x/zzz_no_such_thing")
+	before := w.input
+	sendKey(w, input.KeyTab)
+	if w.input != before {
+		t.Fatalf("input changed to %q, want unchanged (%q)", w.input, before)
+	}
+}
+
+// TestKyuReplTabBarewordIsNotTreatedAsPath is the regression guard for
+// currentPathBounds' '/'-prefix requirement: a plain identifier fragment
+// (no leading '/') must still complete against env.Names()/kyuKeywords,
+// even though its characters alone (letters) also satisfy isPathRune.
+func TestKyuReplTabBarewordIsNotTreatedAsPath(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "wher")
+	sendKey(w, input.KeyTab)
+	if w.input != "where" {
+		t.Fatalf("input = %q, want %q (bareword completion, not path completion)", w.input, "where")
+	}
+}
+
 func TestKyuReplTabFillsCommonPrefixThenCyclesOnRepeat(t *testing.T) {
 	w := newTestReplWidget(t)
 	sendRunes(w, "xfoo := 1")

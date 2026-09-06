@@ -332,7 +332,7 @@ click into it):
 | Key | Does |
 |---|---|
 | `Enter` | Submit, or keep editing if brackets are still open |
-| `Tab` | Complete the identifier before the cursor (variables, builtins, keywords) — or, right after a `%`/`$` sigil, an external command name from `PATH` — fills the longest common match, cycles through candidates on repeated `Tab` |
+| `Tab` | Complete the identifier before the cursor (variables, builtins, keywords) — right after a `%`/`$` sigil, an external command name from `PATH`; inside a bare `Path` literal, entries from both the real filesystem and the attached namespace, merged — fills the longest common match, cycles through candidates on repeated `Tab` |
 | Ctrl+R | Reverse history search (bash's reverse-i-search) — type to search, `Enter` runs the match immediately, `Esc` loads it into the input line without running it, repeated Ctrl+R searches further back |
 | Ctrl+\\ | Release keyboard focus back to navigating panes/title bars/the control strip — `Tab`'s normally-global pane-navigation meaning is claimed by this pane's own completion instead, the same trade shell panes already make for real tab-completion in the hosted shell |
 | `←`/`→`, Ctrl+`←`/`→` | Move the cursor by character / by word |

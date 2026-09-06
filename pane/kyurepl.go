@@ -2,6 +2,7 @@ package pane
 
 import (
 	"context"
+	"os"
 	"sort"
 	"strings"
 
@@ -932,6 +933,89 @@ func (w *kyuReplWidget) externalNameCandidates(fragment string) []string {
 	return candidates
 }
 
+// isPathRune matches kyu/lexer's own isPathChar rule (letters, digits,
+// '/', '.', '-', '_') -- the character set currentPathBounds scans
+// backward over to find a bare Path literal's extent.
+func isPathRune(r rune) bool {
+	return isIdentRune(r) || r == '/' || r == '.' || r == '-'
+}
+
+// currentPathBounds reports whether the cursor sits inside a bare Path
+// literal (kyu/lexer's Path token: an absolute, '/'-led run of path
+// characters) and, if so, the rune index it starts at. Scanning back
+// over isPathRune alone isn't enough to prove it's a Path -- an ordinary
+// bareword like "cat" matches the same character set -- so this
+// additionally requires the run to begin with '/', same as the lexer's
+// own Path token can only ever start there.
+func (w *kyuReplWidget) currentPathBounds() (start int, ok bool) {
+	rs := w.runes()
+	start = w.cursor
+	for start > 0 && isPathRune(rs[start-1]) {
+		start--
+	}
+	if start == w.cursor || rs[start] != '/' {
+		return 0, false
+	}
+	return start, true
+}
+
+// splitPathFragment splits a Path-in-progress like "/src/gree" into the
+// directory to list ("/src") and the partial final segment to match
+// against each entry's name ("gree"). A fragment with no second '/' yet
+// ("/sr") lists the root.
+func splitPathFragment(fragment string) (dirPart, partial string) {
+	i := strings.LastIndex(fragment, "/")
+	dirPart, partial = fragment[:i], fragment[i+1:]
+	if dirPart == "" {
+		dirPart = "/"
+	}
+	return dirPart, partial
+}
+
+// pathCandidates completes a bare Path fragment against both the real
+// filesystem and the attached namespace, merged into one candidate list
+// rather than chosen by surrounding context. A Path argument to %cmd/
+// $cmd is legitimately either — a real /etc/hosts is exactly as valid as
+// a namespace /local/foo (see external.go's checkNamespaceOnlyPath,
+// which has to tell the two apart precisely because both are real
+// possibilities there). Completion doesn't need that same precision:
+// unlike the guardrail, where guessing wrong means silently reading the
+// wrong data, a completion candidate that doesn't fit the call it's
+// used in is just an ordinary bash/zsh-style near-miss, corrected the
+// moment the command runs. A namespace directory that also has a real
+// backing directory (bind's whole point) surfaces once from each source
+// under the same name; dedup keeps that from showing twice.
+func (w *kyuReplWidget) pathCandidates(fragment string) []string {
+	dirPart, partial := splitPathFragment(fragment)
+
+	seen := map[string]bool{}
+	var candidates []string
+	add := func(name string, isDir bool) {
+		if !strings.HasPrefix(name, partial) {
+			return
+		}
+		full := strings.TrimSuffix(dirPart, "/") + "/" + name
+		if isDir {
+			full += "/"
+		}
+		if seen[full] {
+			return
+		}
+		seen[full] = true
+		candidates = append(candidates, full)
+	}
+
+	if entries, err := os.ReadDir(dirPart); err == nil {
+		for _, e := range entries {
+			add(e.Name(), e.IsDir())
+		}
+	}
+	for _, ent := range w.env.ListNamespaceDir(context.Background(), dirPart) {
+		add(ent.Name, ent.Qid.IsDir())
+	}
+	return candidates
+}
+
 // completeTab is Tab: fills in the longest common prefix of every
 // candidate matching the fragment before the cursor, or — on an
 // *immediately repeated* Tab with the same fragment start (handleKey
@@ -941,13 +1025,21 @@ func (w *kyuReplWidget) externalNameCandidates(fragment string) []string {
 // replacement.
 //
 // Right after a '%'/'$' sigil the candidates are PATH executables (see
-// currentExternalNameBounds/externalNameCandidates); everywhere else
-// they're env.Names() — every user variable and builtin, see its own
-// doc comment — plus kyuKeywords.
+// currentExternalNameBounds/externalNameCandidates); inside a bare Path
+// literal they're real filesystem and namespace entries merged (see
+// currentPathBounds/pathCandidates); everywhere else they're
+// env.Names() — every user variable and builtin, see its own doc
+// comment — plus kyuKeywords.
 func (w *kyuReplWidget) completeTab() {
 	externalStart, isExternal := w.currentExternalNameBounds()
-	start := externalStart
-	if !isExternal {
+	pathStart, isPath := w.currentPathBounds()
+	var start int
+	switch {
+	case isExternal:
+		start = externalStart
+	case isPath:
+		start = pathStart
+	default:
 		start = w.currentIdentBounds()
 	}
 
@@ -959,9 +1051,12 @@ func (w *kyuReplWidget) completeTab() {
 
 	fragment := string(w.runes()[start:w.cursor])
 	var candidates []string
-	if isExternal {
+	switch {
+	case isExternal:
 		candidates = w.externalNameCandidates(fragment)
-	} else {
+	case isPath:
+		candidates = w.pathCandidates(fragment)
+	default:
 		for _, n := range w.env.Names() {
 			if strings.HasPrefix(n, fragment) {
 				candidates = append(candidates, n)

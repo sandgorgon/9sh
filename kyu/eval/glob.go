@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	p9 "github.com/sandgorgon/9p"
+
 	"github.com/sandgorgon/9sh/kyu/value"
 	"github.com/sandgorgon/9sh/ns"
 )
@@ -92,4 +94,38 @@ func biGlob(env *Env, args []value.Value) (value.Value, error) {
 		}
 	}
 	return value.NewList(out), nil
+}
+
+// ListNamespaceDir returns the entries directly inside dirPath (an
+// absolute namespace path; "/" for the root) -- the same single-directory
+// listing biGlob does above, minus the pattern matching, exported for
+// callers outside this package. Its one caller today is the pane
+// package's tab completion, which needs namespace entries (including
+// each one's Qid.IsDir(), to decide whether to append a trailing '/')
+// to offer as Path candidates without going through a full glob(pattern)
+// call. p9.Stat rather than a package-local type since pane already
+// depends on p9 directly (jobviewer.go) -- not a new dependency for it.
+//
+// Returns nil, not an error, whenever nothing useful can be listed (no
+// namespace attached, dirPath doesn't resolve) -- matching EnvSlice's
+// same forgiving convention: a completion source coming up empty should
+// be silent, not surface an error on a keypress.
+func (e *Env) ListNamespaceDir(ctx context.Context, dirPath string) []p9.Stat {
+	namespace := e.Namespace()
+	if namespace == nil {
+		return nil
+	}
+	root, err := namespace.Attach(ctx, "9sh", "")
+	if err != nil {
+		return nil
+	}
+	dir, err := walkAll(ctx, root, splitPath(dirPath))
+	if err != nil {
+		return nil
+	}
+	entries, err := ns.ReadDirEntries(ctx, dir)
+	if err != nil {
+		return nil
+	}
+	return entries
 }

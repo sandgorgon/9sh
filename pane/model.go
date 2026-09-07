@@ -51,6 +51,7 @@ import (
 	"strings"
 	"time"
 
+	p9 "github.com/sandgorgon/9p"
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
 	"github.com/sandgorgon/tui/layout"
@@ -146,6 +147,20 @@ type paneState struct {
 	browserEntries []string
 	browserCursor  int
 	browserErr     string
+
+	// File-content preview, layered on top of the listing above rather
+	// than a separate pane kind: browserPreviewPath non-empty means
+	// browserNode renders the previewed file's content instead of the
+	// directory listing (browserEntries/browserCursor are left alone
+	// underneath, unfetched again on return — nothing about the
+	// directory changed). browserPendingReadPath guards a stale
+	// browserFileReadMsg (the user picked a different file, or
+	// navigated away, before an earlier read resolved) the same way
+	// browserListedMsg's own path check already does for listDirCmd.
+	browserPreviewPath     string
+	browserPreviewLines    []string
+	browserPreviewErr      string
+	browserPendingReadPath string
 
 	// KindJobViewer's own business state — see jobviewer.go.
 	jobRows   []string
@@ -835,6 +850,24 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 				p.browserEntries = nil
 			}
 		}
+	case browserFileReadMsg:
+		if p := m.find(mm.id); p != nil && p.browserPendingReadPath == mm.path {
+			p.browserPendingReadPath = ""
+			p.browserPreviewPath = mm.path
+			p.browserPreviewErr = ""
+			p.browserPreviewLines = nil
+			if mm.err != nil {
+				p.browserPreviewErr = mm.err.Error()
+			} else {
+				p.browserPreviewLines = strings.Split(mm.content, "\n")
+			}
+		}
+	case browserPreviewCloseMsg:
+		if p := m.find(mm.id); p != nil {
+			p.browserPreviewPath = ""
+			p.browserPreviewLines = nil
+			p.browserPreviewErr = ""
+		}
 	case jobViewerMoveMsg:
 		if p := m.find(mm.id); p != nil {
 			p.jobCursor = clamp(p.jobCursor+mm.delta, 0, max0(len(p.jobRows)-1))
@@ -887,8 +920,8 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 }
 
 // browserEnter treats entries[idx] as selected: ".." goes up, a
-// directory (trailing "/") descends, a plain file is a no-op for v1
-// (no file-content view yet).
+// directory (trailing "/") descends, a plain file kicks off a
+// readFileCmd for the in-pane content preview (see browserFileReadMsg).
 func (m Model) browserEnter(p *paneState, idx int) tui.Cmd {
 	if idx < 0 || idx >= len(p.browserEntries) {
 		return nil
@@ -900,7 +933,9 @@ func (m Model) browserEnter(p *paneState, idx int) tui.Cmd {
 		return listDirCmd(p.id, p.env.Namespace(), newPath)
 	}
 	if !strings.HasSuffix(selected, "/") {
-		return nil
+		filePath := joinNSPath(p.browserPath, selected)
+		p.browserPendingReadPath = filePath
+		return readFileCmd(p.id, p.env.Namespace(), filePath)
 	}
 	newPath := joinNSPath(p.browserPath, strings.TrimSuffix(selected, "/"))
 	p.browserPath, p.browserCursor = newPath, 0
@@ -991,6 +1026,43 @@ func listDirCmd(id int, namespace *ns.Namespace, path string) tui.Cmd {
 			names = append([]string{".."}, names...)
 		}
 		return browserListedMsg{id: id, path: path, names: names}
+	}
+}
+
+// browserFileReadMsg carries a readFileCmd's result back to Update.
+// content is the whole file as-is, same convention kyu's own cat(path)
+// builtin uses (raw bytes reinterpreted as a Go string, which is an
+// arbitrary byte sequence, not enforced-UTF-8 — a binary file just
+// won't render nicely, not incorrectly).
+type browserFileReadMsg struct {
+	id      int
+	path    string
+	content string
+	err     error
+}
+
+// readFileCmd reads path's whole content for browser.go's in-pane file
+// preview — openFile/readAllFile are jobviewer.go's own namespace-read
+// helpers (see that file's doc comment on why they're duplicated here
+// rather than shared with kyu/eval, which keeps no dependency on
+// package pane or vice versa).
+func readFileCmd(id int, namespace *ns.Namespace, path string) tui.Cmd {
+	return func() tui.Msg {
+		ctx := context.Background()
+		root, err := namespace.Attach(ctx, "9sh", "")
+		if err != nil {
+			return browserFileReadMsg{id: id, path: path, err: err}
+		}
+		f, err := openFile(ctx, root, p9.OREAD, strings.Split(strings.Trim(path, "/"), "/")...)
+		if err != nil {
+			return browserFileReadMsg{id: id, path: path, err: err}
+		}
+		defer f.Close()
+		b, err := readAllFile(ctx, f)
+		if err != nil {
+			return browserFileReadMsg{id: id, path: path, err: err}
+		}
+		return browserFileReadMsg{id: id, path: path, content: string(b)}
 	}
 }
 

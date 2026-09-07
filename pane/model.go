@@ -1410,6 +1410,25 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 		}
 	}
 	label := chevron + paneLabel(p)
+	if p.awaitingSplitKind {
+		// Overrides the normal hint entirely while awaiting the second
+		// keypress of the two-step split flow — see splitKindKey for what
+		// each letter means; anything else (including this same title
+		// bar's own x/d/r/z/+/-, deliberately) cancels via cancelSplitMsg.
+		label += "  split: s=shell k=kyu b=browse j=jobs h=history (else cancel)"
+	} else {
+		// Attached directly to the title words (before the [F#] jump-hotkey
+		// prefix and any [zoomed]/(exited) badge get appended below), not
+		// tacked onto the very end of the whole label — close ('x') reads
+		// as belonging to *this* pane's name, not as a trailing footnote
+		// past unrelated status badges. Kept terse, not "(x close, d/r
+		// split, z zoom, +/- resize)": once a title bar is one of several
+		// side by side after a horizontal split, or carries an "[F#]"
+		// prefix, the available width per pane shrinks fast — see
+		// TestSplitKeysOnTitleBar's 60-col/2-pane case, which is exactly
+		// narrow enough to clip a longer hint.
+		label += "  (x/d/r/z/+/-)"
+	}
 	if number >= 1 && number <= 9 {
 		// Matches fKeyPaneNumber's own F1-F9 cap — a pane past the 9th
 		// just doesn't get a jump hotkey or a label for one.
@@ -1420,21 +1439,6 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 	}
 	if p.exited {
 		label += " (exited)"
-	}
-	if p.awaitingSplitKind {
-		// Overrides the normal hint entirely while awaiting the second
-		// keypress of the two-step split flow — see splitKindKey for what
-		// each letter means; anything else (including this same title
-		// bar's own x/d/r/z/+/-, deliberately) cancels via cancelSplitMsg.
-		label += "  split: s=shell k=kyu b=browse j=jobs h=history (else cancel)"
-	} else {
-		// Kept terse, not "(x close, d/r split, z zoom, +/- resize)":
-		// once a title bar is one of several side by side after a
-		// horizontal split, or carries an "[F#]" jump-hotkey prefix, the
-		// available width per pane shrinks fast — see
-		// TestSplitKeysOnTitleBar's 60-col/2-pane case, which is exactly
-		// narrow enough to clip a longer hint.
-		label += "  (x/d/r/z/+/-)"
 	}
 	// collapsed matches exactly the condition renderSplit uses to give
 	// this pane's own outer slot Length(1) — a full border needs at

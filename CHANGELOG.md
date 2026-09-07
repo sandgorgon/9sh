@@ -8,6 +8,17 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.18] - 2026-09-07
+
+### Fixed
+
+- A focused pane's title bar no longer fills its entire width with the
+  focus highlight — the highlight now stops right after the label text
+  (e.g. the closing `)` in `(x/d/r/z/+/-)`), with the rest of the row
+  falling back to the plain border color, so a focused title reads as
+  a highlighted label rather than one solid-colored block. Control-strip
+  buttons are unaffected.
+
 ## [0.4.17] - 2026-09-06
 
 ### Added

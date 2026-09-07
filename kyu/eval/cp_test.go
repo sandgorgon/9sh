@@ -75,4 +75,3 @@ func TestCpSourceNonexistentIsErrorVal(t *testing.T) {
 		t.Fatalf("got %#v (%s), want an ErrorVal", v, v.Kind())
 	}
 }
-

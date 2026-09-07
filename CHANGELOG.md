@@ -8,6 +8,16 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.22] - 2026-09-07
+
+### Fixed
+
+- Bumped `github.com/sandgorgon/tui` to v0.6.0 and set `Frameless` on
+  the job-viewer, session-viewer, and namespace-browser panes' `List`
+  widgets — each was drawing its own border one cell inside the
+  pane's own frame, a redundant double border that also wasted two
+  rows and two columns of content space.
+
 ## [0.4.21] - 2026-09-07
 
 ### Fixed

@@ -46,7 +46,7 @@ func browserNode(p *paneState) tui.Node {
 		items = []string{"(empty)"}
 	}
 
-	return widget.List(items, p.browserCursor, widget.ListOptions{Theme: style.DefaultDark()},
+	return widget.List(items, p.browserCursor, widget.ListOptions{Theme: style.DefaultDark(), Frameless: true},
 		func(e input.Event) tui.Msg {
 			switch ev := e.(type) {
 			case input.KeyEvent:

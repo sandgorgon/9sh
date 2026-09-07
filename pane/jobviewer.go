@@ -38,7 +38,7 @@ func jobViewerNode(p *paneState) tui.Node {
 	if len(items) == 0 {
 		items = []string{"(no jobs — press enter or r to refresh)"}
 	}
-	return widget.List(items, p.jobCursor, widget.ListOptions{Theme: style.DefaultDark()},
+	return widget.List(items, p.jobCursor, widget.ListOptions{Theme: style.DefaultDark(), Frameless: true},
 		func(e input.Event) tui.Msg {
 			switch ev := e.(type) {
 			case input.KeyEvent:

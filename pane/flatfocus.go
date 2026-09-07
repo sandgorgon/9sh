@@ -29,43 +29,82 @@ import (
 // instead when expanded, since it doubles as a bordered pane's top
 // border line — see paneNode, which is the only caller that varies
 // this from ' '.
-func flatFocusable(key any, label string, fill rune, style func(focused bool) cell.Style, onEvent func(input.Event) tui.Msg) tui.Node {
-	return tui.Component(key, flatFocusableProps{label: label, fill: fill, style: style, onEvent: onEvent}, func() tui.Widget {
+//
+// baseStyle, when labelOnlyHighlight is true, scopes the *highlighted*
+// style to just the label's own cells: past the label, the fill always
+// uses baseStyle instead of whatever style(focused) resolves to. This
+// has to be a plain cell.Style, not another call through style(false):
+// a pane's title bar style callback is `m.titleStyle(p, focused ||
+// m.paneHasFocus(id))` (see paneNode) — the OR means style(false)
+// returns the *same* highlighted result as style(true) whenever
+// paneHasFocus(id) is true (this widget's own Tab-focus is only one of
+// two ORed inputs), so it can't be used to recover "the base look" once
+// the pane already has focus some other way. baseStyle sidesteps that
+// by having the caller hand over the unambiguous base value directly
+// (e.g. m.titleStyle(p, false), called outside the OR'd closure).
+//
+// Every control-strip button passes false/zero — a button's own width
+// is sized to its label already (see controlStrip's layout.Length
+// calls), so a full-cell highlight there reads as "this button," not
+// as a highlighted bar stretching into empty space, and its style
+// callback (m.controlStripStyle) has no hidden paneHasFocus-style state
+// to fight anyway. A pane's title bar passes true: its width is
+// layout.Fill(1) (the pane's full content width), independent of the
+// label's length, so a full-cell focused fill turned the whole row
+// into one solid-colored block — reported 2026-09-07 as reading as too
+// heavy/covering more than the actual focus target. Unfocused, both
+// paths paint identically (style(w.focused) resolves to the same thing
+// baseStyle already is), so the always-on "continuous bar" look for an
+// unfocused/collapsed title bar is unchanged.
+func flatFocusable(key any, label string, fill rune, labelOnlyHighlight bool, baseStyle cell.Style, style func(focused bool) cell.Style, onEvent func(input.Event) tui.Msg) tui.Node {
+	return tui.Component(key, flatFocusableProps{label: label, fill: fill, labelOnlyHighlight: labelOnlyHighlight, baseStyle: baseStyle, style: style, onEvent: onEvent}, func() tui.Widget {
 		return &flatFocusableWidget{}
 	})
 }
 
 type flatFocusableProps struct {
-	label   string
-	fill    rune
-	style   func(focused bool) cell.Style
-	onEvent func(input.Event) tui.Msg
+	label              string
+	fill               rune
+	labelOnlyHighlight bool
+	baseStyle          cell.Style
+	style              func(focused bool) cell.Style
+	onEvent            func(input.Event) tui.Msg
 }
 
 type flatFocusableWidget struct {
-	label   string
-	fill    rune
-	style   func(focused bool) cell.Style
-	onEvent func(input.Event) tui.Msg
-	focused bool
+	label              string
+	fill               rune
+	labelOnlyHighlight bool
+	baseStyle          cell.Style
+	style              func(focused bool) cell.Style
+	onEvent            func(input.Event) tui.Msg
+	focused            bool
 }
 
 func (w *flatFocusableWidget) Reconcile(props any) bool {
 	p := props.(flatFocusableProps)
 	changed := w.label != p.label
-	w.label, w.fill, w.style, w.onEvent = p.label, p.fill, p.style, p.onEvent
+	w.label, w.fill, w.labelOnlyHighlight, w.baseStyle, w.style, w.onEvent = p.label, p.fill, p.labelOnlyHighlight, p.baseStyle, p.style, p.onEvent
 	return changed
 }
 
 func (w *flatFocusableWidget) Paint(p *cell.Painter) {
 	width, height := p.Size()
-	st := w.style(w.focused)
+	textSt := w.style(w.focused)
+	fillSt := textSt
+	if w.labelOnlyHighlight {
+		fillSt = w.baseStyle
+	}
 	// Fill the whole cell first, not just the label's own width — this
 	// is what makes it read as a background-colored bar (see barStyle)
 	// rather than colored text floating on the terminal's own
-	// background, with no seam past the label.
-	p.Fill(0, 0, width, height, w.fill, st)
-	p.Text(0, 0, w.label, st)
+	// background, with no seam past the label. fillSt only differs from
+	// textSt (leaving a deliberate seam right past the label) for a
+	// labelOnlyHighlight widget while actually highlighted — see this
+	// function's doc comment for why baseStyle, not style(false), is
+	// what makes that comparison possible at all.
+	p.Fill(0, 0, width, height, w.fill, fillSt)
+	p.Text(0, 0, w.label, textSt)
 }
 
 func (w *flatFocusableWidget) HandleEvent(e input.Event) tui.Cmd {

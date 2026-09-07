@@ -1248,7 +1248,7 @@ func InitialFocusAdvances() int {
 }
 
 func (m Model) addPaneButton(label string, spec Spec) tui.Node {
-	return flatFocusable("btn-"+label, " "+label+" ", ' ', m.controlStripStyle,
+	return flatFocusable("btn-"+label, " "+label+" ", ' ', false, cell.Style{}, m.controlStripStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -1277,7 +1277,7 @@ func (m Model) addPaneButton(label string, spec Spec) tui.Node {
 // (see FocusScope), so Esc/'?'/'q' *are* safe to bind there — see
 // helpWidget.HandleEvent.
 func (m Model) helpButton() tui.Node {
-	return flatFocusable("help-btn", " help ", ' ', m.controlStripStyle,
+	return flatFocusable("help-btn", " help ", ' ', false, cell.Style{}, m.controlStripStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -1287,7 +1287,7 @@ func (m Model) helpButton() tui.Node {
 }
 
 func (m Model) themeButton() tui.Node {
-	return flatFocusable("theme-btn", " theme ", ' ', m.controlStripStyle,
+	return flatFocusable("theme-btn", " theme ", ' ', false, cell.Style{}, m.controlStripStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -1297,7 +1297,7 @@ func (m Model) themeButton() tui.Node {
 }
 
 func (m Model) quitButton() tui.Node {
-	return flatFocusable("quit-btn", " quit ", ' ', m.controlStripStyle,
+	return flatFocusable("quit-btn", " quit ", ' ', false, cell.Style{}, m.controlStripStyle,
 		func(e input.Event) tui.Msg {
 			if !clicked(e) {
 				return nil
@@ -1377,7 +1377,7 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 	if !collapsed {
 		titleFill = '─'
 	}
-	titleBar := flatFocusable(paneKey(id, "title"), label, titleFill,
+	titleBar := flatFocusable(paneKey(id, "title"), label, titleFill, true, m.titleStyle(p, false),
 		// focused (this exact widget) is OR'd with paneHasFocus(id) (any
 		// widget in this pane) rather than replaced by it: paneHasFocus
 		// reflects the *previous* render's FocusAware report (see its

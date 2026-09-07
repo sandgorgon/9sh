@@ -8,6 +8,18 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.21] - 2026-09-07
+
+### Fixed
+
+- Bumped `github.com/sandgorgon/tui` to v0.5.2. Clicking the control
+  strip's `help` button opened and then immediately closed the `?`
+  screen again on the same click's release event
+  ([sandgorgon/tui#28](https://github.com/sandgorgon/tui/issues/28)).
+  Exiting 9sh while focus was on a widget that hides its own caret
+  (e.g. a button, a `List`) also left the real terminal cursor hidden
+  after exit ([sandgorgon/tui#29](https://github.com/sandgorgon/tui/issues/29)).
+
 ## [0.4.20] - 2026-09-07
 
 ### Added

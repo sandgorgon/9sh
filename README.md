@@ -138,6 +138,23 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   those `Record`s) instead of bare `Path`s — the real `ls -la`
   experience, native to the namespace. `glob` itself is left alone for
   when you just want plain `Path`s to pipe into `bind`/`checkout`/etc.
+- `find(dir, pattern)` is `glob`'s recursive sibling: walks every
+  subdirectory beneath `dir`, matching `pattern` against each entry's
+  base name at every depth (both files and directories are eligible,
+  and a matching directory is still recursed into). Returns a `List` of
+  `Path`, same as `glob`. A separate two-argument builtin rather than a
+  `**` convention bolted onto `glob`'s own pattern string.
+- `cat(path)` reads one namespace file's whole content back as a
+  `String`, pipeable straight into `split`/`trim`/`contains`/etc — no
+  `checkout()` round trip needed just to see what's in a namespace-only
+  file (an `/env` var, a job's `status`/`ctl` file). `cp(src, dst)`
+  copies one `Path`'s content to another, both ordinary namespace
+  paths — a real OS file, a remote `/n/host` mount, or anything else
+  bound in can be either side, with no separate transfer protocol,
+  since they're already the same namespace once bound. `src` must be a
+  regular file; `dst` may be an existing file (overwritten) or a new
+  one at an already-existing directory level — like `checkout`'s own
+  write-back, neither builtin creates a new namespace subdirectory.
 - `unbind DST` clears whatever's bound at `DST` — the inverse of
   `bind`, same statement-not-function shape (a namespace-mutating verb
   stays a keyword). Unbinding something never bound is an error.
@@ -161,6 +178,11 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   already kyu's real-TTY passthrough sigil. Tracks only the last
   *foreground* `%cmd`/`$cmd` — a backgrounded `%cmd &`'s exit code is
   already on its own job record (`j.status.exit_code`, `j | wait`).
+- `ps()` returns every job at `/jobs` as a `Table` of `Record`s (`id`,
+  `kind`, `state`, `argv`, `pid`, `exit_code`, `signal`, `error`,
+  `detached`, `cwd`, `started_at`, `finished_at`) — the structured,
+  no-checkout-needed view of `/jobs`' own `status` files, e.g.
+  `ps() | where { |j| j.state == "running" }`.
 - A script's own arguments are visible as `args` (a `List` of `String`)
   — `9sh script.kyu foo bar` sees `args == ["foo", "bar"]`.
 - `%cmd1 && %cmd2` / `%cmd1 || %cmd2` chain by real exit status, like a
@@ -391,6 +413,18 @@ Once the pane's content has focus, Tab reaches the hosted shell
 directly — real completion, not pane navigation. **Ctrl+\\** releases
 focus back to navigating panes/title bars/the control strip.
 
+### Inside a namespace-browser pane
+
+Once the pane's content has focus:
+
+| Key | Does |
+|---|---|
+| `↑`/`↓` | Move the cursor |
+| `Enter` / click | A directory descends into it; a file previews its content in place — this pane's equivalent of `cat(path)` |
+| `Backspace` | Go up a directory — or, while previewing a file, back to the listing it came from |
+| `Esc` | (preview only) same as `Backspace` |
+| `PageUp`/`PageDown`, mouse wheel | (preview only) Scroll the file |
+
 ### Mouse
 
 Click a pane's content to focus it; click a title bar to minimize/
@@ -435,7 +469,7 @@ A Unix socket path is capped at 108 bytes by the OS
 
 ## Status
 
-Pre-1.0 (`v0.4.19`). The full v1 build-order plan (namespace core, jobs,
+Pre-1.0 (`v0.4.20`). The full v1 build-order plan (namespace core, jobs,
 kyu, the TUI pane multiplexer, session history, remote namespace/auth,
 dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real

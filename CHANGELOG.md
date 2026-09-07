@@ -8,6 +8,26 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.20] - 2026-09-07
+
+### Added
+
+- `find(dir, pattern)`, `cat(path)`, `cp(src, dst)`, and `ps()`
+  builtins — recursive namespace search (`glob`'s missing `**`), a
+  namespace file's content read and copied without a full
+  `checkout()` round trip, and a structured `Table` view of `/jobs`
+  instead of hand-walking its `status` files.
+- The namespace-browser pane now previews a selected file's content in
+  place (`Enter`/click a file; `Esc`/`Backspace` returns to the
+  listing) instead of doing nothing — the browse pane's answer to
+  `cat(path)`.
+
+### Fixed
+
+- A pane title bar's `(x/d/r/z/+/-)` hint now sits directly beside its
+  title words instead of past the `[zoomed]`/`(exited)` badges at the
+  very end of the label.
+
 ## [0.4.19] - 2026-09-07
 
 ### Fixed

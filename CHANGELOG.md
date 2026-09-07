@@ -8,6 +8,20 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.19] - 2026-09-07
+
+### Fixed
+
+- Bumped `github.com/sandgorgon/tui` to v0.5.1, fixing
+  [sandgorgon/tui#26](https://github.com/sandgorgon/tui/issues/26) —
+  a shell pane's `Terminal` was forwarding every mouse click to the
+  hosted shell unconditionally, so a plain shell with no mouse
+  reporting enabled received the raw SGR mouse bytes as literal
+  keyboard input (visible as garbage like `0;37;9M3;37;9m` typed into
+  the prompt on click). Also picks up correct SS3 arrow/Home/End key
+  encoding under DECCKM application cursor-key mode, relevant to
+  full-screen programs (vim, less, ...) run inside a shell pane.
+
 ## [0.4.18] - 2026-09-07
 
 ### Fixed

@@ -118,6 +118,7 @@ var builtinDocs = []BuiltinDoc{
 	{"index_of", `index_of(needle, str_or_list)`, "The first position of needle: a rune index for a String, an element index for a List/Table (needle compared by value equality). -1 if not found."},
 	{"to_int", "to_int(str_or_number)", `Parses a String into an Int (base 10); truncates a Float; an Int passes through unchanged. An unparseable String is an ErrorVal, not a hard error — a script's own args are always String, so this is how you do arithmetic on one.`},
 	{"to_float", "to_float(str_or_number)", "Parses a String into a Float; an Int/Float pass through (widening/unchanged). An unparseable String is an ErrorVal, same as to_int."},
+	{"round", `round(places, number)`, `Rounds to places decimal digits, half-away-from-zero; always returns a Float. For turning a number into a String with that precision, pipe into format: number | round(2) | format("{}").`},
 
 	// Control flow / syntax
 	{"while", "while cond { ... }", "kyu's only loop construct, with break/continue. A self-referencing closure also works for recursion."},

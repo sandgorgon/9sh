@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"sort"
@@ -67,6 +68,7 @@ var builtins = map[string]BuiltinFn{
 	"lower":       biLower,
 	"to_int":      biToInt,
 	"to_float":    biToFloat,
+	"round":       biRound,
 }
 
 // biHost returns this machine's hostname — the design doc's own example
@@ -1081,6 +1083,35 @@ func biToFloat(args []value.Value) (value.Value, error) {
 	default:
 		return nil, fmt.Errorf("to_float: expected a string, int, or float, got %s", v.Kind())
 	}
+}
+
+// biRound rounds n to the given number of decimal places, half-away-
+// from-zero (math.Round) — the piece to_int (truncation, not rounding)
+// and format's "{}" (shortest round-trip 'g', no precision control) don't
+// cover. Always returns a Float, even for places=0, so a caller chaining
+// `| round(2) | format("{}")` gets "3.14" rather than losing the point.
+func biRound(args []value.Value) (value.Value, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("round: missing input")
+	}
+	input := args[len(args)-1]
+	rest := args[:len(args)-1]
+	if len(rest) != 1 {
+		return nil, fmt.Errorf("round: expected 1 places argument, got %d", len(rest))
+	}
+	places, ok := rest[0].(value.Int)
+	if !ok {
+		return nil, fmt.Errorf("round: places argument must be an int, got %s", rest[0].Kind())
+	}
+	if places < 0 {
+		return nil, fmt.Errorf("round: places must be >= 0, got %d", places)
+	}
+	f, ok := toFloat(input)
+	if !ok {
+		return nil, fmt.Errorf("round: expected an int or float input, got %s", input.Kind())
+	}
+	mult := math.Pow(10, float64(places))
+	return value.Float(math.Round(f*mult) / mult), nil
 }
 
 // biLen counts runes for a String, elements for a List/Table — the one

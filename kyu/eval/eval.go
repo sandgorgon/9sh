@@ -86,6 +86,25 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("unset", &Builtin{Name: "unset", Fn: func(args []value.Value) (value.Value, error) {
 		return biUnset(env, args)
 	}})
+	// find needs the calling Env's namespace — same closure-capture shape
+	// as glob/checkout above. See find.go's biFind doc comment.
+	env.Define("find", &Builtin{Name: "find", Fn: func(args []value.Value) (value.Value, error) {
+		return biFind(env, args)
+	}})
+	// cat/cp need the calling Env's namespace — same closure-capture
+	// shape as glob/checkout above. See cat.go's biCat, cp.go's biCp doc
+	// comments.
+	env.Define("cat", &Builtin{Name: "cat", Fn: func(args []value.Value) (value.Value, error) {
+		return biCat(env, args)
+	}})
+	env.Define("cp", &Builtin{Name: "cp", Fn: func(args []value.Value) (value.Value, error) {
+		return biCp(env, args)
+	}})
+	// ps needs the calling Env's namespace — same closure-capture shape
+	// as glob/checkout above. See ps.go's biPs doc comment.
+	env.Define("ps", &Builtin{Name: "ps", Fn: func(args []value.Value) (value.Value, error) {
+		return biPs(env, args)
+	}})
 	return env
 }
 

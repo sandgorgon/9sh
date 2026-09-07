@@ -54,63 +54,101 @@ func biCheckout(namespace *ns.Namespace, args []value.Value) (value.Value, error
 	fn := args[1]
 
 	ctx := context.Background()
+	mat, err := materializeNamespacePath(ctx, namespace, nsPath)
+	if err != nil {
+		return nil, fmt.Errorf("checkout: %w", err)
+	}
+	defer os.RemoveAll(mat.scratchRoot)
+
+	result, err := call(fn, []value.Value{value.Path(mat.scratchPath)})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := writeBackNamespacePath(ctx, mat); err != nil {
+		return nil, fmt.Errorf("checkout: writing back %s: %w", nsPath, err)
+	}
+	return result, nil
+}
+
+// materialized is what materializeNamespacePath produces and
+// writeBackNamespacePath later consumes — the namespace handle plus
+// enough real-filesystem state to write changes back once a caller is
+// done with scratchPath. The caller owns cleanup of scratchRoot
+// (os.RemoveAll) once it's no longer needed; src stays open across that
+// whole window (it's an in-process 9P handle into namespace, not a
+// resource that expires on its own).
+type materialized struct {
+	src         server.File
+	scratchRoot string
+	scratchPath string
+	isDir       bool
+	snapshot    map[string][]byte // absolute scratch path -> original content
+}
+
+// materializeNamespacePath copies the namespace subtree at nsPath (a
+// single file or a whole directory) out to a fresh real scratch
+// directory. Shared by biCheckout and runExternalFullscreen (see
+// fullscreen.go) — the same materialize-then-run-then-write-back shape,
+// just with a kyu closure or a real external process standing in for
+// "run". Errors carry no "checkout:"/"%cmd:" prefix of their own — each
+// caller wraps with whatever prefix fits its own error convention.
+func materializeNamespacePath(ctx context.Context, namespace *ns.Namespace, nsPath value.Path) (*materialized, error) {
 	root, err := namespace.Attach(ctx, "9sh", "")
 	if err != nil {
 		return nil, err
 	}
 	src, err := walkAll(ctx, root, splitPath(string(nsPath)))
 	if err != nil {
-		return nil, fmt.Errorf("checkout: %s: %w", nsPath, err)
+		return nil, fmt.Errorf("%s: %w", nsPath, err)
 	}
 	st, err := src.Stat(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("checkout: %s: stat: %w", nsPath, err)
+		return nil, fmt.Errorf("%s: stat: %w", nsPath, err)
 	}
 
 	scratchRoot, err := os.MkdirTemp("", "9sh-checkout-")
 	if err != nil {
-		return nil, fmt.Errorf("checkout: %w", err)
+		return nil, err
 	}
-	defer os.RemoveAll(scratchRoot)
 
-	snapshot := map[string][]byte{} // absolute scratch path -> original content
-	var scratchPath string
-	if st.Qid.IsDir() {
-		scratchPath = scratchRoot
-		if err := materializeDir(ctx, src, scratchRoot, snapshot); err != nil {
-			return nil, fmt.Errorf("checkout: %w", err)
+	mat := &materialized{src: src, scratchRoot: scratchRoot, isDir: st.Qid.IsDir(), snapshot: map[string][]byte{}}
+	if mat.isDir {
+		mat.scratchPath = scratchRoot
+		if err := materializeDir(ctx, src, scratchRoot, mat.snapshot); err != nil {
+			os.RemoveAll(scratchRoot)
+			return nil, err
 		}
 	} else {
 		if err := src.Open(ctx, p9.OREAD); err != nil {
-			return nil, fmt.Errorf("checkout: opening %s: %w", nsPath, err)
+			os.RemoveAll(scratchRoot)
+			return nil, fmt.Errorf("opening %s: %w", nsPath, err)
 		}
 		content, err := readAllFile(ctx, src)
 		src.Close()
 		if err != nil {
-			return nil, fmt.Errorf("checkout: reading %s: %w", nsPath, err)
+			os.RemoveAll(scratchRoot)
+			return nil, fmt.Errorf("reading %s: %w", nsPath, err)
 		}
-		scratchPath = filepath.Join(scratchRoot, filepath.Base(string(nsPath)))
-		if err := os.WriteFile(scratchPath, content, 0644); err != nil {
-			return nil, fmt.Errorf("checkout: %w", err)
+		mat.scratchPath = filepath.Join(scratchRoot, filepath.Base(string(nsPath)))
+		if err := os.WriteFile(mat.scratchPath, content, 0644); err != nil {
+			os.RemoveAll(scratchRoot)
+			return nil, err
 		}
-		snapshot[scratchPath] = content
+		mat.snapshot[mat.scratchPath] = content
 	}
+	return mat, nil
+}
 
-	result, err := call(fn, []value.Value{value.Path(scratchPath)})
-	if err != nil {
-		return nil, err
+// writeBackNamespacePath pushes whatever changed under mat's scratch
+// path(s) back into the namespace, dispatching to writeBackDir or
+// writeBackFile depending on mat.isDir — the inverse of
+// materializeNamespacePath.
+func writeBackNamespacePath(ctx context.Context, mat *materialized) error {
+	if mat.isDir {
+		return writeBackDir(ctx, mat.src, mat.scratchRoot, mat.snapshot)
 	}
-
-	if st.Qid.IsDir() {
-		if err := writeBackDir(ctx, src, scratchRoot, snapshot); err != nil {
-			return nil, fmt.Errorf("checkout: writing back changes: %w", err)
-		}
-	} else {
-		if err := writeBackFile(ctx, src, scratchPath, snapshot[scratchPath]); err != nil {
-			return nil, fmt.Errorf("checkout: writing back %s: %w", nsPath, err)
-		}
-	}
-	return result, nil
+	return writeBackFile(ctx, mat.src, mat.scratchPath, mat.snapshot[mat.scratchPath])
 }
 
 func splitPath(p string) []string {

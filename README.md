@@ -68,18 +68,22 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 - `|` is a structured pipe by default (`where`/`select`/`sort_by`/
   `group_by`/`each`/...), not raw bytes — `%` is the sigil that marks
   "this call is bytes, not structured data."
-- `$cmd` runs a command connected directly to this terminal — for
-  anything `%cmd` structurally can't support because it's job-tracked
-  (`vim`, `ssh`, another REPL: programs that need a live TTY, not a
-  buffer read back after the fact). No job, no captured value, and it
-  can't appear inside a pipe. Only available in the plain REPL (`-repl`)
-  or a script — the pane multiplexer already has its own answer for a
-  live terminal (a shell pane, `+ shell`), and `$cmd` there would race
-  the multiplexer for the terminal itself, so it's refused with a clear
-  error instead.
+- A `%cmd` whose name is listed in `fullscreen_programs` (a kyu
+  variable, defaulted in `/config/config.ky` — `vim`, `top`, `ssh`,
+  `man`, ... out of the box) gets the real screen and keyboard
+  directly instead of a job-tracked buffer, in every mode including
+  the pane multiplexer's kyu-repl pane — it hands that pane's screen to
+  the program until it exits, the same real-pty machinery a `+ shell`
+  pane always used, just attached on demand. A namespace-only `Path`
+  argument is transparently checked out to a real scratch location and
+  written back on exit, instead of erroring the way an ordinary `%cmd`
+  would. No job, no captured value, and it can't be backgrounded with
+  `&` (nothing to hand the real screen to if it isn't in the
+  foreground) — edit `/config/config.ky` (or extend
+  `fullscreen_programs` from `common.ky`) to add your own.
 - `while cond { ... }` loops, with `break`/`continue` — kyu's only loop
   construct; recursion via a self-referencing closure still works too.
-- `cd(path)` sets the working directory `%cmd`/`$cmd` subprocesses run
+- `cd(path)` sets the working directory `%cmd` subprocesses run
   in — per-session state (like `bind`), not a real `chdir`, since every
   pane in a TUI session shares one process. `pwd()` reads it back
   in-process (no `%pwd` subprocess needed), falling back to the real
@@ -95,8 +99,8 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   error pointing at `checkout` rather than running at all; a namespace
   path that happens to coincide with an unrelated real file is the one
   case this can't catch (see the Design section's "No FUSE").
-  `setenv("PATH", ...)` genuinely changes which binary `%cmd`/`$cmd`
-  resolve, not just what a subprocess sees about its own environment.
+  `setenv("PATH", ...)` genuinely changes which binary `%cmd`
+  resolves, not just what a subprocess sees about its own environment.
 - Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
   `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
   `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
@@ -174,10 +178,10 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   interpolation, not new string-literal syntax; the placeholder count
   must exactly match the argument count. Pipeable like anything else:
   `name | format("hello {}")`.
-- `exit_code()` — bash's `$?`, spelled as a function since `$` is
-  already kyu's real-TTY passthrough sigil. Tracks only the last
-  *foreground* `%cmd`/`$cmd` — a backgrounded `%cmd &`'s exit code is
-  already on its own job record (`j.status.exit_code`, `j | wait`).
+- `exit_code()` — bash's `$?`, spelled as a function since kyu has no
+  `$`-prefixed syntax. Tracks only the last *foreground* `%cmd` — a
+  backgrounded `%cmd &`'s exit code is already on its own job record
+  (`j.status.exit_code`, `j | wait`).
 - `ps()` returns every job at `/jobs` as a `Table` of `Record`s (`id`,
   `kind`, `state`, `argv`, `pid`, `exit_code`, `signal`, `error`,
   `detached`, `cwd`, `started_at`, `finished_at`) — the structured,
@@ -256,7 +260,7 @@ cosmetic:
   It's one bind among any others you make, with no special status once
   you've made your own.
 - **`cd`/`pwd` are real, but they're not about the namespace.** External
-  Unix binaries (`%cmd`/`$cmd`) genuinely need a process cwd to run in —
+  Unix binaries (`%cmd`) genuinely need a process cwd to run in —
   that's an OS-level fact 9sh can't paper over — so `cd(path)`/`pwd()`
   give them one. It starts out equal to `/local`'s target (both come
   from the same `os.Getwd()` at launch), which is exactly what makes the
@@ -280,14 +284,17 @@ cosmetic:
   as `dial`/`dir` hard-require a `String`, never a `Path`, in the
   opposite direction. Both crossings are always an explicit function
   call, never an implicit guess based on what a value looks like.
-- **Handing a namespace path straight to `%cmd`/`$cmd` is caught, not
+- **Handing a namespace path straight to `%cmd` is caught, not
   silently wrong.** The natural first mistake this mental model
   produces — `%cat /local/foo`, treating `/local` like a real directory
   a legacy binary can just open — errors with a hint to use `checkout`
   instead of reaching the binary as a meaningless literal string. Tab
   completion (inside a bare `Path`) offers both real filesystem and
   namespace entries, which is exactly how this mistake tends to get
-  typed in the first place.
+  typed in the first place. A fullscreen program (`vim`, ... — see
+  `fullscreen_programs`) is the one exception: there, a namespace-only
+  `Path` is checked out and written back automatically instead of
+  erroring.
 
 ### Example: a starter `common.ky`
 
@@ -374,7 +381,7 @@ click into it):
 | Key | Does |
 |---|---|
 | `Enter` | Submit, or keep editing if brackets are still open |
-| `Tab` | Complete the identifier before the cursor (variables, builtins, keywords) — right after a `%`/`$` sigil, an external command name from `PATH`; inside a bare `Path` literal, entries from both the real filesystem and the attached namespace, merged — fills the longest common match, cycles through candidates on repeated `Tab` |
+| `Tab` | Complete the identifier before the cursor (variables, builtins, keywords) — right after a `%` sigil, an external command name from `PATH`; inside a bare `Path` literal, entries from both the real filesystem and the attached namespace, merged — fills the longest common match, cycles through candidates on repeated `Tab` |
 | Ctrl+R | Reverse history search (bash's reverse-i-search) — type to search, `Enter` runs the match immediately, `Esc` loads it into the input line without running it, repeated Ctrl+R searches further back |
 | Ctrl+\\ | Release keyboard focus back to navigating panes/title bars/the control strip — `Tab`'s normally-global pane-navigation meaning is claimed by this pane's own completion instead, the same trade shell panes already make for real tab-completion in the hosted shell |
 | `←`/`→`, Ctrl+`←`/`→` | Move the cursor by character / by word |
@@ -397,7 +404,7 @@ assume. Alt+C for "just the visible part" sidesteps that ambiguity
 entirely.
 
 The input line is syntax-highlighted live as you type (keywords,
-strings, numbers, paths, and the `%`/`$`/`@` sigils each get their own
+strings, numbers, paths, and the `%`/`@` sigils each get their own
 color) — the already-submitted transcript above it doesn't, by design;
 this is a live editing aid, not a retroactive recolor of everything
 ever printed.
@@ -515,12 +522,15 @@ than the full remote-peer trust machinery.
   for free; classic Unix pipeline tools need nothing beyond stdin/
   stdout; tools needing a real seekable path use `checkout` to
   materialize a subtree to a scratch directory and write back on close.
-  A `Path` argument handed straight to `%cmd`/`$cmd` that only resolves
+  A `Path` argument handed straight to `%cmd` that only resolves
   in the namespace, not on the real filesystem, is caught with an error
   pointing at `checkout` rather than reaching the external binary as a
   meaningless literal string — the one case this can't catch is a
   namespace path that happens to alias an unrelated real file, since no
-  FUSE means there's no way to tell the two apart from outside.
+  FUSE means there's no way to tell the two apart from outside. A
+  fullscreen program (`fullscreen_programs`, e.g. `vim`) is the third
+  tier automated: `checkout`'s own materialize-and-write-back runs
+  transparently around it instead of erroring.
 - **Structured pipes.** Records and tables flow through `|` by default
   (nushell/PowerShell-style); `%` marks a call into legacy/external
   Bytes-land.
@@ -529,8 +539,8 @@ than the full remote-peer trust machinery.
   and proxy jobs alike — mutual TLS authenticates once at the transport
   layer, so `Tattach`'s `uname` is never a client-asserted string.
 - Package doc comments throughout (`ns`, `job`, `kyu/eval`, `remote`,
-  `session`, `dotfiles`, `pane`) go into the "why," not just the "what,"
-  for anyone picking a subsystem apart.
+  `session`, `dotfiles`, `config`, `pane`) go into the "why," not just
+  the "what," for anyone picking a subsystem apart.
 
 ## Testing
 

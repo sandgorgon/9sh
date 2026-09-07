@@ -3,6 +3,7 @@ package pane
 import (
 	"context"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -65,7 +66,7 @@ const scrollStep = 3
 // this pane's lifetime, so it isn't threaded through Reconcile props.
 func kyuReplNode(id int, env *eval.Env) tui.Node {
 	return tui.Component(paneKey(id, "kyurepl"), struct{}{}, func() tui.Widget {
-		return &kyuReplWidget{env: env}
+		return &kyuReplWidget{env: env, paneID: id}
 	})
 }
 
@@ -104,10 +105,19 @@ type replSpan struct {
 // missed.
 type kyuReplWidget struct {
 	env     *eval.Env
+	paneID  int // this pane's id, for startFullscreenMsg -- see attachFullscreen
 	lines   []replLine
 	input   string
 	cursor  int // rune index into []rune(input), 0..len(runes(input))
 	focused bool
+
+	// pendingFullscreen is set by attachFullscreen (registered as this
+	// widget's eval.FullscreenHandlerFunc for the duration of each
+	// evaluate() call) when the source just evaluated turned out to be a
+	// fullscreen %cmd (see kyu/eval's runExternalFullscreen). handleKey's
+	// Enter case consumes it right after submit() returns, turning it
+	// into a startFullscreenMsg Cmd -- see consumeFullscreenCmd.
+	pendingFullscreen *fullscreenAttach
 
 	// history is every submitted top-level input (the full, possibly
 	// multi-line, source — not one entry per line), oldest first.
@@ -229,7 +239,7 @@ func tokenStyle(k token.Kind) (cell.Style, bool) {
 		return numberStyle, true
 	case token.PATH:
 		return pathStyle, true
-	case token.PERCENT, token.DOLLAR, token.AT:
+	case token.PERCENT, token.AT:
 		return sigilStyle, true
 	}
 	return cell.Style{}, false
@@ -421,6 +431,9 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 		w.completeTab()
 	case ke.Key == input.KeyEnter:
 		w.submit()
+		if cmd := w.consumeFullscreenCmd(); cmd != nil {
+			return cmd
+		}
 	case ke.Key == input.KeyBackspace:
 		w.backspace()
 	case ke.Key == input.KeyDelete:
@@ -737,6 +750,9 @@ func (w *kyuReplWidget) handleSearchKey(ke input.KeyEvent) tui.Cmd {
 	switch {
 	case ke.Key == input.KeyEnter:
 		w.exitSearch(true)
+		if cmd := w.consumeFullscreenCmd(); cmd != nil {
+			return cmd
+		}
 	case ke.Key == input.KeyEsc:
 		w.exitSearch(false)
 	case ke.Key == input.KeyBackspace:
@@ -824,7 +840,21 @@ func (w *kyuReplWidget) evaluate(src string) {
 		}
 		return
 	}
+	// Registered only for this one synchronous Eval call, same
+	// set-before/clear-after pattern Env.SetInterruptHandler already
+	// uses -- safe because evaluate() calls never overlap (one dispatch
+	// goroutine). See attachFullscreen's doc comment for what this
+	// actually does. w.env is nil in a handful of pane-behavior-only
+	// tests that don't exercise evaluation semantics (e.g. KyuReplSpec's
+	// env argument left nil) -- guarded the same way eval.Eval below
+	// already tolerates a nil Env for those.
+	if w.env != nil {
+		w.env.SetFullscreenHandler(w.attachFullscreen)
+	}
 	v, err := eval.Eval(prog, w.env)
+	if w.env != nil {
+		w.env.SetFullscreenHandler(nil)
+	}
 	if err != nil {
 		w.lines = append(w.lines, replLine{text: err.Error(), style: errorStyle})
 		return
@@ -832,6 +862,32 @@ func (w *kyuReplWidget) evaluate(src string) {
 	if v.Kind() != "null" {
 		w.lines = append(w.lines, resultLines(v)...)
 	}
+}
+
+// attachFullscreen is registered as this pane's eval.FullscreenHandlerFunc
+// for the duration of each evaluate() call (see evaluate). It doesn't
+// start cmd itself -- it just records the attachment so handleKey's
+// Enter case (see consumeFullscreenCmd) can turn it into a
+// startFullscreenMsg once evaluate() returns, handing this pane's
+// content over to a widget.Terminal in paneNode (see pane/model.go) —
+// the same real-pty machinery `+ shell` panes already use, just
+// attached to an existing kyu-repl pane instead of a dedicated one.
+func (w *kyuReplWidget) attachFullscreen(cmd *exec.Cmd, onDone func(err error)) {
+	w.pendingFullscreen = &fullscreenAttach{cmd: cmd, onDone: onDone}
+}
+
+// consumeFullscreenCmd returns a tui.Cmd yielding startFullscreenMsg if
+// the evaluation that just ran (via submit(), Enter, or exitSearch's own
+// Enter-triggered submit) attached a fullscreen program, clearing
+// pendingFullscreen so it's only ever consumed once; nil otherwise.
+func (w *kyuReplWidget) consumeFullscreenCmd() tui.Cmd {
+	if w.pendingFullscreen == nil {
+		return nil
+	}
+	attach := w.pendingFullscreen
+	w.pendingFullscreen = nil
+	id := w.paneID
+	return func() tui.Msg { return startFullscreenMsg{id: id, attach: attach} }
 }
 
 // resultLines renders a top-level evaluation result as one or more
@@ -897,10 +953,10 @@ func (w *kyuReplWidget) currentIdentBounds() (start int) {
 }
 
 // currentExternalNameBounds reports whether the cursor sits inside an
-// external-command-name fragment — right after a '%' or '$' sigil,
-// kyu's external-call syntax (see kyu/lexer's lexExternalName) — and if
-// so, the rune index it starts at. Unlike an ordinary kyu identifier,
-// this fragment allows internal hyphens (docker-compose, apt-get, ...),
+// external-command-name fragment — right after a '%' sigil, kyu's
+// external-call syntax (see kyu/lexer's lexExternalName) — and if so,
+// the rune index it starts at. Unlike an ordinary kyu identifier, this
+// fragment allows internal hyphens (docker-compose, apt-get, ...),
 // matching lexExternalName's own character set; that's the only reason
 // this isn't just currentIdentBounds with an extra check.
 func (w *kyuReplWidget) currentExternalNameBounds() (start int, ok bool) {
@@ -913,11 +969,11 @@ func (w *kyuReplWidget) currentExternalNameBounds() (start int, ok bool) {
 		return 0, false
 	}
 	sigil := rs[start-1]
-	return start, sigil == '%' || sigil == '$'
+	return start, sigil == '%'
 }
 
 // externalNameCandidates lists every PATH executable whose name starts
-// with fragment, resolving PATH the same way a %cmd/$cmd actually would
+// with fragment, resolving PATH the same way a %cmd actually would
 // (env.EnvSlice's /env-backed view, not this process's own real PATH —
 // see pathresolve's doc comment) so completion never offers a name the
 // command wouldn't actually resolve to.
@@ -976,8 +1032,8 @@ func splitPathFragment(fragment string) (dirPart, partial string) {
 
 // pathCandidates completes a bare Path fragment against both the real
 // filesystem and the attached namespace, merged into one candidate list
-// rather than chosen by surrounding context. A Path argument to %cmd/
-// $cmd is legitimately either — a real /etc/hosts is exactly as valid as
+// rather than chosen by surrounding context. A Path argument to %cmd
+// is legitimately either — a real /etc/hosts is exactly as valid as
 // a namespace /local/foo (see external.go's checkNamespaceOnlyPath,
 // which has to tell the two apart precisely because both are real
 // possibilities there). Completion doesn't need that same precision:

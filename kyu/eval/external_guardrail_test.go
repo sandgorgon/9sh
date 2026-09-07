@@ -35,20 +35,6 @@ func TestExternalCallNamespaceOnlyPathIsGuardedErrorVal(t *testing.T) {
 	}
 }
 
-// TestPassthroughNamespaceOnlyPathIsGuardedErrorVal is the $cmd sibling
-// of the above -- same guard, same message, reached through
-// evalPassthroughStmt instead of runExternal.
-func TestPassthroughNamespaceOnlyPathIsGuardedErrorVal(t *testing.T) {
-	env, realDir := dirfsEnv(t)
-	if err := os.WriteFile(filepath.Join(realDir, "greeting.txt"), []byte("hi"), 0644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
-	v := runEnv(t, `$cat /src/greeting.txt`, env)
-	if _, ok := v.(value.ErrorVal); !ok {
-		t.Fatalf("want ErrorVal, got %#v", v)
-	}
-}
-
 // TestExternalCallRealPathUnaffectedByGuardrail is the regression guard
 // for the naive version of this check: a genuinely real absolute path
 // must pass straight through, unchanged, even though it's typed

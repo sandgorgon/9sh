@@ -571,19 +571,6 @@ func TestKyuReplTabCompletesExternalCommandAfterPercentSigil(t *testing.T) {
 	}
 }
 
-func TestKyuReplTabCompletesExternalCommandAfterDollarSigil(t *testing.T) {
-	dir := t.TempDir()
-	writeFakeExecutable(t, dir, "widget-tool")
-	t.Setenv("PATH", dir)
-
-	w := newTestReplWidget(t)
-	sendRunes(w, "$widget")
-	sendKey(w, input.KeyTab)
-	if w.input != "$widget-tool" {
-		t.Fatalf("input = %q, want %q", w.input, "$widget-tool")
-	}
-}
-
 func TestKyuReplTabExternalCommandFragmentIncludesHyphen(t *testing.T) {
 	// lexExternalName allows internal hyphens in an external command
 	// name (docker-compose, apt-get, ...) -- the fragment scan here

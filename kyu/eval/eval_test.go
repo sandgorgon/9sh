@@ -38,10 +38,22 @@ func jobsEnv(t *testing.T) *Env {
 	return NewGlobalEnv(namespace)
 }
 
+// markFullscreen defines fullscreen_programs on env, so a %name call
+// routes through runExternalFullscreen -- the same behavior $cmd used
+// to provide directly, before it was removed in favor of %cmd detecting
+// this itself (see fullscreen.go's isFullscreenProgram).
+func markFullscreen(env *Env, names ...string) {
+	elems := make([]value.Value, len(names))
+	for i, n := range names {
+		elems[i] = value.String(n)
+	}
+	env.Define("fullscreen_programs", value.NewList(elems))
+}
+
 // jobsAndEnvVarsEnv is jobsEnv plus /env bound over a fresh scratch
 // directory (dirfs, the same mechanism cmd/9sh's bootstrap uses for
 // /env — see main.go) — for tests exercising getenv/setenv/unsetenv and
-// their propagation into %cmd/%cmd &/$cmd. Deliberately starts empty
+// their propagation into %cmd/%cmd &/a fullscreen %cmd. Deliberately starts empty
 // (unlike bootstrap, which seeds it from os.Environ()): tests want a
 // known, controlled set of variables, not whatever happens to be in the
 // process running `go test`.
@@ -298,7 +310,8 @@ exit_code()`, env)
 func TestExitCodeAfterPassthrough(t *testing.T) {
 	skipUnlessOnPath(t, "sh")
 	env := jobsEnv(t)
-	runEnv(t, `$sh "-c" "exit 5"`, env)
+	markFullscreen(env, "sh")
+	runEnv(t, `%sh "-c" "exit 5"`, env)
 	v := runEnv(t, `exit_code()`, env)
 	if v.(value.Int) != 5 {
 		t.Errorf("got %v, want 5", v)
@@ -809,14 +822,16 @@ func TestExternalCallBadCommand(t *testing.T) {
 	}
 }
 
-// TestPassthroughInheritsRealStdio locks in $cmd's whole reason for
-// existing: unlike %cmd (always job-tracked, output buffered into a
-// growBuf and only returned after the job finishes — see
-// runExternalViaJob), $cmd connects the subprocess directly to 9sh's
-// own stdout/stderr, with no job created at all.
+// TestPassthroughInheritsRealStdio locks in a fullscreen %cmd's whole
+// reason for taking a different path than an ordinary one: unlike %cmd
+// (always job-tracked, output buffered into a growBuf and only returned
+// after the job finishes — see runExternalViaJob), a fullscreen %cmd
+// outside the TUI connects the subprocess directly to 9sh's own
+// stdout/stderr, with no job created at all.
 func TestPassthroughInheritsRealStdio(t *testing.T) {
 	skipUnlessOnPath(t, "echo")
 	env, mgr := jobsEnvWithManager(t)
+	markFullscreen(env, "echo")
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -824,7 +839,7 @@ func TestPassthroughInheritsRealStdio(t *testing.T) {
 	}
 	origStdout := os.Stdout
 	os.Stdout = w
-	v := runEnv(t, `$echo "hello-passthrough"`, env)
+	v := runEnv(t, `%echo "hello-passthrough"`, env)
 	os.Stdout = origStdout
 	w.Close()
 
@@ -839,19 +854,22 @@ func TestPassthroughInheritsRealStdio(t *testing.T) {
 		t.Fatalf("want value.Null (nothing to capture), got %#v", v)
 	}
 	if len(mgr.List()) != 0 {
-		t.Fatalf("$cmd must not create a job, got %d", len(mgr.List()))
+		t.Fatalf("a fullscreen %%cmd must not create a job, got %d", len(mgr.List()))
 	}
 }
 
-// TestPassthroughBlockedByEnv locks in cmd/9sh's TUI guard: SetPassthroughBlocked
-// makes $cmd fail with an ErrorVal instead of touching os.Stdin/Stdout/
-// Stderr at all -- see Env.SetPassthroughBlocked's doc comment for why
+// TestPassthroughBlockedByEnv locks in cmd/9sh's TUI guard:
+// SetPassthroughBlocked makes a fullscreen %cmd fail with an ErrorVal
+// instead of touching os.Stdin/Stdout/Stderr at all, when no
+// FullscreenHandler is registered to take the checkout-and-pty-handoff
+// path instead -- see Env.SetPassthroughBlocked's doc comment for why
 // the TUI needs this (a real subprocess sharing the terminal would race
 // tui.App.Run's own raw-mode stdin reader).
 func TestPassthroughBlockedByEnv(t *testing.T) {
 	env := jobsEnv(t)
+	markFullscreen(env, "echo")
 	env.SetPassthroughBlocked("not supported here")
-	v := runEnv(t, `$echo "should not run"`, env)
+	v := runEnv(t, `%echo "should not run"`, env)
 	ev, ok := v.(value.ErrorVal)
 	if !ok {
 		t.Fatalf("want ErrorVal, got %#v", v)
@@ -863,7 +881,8 @@ func TestPassthroughBlockedByEnv(t *testing.T) {
 
 func TestPassthroughBadCommandIsErrorVal(t *testing.T) {
 	env := jobsEnv(t)
-	v := runEnv(t, `$this-command-does-not-exist-9sh`, env)
+	markFullscreen(env, "this-command-does-not-exist-9sh")
+	v := runEnv(t, `%this-command-does-not-exist-9sh`, env)
 	if _, ok := v.(value.ErrorVal); !ok {
 		t.Fatalf("want ErrorVal for a missing command, got %#v", v)
 	}
@@ -1111,6 +1130,7 @@ func TestCdAffectsPassthrough(t *testing.T) {
 	skipUnlessOnPath(t, "pwd")
 	dir := t.TempDir()
 	env := jobsEnv(t)
+	markFullscreen(env, "pwd")
 	runEnv(t, `cd("`+dir+`")`, env)
 
 	r, w, err := os.Pipe()
@@ -1119,7 +1139,7 @@ func TestCdAffectsPassthrough(t *testing.T) {
 	}
 	origStdout := os.Stdout
 	os.Stdout = w
-	runEnv(t, `$pwd`, env)
+	runEnv(t, `%pwd`, env)
 	os.Stdout = origStdout
 	w.Close()
 
@@ -1252,6 +1272,7 @@ j.stdout`, env)
 func TestSetenvAffectsPassthrough(t *testing.T) {
 	skipUnlessOnPath(t, "sh")
 	env := jobsAndEnvVarsEnv(t)
+	markFullscreen(env, "sh")
 	runEnv(t, `setenv("NINESH_TEST_VAR", "from-setenv-dollar")`, env)
 
 	r, w, err := os.Pipe()
@@ -1260,7 +1281,7 @@ func TestSetenvAffectsPassthrough(t *testing.T) {
 	}
 	origStdout := os.Stdout
 	os.Stdout = w
-	runEnv(t, `$sh "-c" "echo -n $NINESH_TEST_VAR"`, env)
+	runEnv(t, `%sh "-c" "echo -n $NINESH_TEST_VAR"`, env)
 	os.Stdout = origStdout
 	w.Close()
 
@@ -1328,6 +1349,7 @@ func TestSetenvPathAffectsPassthroughResolution(t *testing.T) {
 	dir := t.TempDir()
 	writeProbeScript(t, dir, "found-it-dollar")
 	env := jobsAndEnvVarsEnv(t)
+	markFullscreen(env, "probe-tool")
 	runEnv(t, `setenv("PATH", "`+dir+`")`, env)
 
 	r, w, err := os.Pipe()
@@ -1336,7 +1358,7 @@ func TestSetenvPathAffectsPassthroughResolution(t *testing.T) {
 	}
 	origStdout := os.Stdout
 	os.Stdout = w
-	runEnv(t, `$probe-tool`, env)
+	runEnv(t, `%probe-tool`, env)
 	os.Stdout = origStdout
 	w.Close()
 

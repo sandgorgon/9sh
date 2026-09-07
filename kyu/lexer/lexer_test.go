@@ -92,7 +92,7 @@ func TestPathVsDivision(t *testing.T) {
 }
 
 // TestPathAsExternalCallFirstArg locks in lastWasExternalName's exemption:
-// a bare Path right after a %cmd/$cmd command name must not re-lex as
+// a bare Path right after a %cmd command name must not re-lex as
 // "name / path...", dividing the command name by the path -- the same
 // class of ambiguity TestPathVsDivision's `bind` case already covers, just
 // for the command-name-to-first-argument transition instead of comma-vs-
@@ -105,9 +105,6 @@ func TestPathAsExternalCallFirstArg(t *testing.T) {
 	})
 	assertKinds(t, `%cat /a/b /c/d`, []token.Kind{
 		token.PERCENT, token.IDENT, token.PATH, token.PATH, token.EOF,
-	})
-	assertKinds(t, `$vim /etc/hosts`, []token.Kind{
-		token.DOLLAR, token.IDENT, token.PATH, token.EOF,
 	})
 	// The known, narrower remaining gap (a bareword Path after a non-Path
 	// argument still divides) -- documented here so a future fix that
@@ -125,12 +122,11 @@ func TestPercentSigilVsModulo(t *testing.T) {
 }
 
 func TestExternalCommandNameMayStartWithDigit(t *testing.T) {
-	// Plan-9-style tool names (9ed, 9term, ...) start with a digit; the '%'/'$'
+	// Plan-9-style tool names (9ed, 9term, ...) start with a digit; the '%'
 	// sigil must still disambiguate as the external-call form rather than
 	// falling back to modulo, and the digit-led name must lex as one IDENT
 	// rather than splitting into an INT and a trailing identifier.
 	assertKinds(t, `%9ed foo`, []token.Kind{token.PERCENT, token.IDENT, token.IDENT, token.EOF})
-	assertKinds(t, `$9term foo`, []token.Kind{token.DOLLAR, token.IDENT, token.IDENT, token.EOF})
 }
 
 func TestUnbindKeyword(t *testing.T) {
@@ -143,12 +139,12 @@ func TestWhileBreakContinueKeywords(t *testing.T) {
 	assertKinds(t, `continue`, []token.Kind{token.CONTINUE, token.EOF})
 }
 
-func TestDollarSigil(t *testing.T) {
-	// unlike '%', '$' has no infix meaning to disambiguate from -- it's
-	// always the passthrough-command sigil, and the command name after it
-	// lexes the same way (lexExternalName) as after '%'.
-	assertKinds(t, `$vim foo`, []token.Kind{token.DOLLAR, token.IDENT, token.IDENT, token.EOF})
-	assertKinds(t, `$docker-compose up`, []token.Kind{token.DOLLAR, token.IDENT, token.IDENT, token.EOF})
+// TestDollarIsIllegal locks in that '$' is no longer a valid sigil --
+// removed along with ast.PassthroughStmt/$cmd (superseded by %cmd's own
+// fullscreen-program detection, which works everywhere $cmd's direct-
+// terminal path didn't, e.g. inside the TUI pane multiplexer).
+func TestDollarIsIllegal(t *testing.T) {
+	assertKinds(t, `$vim foo`, []token.Kind{token.ILLEGAL, token.IDENT, token.IDENT, token.EOF})
 }
 
 func TestExternalCommandNameAllowsHyphens(t *testing.T) {

@@ -8,7 +8,7 @@
 // exec.Command resolves name against the calling process's PATH at
 // construction time, before any Cmd.Env override is ever applied.
 //
-// See kyu/eval/external.go's evalPassthroughStmt and job/job.go's
+// See kyu/eval/fullscreen.go's runExternalFullscreen and job/job.go's
 // startSubprocess for the two callers.
 package pathresolve
 
@@ -59,7 +59,7 @@ func LookPath(name string, env []string) (string, error) {
 // entry). A name found in more than one PATH directory is only listed
 // once — matching LookPath's own first-match-wins resolution order,
 // since that's the actual binary a completed name would run. Used for
-// tab-completing an external command name (%cmd/$cmd), so the order
+// tab-completing an external command name (%cmd), so the order
 // doesn't matter beyond that: callers that want a stable order sort it
 // themselves.
 func Names(env []string) []string {

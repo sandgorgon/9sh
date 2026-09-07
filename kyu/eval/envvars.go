@@ -22,7 +22,7 @@ import (
 // environment.
 // EnvSlice is envSlice's exported form — for callers outside package
 // eval that need the same "NAME=VALUE" view of /env (pane's tab
-// completion, resolving PATH the same way a %cmd/$cmd would).
+// completion, resolving PATH the same way a %cmd would).
 func (e *Env) EnvSlice(ctx context.Context) ([]string, error) {
 	return envSlice(ctx, e.Namespace())
 }
@@ -95,7 +95,7 @@ func biGetenv(env *Env, args []value.Value) (value.Value, error) {
 
 // biSetenv implements `setenv(name, value)`: writes (creating if absent,
 // via resolveOrCreate — the same helper checkout's write-back already
-// uses) /env/<name>, so a later %cmd/$cmd's envSlice call picks it up.
+// uses) /env/<name>, so a later %cmd's envSlice call picks it up.
 // Unlike getenv, no namespace at all is a hard error (fmt.Errorf, not an
 // ErrorVal) — matching evalBindStmt's own "no namespace attached"
 // convention for a namespace-mutating verb, not an ordinary expected

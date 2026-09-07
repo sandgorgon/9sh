@@ -65,17 +65,17 @@ var builtinDocs = []BuiltinDoc{
 	{"getenv", `getenv(name)`,
 		"Reads a real file under /env — Plan 9's own convention: environment variables are namespace files, not hidden shell state."},
 	{"setenv", `setenv(name, value)`,
-		`Writes /env/<name>. setenv("PATH", ...) genuinely changes which binary %cmd/$cmd resolve.`},
+		`Writes /env/<name>. setenv("PATH", ...) genuinely changes which binary %cmd resolves.`},
 	{"unsetenv", `unsetenv(name)`,
 		"Removes /env/<name>. A no-op on an already-absent name, not an error."},
 
 	// Process / subprocess
 	{"cd", "cd(path)",
-		"Sets the working directory %cmd/$cmd subprocesses run in — per-session state, not a real chdir, since every pane in a session shares one process."},
+		"Sets the working directory %cmd subprocesses run in — per-session state, not a real chdir, since every pane in a session shares one process."},
 	{"pwd", "pwd()",
 		"Reads cd's working directory back in-process, falling back to the real os.Getwd() before cd() has ever been called."},
 	{"exit_code", "exit_code()",
-		`The last foreground %cmd/$cmd's real exit status — bash's $?, spelled as a function since $ is kyu's own real-TTY sigil.`},
+		`The last foreground %cmd's real exit status — bash's $?, spelled as a function since kyu has no $-prefixed syntax.`},
 	{"host", "host()",
 		`This machine's real hostname — e.g. for an if host() == "laptop" { ... } conditional inside common.ky/hosts/<hostname>.ky.`},
 	{"wait", "job | wait",
@@ -131,9 +131,8 @@ var builtinDocs = []BuiltinDoc{
 	// Control flow / syntax
 	{"while", "while cond { ... }", "kyu's only loop construct, with break/continue. A self-referencing closure also works for recursion."},
 	{"if", "if cond { ... } [else { ... }]", "A block's last expression is its value — what prints at the REPL."},
-	{"%cmd", "%cmd arg1 arg2 ...", "Calls an ordinary external/legacy binary. Routes through /jobs when a namespace is attached, so it shows up in session history like any job. A Path argument that only resolves in the namespace, not on the real filesystem, errors with a hint to use checkout instead of reaching the binary as a meaningless literal string."},
-	{"$cmd", "$cmd arg1 arg2 ...", "Runs a command connected directly to the real terminal — for programs %cmd can't support (vim, ssh: need a live TTY). No job, no captured value. -repl/scripts only, not the pane multiplexer's kyu-repl. Same namespace-only-Path guard as %cmd."},
-	{"&", "%cmd ... &", `Backgrounds a %cmd as a live job record: j.status, j.ctl = "stop", j | wait.`},
+	{"%cmd", "%cmd arg1 arg2 ...", "Calls an ordinary external/legacy binary. Routes through /jobs when a namespace is attached, so it shows up in session history like any job. A Path argument that only resolves in the namespace, not on the real filesystem, errors with a hint to use checkout instead of reaching the binary as a meaningless literal string. If the command's name is listed in the fullscreen_programs kyu variable (see /config/config.ky), it instead gets the real screen and keyboard directly — no job, no capture — with any namespace-only Path argument transparently checked out and written back instead of erroring; can't be backgrounded with &."},
+	{"&", "%cmd ... &", `Backgrounds a %cmd as a live job record: j.status, j.ctl = "stop", j | wait. Refused for a fullscreen program (see %cmd) -- nothing to hand the real screen to if it isn't in the foreground.`},
 	{"@host", "@host { ... }", "Re-roots job creation at a dial()'d remote peer's own /jobs for the block — 'proxy jobs,' no separate remote-job protocol."},
 }
 

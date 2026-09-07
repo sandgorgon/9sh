@@ -8,6 +8,34 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `%cmd` now detects fullscreen programs (`vim`, `top`, `htop`, `less`,
+  `man`, `ssh`, `nano`, `mutt`, `emacs`, `vi`, `nvim` by default) via a
+  new `fullscreen_programs` kyu variable, and hands them the real
+  screen and keyboard directly — including inside the pane
+  multiplexer's kyu-repl pane, via the same real-pty machinery a
+  `+ shell` pane already used. A namespace-only `Path` argument to a
+  fullscreen command is transparently materialized via `checkout()`
+  and written back on exit, instead of erroring the way an ordinary
+  `%cmd` does.
+- New `/config` namespace path, backed by `~/.config/9/config/config.ky`
+  (auto-created with sensible defaults on first run) — settings like
+  `fullscreen_programs` are now real, namespace-visible, checkout-able
+  files instead of hidden Go-side state, loaded before `common.ky`/
+  `hosts/<hostname>.ky` so dotfiles can extend them.
+
+### Removed
+
+- **Breaking:** the `$cmd` sigil/syntax (`ast.PassthroughStmt`) is
+  gone. It existed to give a command the real terminal directly, but
+  only worked outside the TUI pane multiplexer; `%cmd`'s new fullscreen
+  detection supersedes it everywhere, including inside the TUI, which
+  `$cmd` never could reach. `$` is now an illegal lexer token — replace
+  any `$cmd arg...` with a plain `%cmd arg...` (add the command name to
+  `fullscreen_programs` if it isn't already covered by the default
+  list).
+
 ## [0.4.22] - 2026-09-07
 
 ### Fixed

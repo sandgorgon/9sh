@@ -125,7 +125,16 @@ func parseDisposition(s string) (ns.Disposition, error) {
 // would use, just in-process; see ns.Namespace.Attach), starts it, and
 // returns a live job record whose fields write through to the job's
 // namespace files.
+//
+// Rejected outright for a fullscreen program (see isFullscreenProgram,
+// fullscreen.go): there's no real screen to hand a backgrounded process
+// -- it isn't in the foreground -- so running it via /jobs like an
+// ordinary command would just start it with no controlling terminal at
+// all, not something a user backgrounding vim/ssh/etc. actually wants.
 func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
+	if isFullscreenProgram(env, x.Call.Name) {
+		return nil, fmt.Errorf("'&': %s needs a live terminal, can't run in the background", x.Call.Name)
+	}
 	namespace := env.Namespace()
 	if namespace == nil {
 		return nil, fmt.Errorf("'&': no namespace attached to this environment (is /jobs bound?)")

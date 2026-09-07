@@ -140,6 +140,15 @@ type paneState struct {
 	command *exec.Cmd // KindShell
 	env     *eval.Env // KindKyuRepl, KindNamespaceBrowser, KindJobViewer
 
+	// fullscreen is non-nil while this KindKyuRepl pane has temporarily
+	// handed its screen to a fullscreen %cmd (vim, top, ssh, ...) — see
+	// kyu/eval's runExternalFullscreen and startFullscreenMsg. paneNode
+	// renders a widget.Terminal attached to fullscreen.cmd instead of the
+	// normal kyuReplNode while this is set, exactly like KindShell always
+	// does; fullscreenExitedMsg clears it and writes any checked-out
+	// namespace paths back.
+	fullscreen *fullscreenAttach
+
 	// KindNamespaceBrowser's own business state — List's cursor (and,
 	// by the same convention here, the current path and listing) is
 	// caller-owned, not retained inside the widget; see browser.go.
@@ -309,15 +318,17 @@ func New(env *eval.Env, sessionDir string, specs ...Spec) Model {
 	// Model) starts the actual first shellRedrawTickCmd when a seed
 	// spec is a shell pane; set the flag here so it's already true
 	// before Update ever runs, keeping the two in sync from frame one.
-	m.shellTickRunning = hasShellPane(m)
+	m.shellTickRunning = hasLivePtyPane(m)
 	return m
 }
 
-// hasShellPane reports whether any pane currently hosts a live
-// widget.Terminal — see shellRedrawTickCmd's doc comment.
-func hasShellPane(m Model) bool {
+// hasLivePtyPane reports whether any pane currently hosts a live
+// widget.Terminal — either a KindShell pane, or a KindKyuRepl pane
+// temporarily attached to a fullscreen %cmd (see paneState.fullscreen)
+// — see shellRedrawTickCmd's doc comment.
+func hasLivePtyPane(m Model) bool {
 	for _, p := range m.panes {
-		if p.kind == KindShell {
+		if p.kind == KindShell || p.fullscreen != nil {
 			return true
 		}
 	}
@@ -363,6 +374,19 @@ func withShellTickIfNeeded(next Model, spec Spec, cmd tui.Cmd) (Model, tui.Cmd) 
 		return next, shellRedrawTickCmd()
 	}
 	return next, tui.Batch(cmd, shellRedrawTickCmd())
+}
+
+// withLivePtyTickIfNeeded is withShellTickIfNeeded's unconditional
+// sibling for startFullscreenMsg: a fullscreen attachment happens to an
+// *existing* KindKyuRepl pane, not at pane-creation time, so there's no
+// Spec to gate on — just start the tick if nothing's already keeping
+// one alive.
+func withLivePtyTickIfNeeded(next Model) (Model, tui.Cmd) {
+	if next.shellTickRunning {
+		return next, nil
+	}
+	next.shellTickRunning = true
+	return next, shellRedrawTickCmd()
 }
 
 func (m Model) withNewPane(s Spec) Model {
@@ -720,6 +744,43 @@ type paneExitedMsg struct {
 	id  int
 	err error
 }
+
+// fullscreenAttach is what a kyu-repl pane hands to Model when a
+// fullscreen %cmd (see kyu/eval's runExternalFullscreen) needs the
+// pane's screen — built by kyuReplWidget.attachFullscreen. cmd is
+// unstarted (paneNode's widget.Terminal construction starts it,
+// attached to a real pty, exactly like a KindShell pane); onDone is
+// eval's own callback (already closing over whatever namespace paths
+// were checked out for this invocation) and must be called exactly
+// once, when the child exits, so eval can write them back — see
+// fullscreenExitedMsg's handling in Update.
+type fullscreenAttach struct {
+	cmd    *exec.Cmd
+	onDone func(err error)
+}
+
+// startFullscreenMsg attaches a fullscreen program to the KindKyuRepl
+// pane id, returned by kyuReplWidget.consumeFullscreenCmd right after
+// the Enter that triggered it. Handled in Update by setting the
+// matching paneState's fullscreen field, which paneNode's KindKyuRepl
+// case then renders as a widget.Terminal instead of the normal
+// kyuReplNode — see paneState.fullscreen's doc comment.
+type startFullscreenMsg struct {
+	id     int
+	attach *fullscreenAttach
+}
+
+// fullscreenExitedMsg is widget.Terminal's OnExit for a fullscreen-
+// attached kyu-repl pane (paneState.fullscreen != nil) — the
+// KindKyuRepl equivalent of paneExitedMsg. Handled in Update by calling
+// the attachment's onDone (eval's own write-back/cleanup) and clearing
+// paneState.fullscreen, so the next Paint reverts to the normal
+// kyuReplNode.
+type fullscreenExitedMsg struct {
+	id  int
+	err error
+}
+
 type addPaneMsg struct{ spec Spec }
 type quitRequestedMsg struct{}
 type toggleThemeMsg struct{}
@@ -784,6 +845,18 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		if p := m.find(mm.id); p != nil {
 			p.exited = true
 			p.exitErr = mm.err
+		}
+	case startFullscreenMsg:
+		if p := m.find(mm.id); p != nil {
+			p.fullscreen = mm.attach
+		}
+		return withLivePtyTickIfNeeded(m)
+	case fullscreenExitedMsg:
+		if p := m.find(mm.id); p != nil {
+			if p.fullscreen != nil && p.fullscreen.onDone != nil {
+				p.fullscreen.onDone(mm.err)
+			}
+			p.fullscreen = nil
 		}
 	case addPaneMsg:
 		// Splits the last pane in document order rather than appending
@@ -910,7 +983,7 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		// time; reschedule while a shell pane still needs it, or clear
 		// the flag and let it die so a shell pane added later starts a
 		// fresh chain instead of finding one it thinks is still running.
-		if hasShellPane(m) {
+		if hasLivePtyPane(m) {
 			return m, shellRedrawTickCmd()
 		}
 		m.shellTickRunning = false
@@ -1502,7 +1575,21 @@ func (m Model) paneNode(p *paneState, number int, canMinimize bool) tui.Node {
 	var content tui.Node
 	switch p.kind {
 	case KindKyuRepl:
-		content = kyuReplNode(id, p.env)
+		if p.fullscreen != nil {
+			// A fullscreen %cmd (vim, top, ssh, ...) has temporarily taken
+			// over this pane's screen — the same widget.Terminal
+			// construction KindShell always uses below, just attached to
+			// an existing kyu-repl pane instead of a dedicated one. See
+			// paneState.fullscreen's doc comment and fullscreenExitedMsg's
+			// handling in Update for how control comes back.
+			content = widget.Terminal(widget.TerminalOptions{
+				Command:     p.fullscreen.cmd,
+				OnExit:      func(err error) tui.Msg { return fullscreenExitedMsg{id: id, err: err} },
+				WantsRawTab: true,
+			}).Key(paneKey(id, "term"))
+		} else {
+			content = kyuReplNode(id, p.env)
+		}
 	case KindNamespaceBrowser:
 		content = browserNode(p)
 	case KindJobViewer:

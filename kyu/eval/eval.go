@@ -142,8 +142,6 @@ func evalStmt(s ast.Stmt, env *Env) (value.Value, error) {
 		return evalBindStmt(st, env)
 	case *ast.UnbindStmt:
 		return evalUnbindStmt(st, env)
-	case *ast.PassthroughStmt:
-		return evalPassthroughStmt(st, env)
 	default:
 		return nil, fmt.Errorf("eval: unknown statement type %T", s)
 	}
@@ -487,14 +485,11 @@ func evalLogical(x *ast.BinaryExpr, env *Env) (value.Value, error) {
 // directly, since a start failure never updates LastExitCode at all),
 // and a process that started but exited non-zero is checked via
 // env.LastExitCode(), which the same evalExpr call just below updated
-// synchronously (runExternalDirect/runExternalViaJob/evalPassthroughStmt
+// synchronously (runExternalDirect/runExternalViaJob/runExternalFullscreen
 // all set it before returning). This composes correctly across a
 // longer chain (`%cmd1 && %cmd2 && %cmd3`, parsed left-associatively as
 // `(%cmd1 && %cmd2) && %cmd3`) without any special-casing beyond
-// "check whichever operand a given evalLogical call is looking at":
-// the inner pair's result is a plain Bool, whose ordinary truthiness
-// already reflects whether that inner chain succeeded, and $cmd can't
-// appear here at all since it's a statement, not an expression.
+// "check whichever operand a given evalLogical call is looking at".
 func evalTruth(e ast.Expr, env *Env) (bool, error) {
 	v, err := evalExpr(e, env)
 	if err != nil {

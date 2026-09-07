@@ -21,7 +21,7 @@ type Lexer struct {
 
 	// lastWasExternalName is a third, narrower disambiguation in the same
 	// family as lastKind: true for exactly one token immediately after
-	// lexExternalName produces the %cmd/$cmd command-name IDENT, false
+	// lexExternalName produces the %cmd command-name IDENT, false
 	// otherwise (including for every other IDENT). Kept separate from
 	// lastKind rather than folded into it because the command name must
 	// still emit as an ordinary token.IDENT (parseExternalCall depends on
@@ -95,7 +95,7 @@ func (l *Lexer) Next() token.Token {
 	r := l.peek()
 
 	switch {
-	case (isLetter(r) || isDigit(r)) && (l.lastKind == token.PERCENT || l.lastKind == token.DOLLAR):
+	case (isLetter(r) || isDigit(r)) && l.lastKind == token.PERCENT:
 		return l.lexExternalName(line, col)
 	case isDigit(r):
 		return l.lexNumber(line, col)
@@ -132,10 +132,6 @@ func (l *Lexer) Next() token.Token {
 			return l.emitAt(token.PERCENT, "%", line, col)
 		}
 		return l.emitAt(token.MOD, "%", line, col)
-	case '$':
-		// unlike '%', '$' has no competing infix meaning to disambiguate
-		// from — it's always the passthrough-command sigil.
-		return l.emitAt(token.DOLLAR, "$", line, col)
 	case '+':
 		return l.emitAt(token.PLUS, "+", line, col)
 	case '-':

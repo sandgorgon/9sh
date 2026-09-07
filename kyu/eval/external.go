@@ -15,7 +15,6 @@ import (
 
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/pathresolve"
 )
 
 // runExternal evaluates a `%cmd arg...` external/legacy-binary call. in is
@@ -38,7 +37,19 @@ import (
 // so stdout is still returned. Only a failure to start the process at all
 // (bad command name, no permission) becomes a value.ErrorVal — an
 // in-stream failure, per kyu's error model, not a hard Go-level abort.
+//
+// x.Name is checked against fullscreen_programs (see
+// isFullscreenProgram, fullscreen.go) before any of the above: a
+// fullscreen program takes an entirely different path
+// (runExternalFullscreen) — it needs to own the real screen and
+// keyboard, not have its output captured into a job's growBuf, and a
+// namespace-only Path argument is transparently materialized via
+// checkout() rather than erroring, so it's handled before this
+// function's own arg-evaluation loop ever runs.
 func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, error) {
+	if isFullscreenProgram(env, x.Name) {
+		return runExternalFullscreen(env, x.Name, x.Args)
+	}
 	args := make([]string, len(x.Args))
 	for i, a := range x.Args {
 		v, err := evalExpr(a, env)
@@ -281,90 +292,6 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 	return value.Bytes(out), nil
 }
 
-// evalPassthroughStmt runs `$cmd arg...` (ast.PassthroughStmt): unlike
-// runExternal/runExternalDirect/runExternalViaJob, it never touches
-// /jobs at all — no job record, no growBuf capture, no session history
-// — and connects the subprocess directly to 9sh's own stdin/stdout/
-// stderr. That's the whole point: a job's streams are in-memory buffers
-// (job.go) that only exist for the caller to read back after the fact,
-// which can't support a program that needs a live TTY (vim, ssh, a
-// REPL) or output that must appear as it happens rather than after the
-// job finishes. Args are evaluated exactly like runExternal's.
-//
-// Exit-code handling mirrors runExternalDirect: a process that starts
-// but exits non-zero is ordinary shell-level data (not a kyu-level
-// error), so cmd.Wait's error is discarded; only a failure to start the
-// process at all becomes a value.ErrorVal. There is no captured value to
-// return either way — the statement always evaluates to Null — since
-// $cmd's whole purpose is streaming directly to the real terminal, not
-// producing something later kyu code could inspect.
-func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error) {
-	if reason := env.PassthroughBlocked(); reason != "" {
-		return value.ErrorVal{Msg: fmt.Sprintf("$%s: %s", st.Name, reason)}, nil
-	}
-
-	args := make([]string, len(st.Args))
-	for i, a := range st.Args {
-		v, err := evalExpr(a, env)
-		if err != nil {
-			return nil, err
-		}
-		if p, ok := v.(value.Path); ok {
-			if bad := checkNamespaceOnlyPath(env, "$", st.Name, i, p); bad != nil {
-				return *bad, nil
-			}
-		}
-		s, err := argString(v)
-		if err != nil {
-			return nil, fmt.Errorf("$%s: argument %d: %w", st.Name, i, err)
-		}
-		args[i] = s
-	}
-
-	envVars, err := envSlice(context.Background(), env.Namespace())
-	if err != nil {
-		return nil, fmt.Errorf("$%s: reading /env: %w", st.Name, err)
-	}
-
-	cmd := exec.Command(st.Name, args...)
-	cmd.Dir = env.Cwd() // "" leaves it unset, os/exec's own "inherit" default
-	cmd.Env = envVars   // nil (no /env bound) leaves it unset too, same default
-	// exec.Command already resolved st.Name against 9sh's own real PATH
-	// above (cmd.Path) -- irrelevant if envVars carries its own PATH
-	// (kyu's setenv, via /env), which the cmd.Env assignment just above
-	// never affects since Go only consults PATH at construction time.
-	// Re-resolve using envVars's PATH instead (falls back to the real
-	// exec.LookPath when there's no PATH entry in envVars, so this is a
-	// no-op when there's nothing to override), and clear any stale
-	// lookup failure from the first attempt — Start() otherwise returns
-	// that unconditionally before ever using cmd.Path. See package
-	// pathresolve's doc comment.
-	if resolved, err := pathresolve.LookPath(st.Name, envVars); err != nil {
-		return value.ErrorVal{Msg: fmt.Sprintf("$%s: %v", st.Name, err)}, nil
-	} else {
-		cmd.Path = resolved
-		cmd.Err = nil
-	}
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return value.ErrorVal{Msg: fmt.Sprintf("$%s: %v", st.Name, err)}, nil
-	}
-	// See runExternalDirect's identical line: a -repl Ctrl-C should
-	// interrupt just this process. ($cmd's child also shares 9sh's real
-	// terminal, so in -repl it likely already gets a terminal-driven
-	// SIGINT directly too — this is a harmless belt-and-suspenders, and
-	// what actually matters for the job-tracked %cmd path, which has no
-	// real terminal to inherit one from.)
-	env.SetInterruptHandler(func() { cmd.Process.Signal(os.Interrupt) })
-	defer env.SetInterruptHandler(nil)
-	_ = cmd.Wait() // non-zero exit is ordinary data, not a Go-level error here
-	code := cmd.ProcessState.ExitCode()
-	env.SetLastExitCode(&code)
-	return value.Null{}, nil
-}
-
 // checkNamespaceOnlyPath guards the "no FUSE" boundary (see README's
 // Design section): a Path that resolves inside the namespace but not on
 // the real filesystem is invisible to a legacy binary, which will do a
@@ -385,24 +312,37 @@ func evalPassthroughStmt(st *ast.PassthroughStmt, env *Env) (value.Value, error)
 // process never got to start" is an in-stream kyu failure, not a hard
 // abort — see runExternal's doc comment.
 func checkNamespaceOnlyPath(env *Env, sigil, name string, i int, p value.Path) *value.ErrorVal {
-	namespace := env.Namespace()
-	if namespace == nil {
+	if !resolvesInNamespaceOnly(env, p) {
 		return nil
-	}
-	if _, err := os.Stat(string(p)); err == nil {
-		return nil // a real path -- nothing to warn about
-	}
-	ctx := context.Background()
-	root, err := namespace.Attach(ctx, "9sh", "")
-	if err != nil {
-		return nil // attach failures surface elsewhere already
-	}
-	if _, err := walkAll(ctx, root, splitPath(string(p))); err != nil {
-		return nil // not in the namespace either -- an ordinary bad path
 	}
 	return &value.ErrorVal{Msg: fmt.Sprintf(
 		"%s%s: argument %d (%s) is a namespace path, not a real filesystem path — legacy binaries can't see the namespace directly (no FUSE); use checkout(%s, closure) to get a real path first",
 		sigil, name, i, p, p)}
+}
+
+// resolvesInNamespaceOnly reports whether p resolves inside env's
+// namespace but not on the real filesystem — the boolean core of
+// checkNamespaceOnlyPath's guard, factored out so runExternalFullscreen
+// (fullscreen.go) can reuse the same "is this namespace-only" test to
+// decide when to materialize a Path argument via checkout instead of
+// erroring.
+func resolvesInNamespaceOnly(env *Env, p value.Path) bool {
+	namespace := env.Namespace()
+	if namespace == nil {
+		return false
+	}
+	if _, err := os.Stat(string(p)); err == nil {
+		return false // a real path -- nothing to warn about
+	}
+	ctx := context.Background()
+	root, err := namespace.Attach(ctx, "9sh", "")
+	if err != nil {
+		return false // attach failures surface elsewhere already
+	}
+	if _, err := walkAll(ctx, root, splitPath(string(p))); err != nil {
+		return false // not in the namespace either -- an ordinary bad path
+	}
+	return true
 }
 
 func argString(v value.Value) (string, error) {

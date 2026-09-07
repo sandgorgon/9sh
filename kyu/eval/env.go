@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"os/exec"
 	"time"
 
 	"github.com/sandgorgon/9sh/kyu/value"
@@ -16,13 +17,27 @@ type Env struct {
 	vars               map[string]value.Value
 	parent             *Env
 	ns                 *ns.Namespace
-	jobRoot            []string          // nil = inherit from parent; see JobRoot
-	proxyRecorder      ProxyRecorderFunc // process-wide, like ns; see ProxyRecorder
-	passthroughBlocked string            // process-wide, like ns; see SetPassthroughBlocked
-	cwd                string            // process-wide, like ns; see SetCwd
-	interruptHandler   func()            // process-wide, like ns; see SetInterruptHandler
-	lastExitCode       *int              // process-wide, like ns; see SetLastExitCode
+	jobRoot            []string              // nil = inherit from parent; see JobRoot
+	proxyRecorder      ProxyRecorderFunc     // process-wide, like ns; see ProxyRecorder
+	passthroughBlocked string                // process-wide, like ns; see SetPassthroughBlocked
+	cwd                string                // process-wide, like ns; see SetCwd
+	interruptHandler   func()                // process-wide, like ns; see SetInterruptHandler
+	lastExitCode       *int                  // process-wide, like ns; see SetLastExitCode
+	fullscreenHandler  FullscreenHandlerFunc // process-wide, like ns; see SetFullscreenHandler
 }
+
+// FullscreenHandlerFunc is how a fullscreen %cmd (see
+// runExternalFullscreen) gets its real screen inside the TUI, where
+// blocking synchronously for the child's whole lifetime would freeze
+// every other pane too (kyu evaluation and the TUI's render loop share
+// one goroutine). cmd is built (argv, Dir, Env, resolved Path) but not
+// yet started — no Stdin/Stdout/Stderr set — since starting it and
+// attaching a pty is the registrant's job (package pane, via
+// widget.Terminal). The handler must return immediately without
+// blocking; onDone must be called exactly once, whenever the child
+// actually exits, so the caller can write any checked-out namespace
+// paths back and clean up their scratch directories.
+type FullscreenHandlerFunc func(cmd *exec.Cmd, onDone func(err error))
 
 // ProxyRecorderFunc is called once a job created via `@host{}` (a "proxy"
 // job — see evalAtHost's doc comment) reaches a terminal state: the
@@ -68,32 +83,57 @@ func (e *Env) ProxyRecorder() ProxyRecorderFunc {
 	return e.root().proxyRecorder
 }
 
-// SetPassthroughBlocked makes every $cmd (ast.PassthroughStmt) evaluation
-// fail with reason instead of running, process-wide like the namespace
+// SetPassthroughBlocked marks whether a fullscreen %cmd (see
+// runExternalFullscreen) can connect its child directly to this
+// process's own stdin/stdout/stderr, process-wide like the namespace
 // and proxy recorder. cmd/9sh's runTUI calls this before starting the
-// pane multiplexer: $cmd connects a subprocess directly to this
-// process's own stdin/stdout/stderr (see evalPassthroughStmt), which the
-// TUI can't support safely — tui.App.Run puts the terminal in raw mode
-// and the alt screen for its entire session and runs a background
-// goroutine that keeps reading os.Stdin for its own input decoding the
-// whole time, so a subprocess sharing that fd would race it for every
-// keystroke rather than receiving them reliably, on top of writing into
-// a screen buffer the TUI still thinks it owns. The plain line REPL
-// (cmd/9sh's repl(), reached via -repl or non-terminal stdin) has
-// neither hazard — a bare bufio.Scanner loop, no raw mode, nothing else
-// ever reads stdin — so it never calls this and $cmd runs there
-// unmodified. "" (the default) means $cmd is allowed.
+// pane multiplexer: direct-stdio inheritance is only safe outside the
+// TUI — tui.App.Run puts the terminal in raw mode and the alt screen for
+// its entire session and runs a background goroutine that keeps reading
+// os.Stdin for its own input decoding the whole time, so a subprocess
+// sharing that fd would race it for every keystroke rather than
+// receiving them reliably, on top of writing into a screen buffer the
+// TUI still thinks it owns. Inside the TUI, a fullscreen command instead
+// takes the checkout-and-pty-handoff path (see runExternalFullscreen and
+// package pane's fullscreen handling), never direct stdio inheritance.
+// The plain line REPL (cmd/9sh's repl(), reached via -repl or
+// non-terminal stdin) has neither hazard — a bare bufio.Scanner loop, no
+// raw mode, nothing else ever reads stdin — so it never calls this, and
+// a fullscreen command there inherits stdio directly. "" (the default)
+// means direct inheritance is allowed.
 func (e *Env) SetPassthroughBlocked(reason string) {
 	e.root().passthroughBlocked = reason
 }
 
 // PassthroughBlocked returns the reason set by SetPassthroughBlocked, or
-// "" if $cmd is allowed to run normally.
+// "" if direct stdio inheritance is allowed here.
 func (e *Env) PassthroughBlocked() string {
 	return e.root().passthroughBlocked
 }
 
-// SetCwd sets the working directory `%cmd`/`$cmd` subprocesses run in —
+// SetFullscreenHandler registers the hook a fullscreen %cmd (see
+// runExternalFullscreen) calls when PassthroughBlocked() is non-empty —
+// process-wide like the namespace. Registered per kyu-repl pane (see
+// package pane), around each single evaluation, the same set-before/
+// clear-after-one-call pattern SetInterruptHandler already uses; safe
+// because kyu evaluation is already inherently single-threaded — no two
+// evaluate() calls ever overlap, so there's never ambiguity about which
+// pane's handler should receive a given fullscreen command. nil (the
+// default, and the state outside any evaluate() call) means no handler
+// is registered; runExternalFullscreen falls back to an ErrorVal
+// mentioning PassthroughBlocked's reason in that case rather than
+// blocking.
+func (e *Env) SetFullscreenHandler(fn FullscreenHandlerFunc) {
+	e.root().fullscreenHandler = fn
+}
+
+// FullscreenHandler returns the hook set by SetFullscreenHandler, or nil
+// if none is currently registered.
+func (e *Env) FullscreenHandler() FullscreenHandlerFunc {
+	return e.root().fullscreenHandler
+}
+
+// SetCwd sets the working directory `%cmd` subprocesses run in —
 // process-wide like the namespace, not lexical, and deliberately not a
 // real os.Chdir(): every kyu-repl pane in a TUI session shares this same
 // root Env (no eval.NewEnv call anywhere in package pane — every pane's
@@ -112,16 +152,17 @@ func (e *Env) Cwd() string {
 }
 
 // SetInterruptHandler registers the function a `-repl` SIGINT (Ctrl-C)
-// should call to interrupt whatever foreground %cmd/$cmd is currently
+// should call to interrupt whatever foreground %cmd is currently
 // running — process-wide like the namespace. Callers (runExternalViaJob,
-// evalPassthroughStmt, runExternalDirect) set this once their subprocess
-// has actually started and clear it (nil) once it returns, via defer, so
-// a signal arriving before start or after completion is simply ignored —
-// matching a normal shell's "Ctrl-C at an idle prompt does nothing."
-// Only meaningful in cmd/9sh's repl(): the TUI can't safely deliver
-// SIGINT-driven interrupts at all yet (see SetPassthroughBlocked's doc
-// comment on the same underlying single-goroutine/raw-mode hazard), so
-// runTUI never calls InterruptHandler.
+// runExternalDirect, runExternalFullscreen's direct-stdio path) set this
+// once their subprocess has actually started and clear it (nil) once it
+// returns, via defer, so a signal arriving before start or after
+// completion is simply ignored — matching a normal shell's "Ctrl-C at an
+// idle prompt does nothing." Only meaningful in cmd/9sh's repl(): the
+// TUI can't safely deliver SIGINT-driven interrupts at all yet (see
+// SetPassthroughBlocked's doc comment on the same underlying
+// single-goroutine/raw-mode hazard), so runTUI never calls
+// InterruptHandler.
 func (e *Env) SetInterruptHandler(fn func()) {
 	e.root().interruptHandler = fn
 }
@@ -132,12 +173,12 @@ func (e *Env) InterruptHandler() func() {
 	return e.root().interruptHandler
 }
 
-// SetLastExitCode records a foreground %cmd/$cmd's exit code — bash's
-// $? equivalent, exposed as the exit_code() builtin rather than literal
-// `$?` syntax, which would collide with $cmd's own sigil. Process-wide
+// SetLastExitCode records a foreground %cmd's exit code — bash's $?
+// equivalent, exposed as the exit_code() builtin rather than literal
+// `$?` syntax (kyu has no `$`-prefixed syntax at all). Process-wide
 // like the namespace, updated only by a foreground external-command
 // call that actually ran to completion (runExternalDirect,
-// runExternalViaJob, evalPassthroughStmt) — never by an ordinary kyu
+// runExternalViaJob, runExternalFullscreen) — never by an ordinary kyu
 // expression, a backgrounded %cmd&, or a failed-to-start process (that
 // case is already visible as an ErrorVal at the call site, and has no
 // real exit code to report). A background job's exit code is already

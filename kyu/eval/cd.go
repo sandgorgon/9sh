@@ -10,7 +10,7 @@ import (
 
 // effectiveCwd returns the directory a relative cd(...) argument and
 // pwd() both resolve against: Env.Cwd() if cd has ever been called,
-// else the real process's own os.Getwd() — matching what a %cmd/$cmd
+// else the real process's own os.Getwd() — matching what a %cmd
 // subprocess would inherit before any cd(). See Env.Cwd's doc comment.
 func effectiveCwd(env *Env) (string, error) {
 	if cwd := env.Cwd(); cwd != "" {

@@ -248,39 +248,16 @@ func TestBreakContinueExprs(t *testing.T) {
 	}
 }
 
-func TestPassthroughStmt(t *testing.T) {
-	prog := parseOK(t, `$vim "file.txt"`)
-	pt, ok := prog.Stmts[0].(*ast.PassthroughStmt)
-	if !ok {
-		t.Fatalf("want PassthroughStmt, got %T", prog.Stmts[0])
-	}
-	if pt.Name != "vim" {
-		t.Errorf("want name vim, got %s", pt.Name)
-	}
-	if len(pt.Args) != 1 {
-		t.Fatalf("want 1 arg, got %d", len(pt.Args))
-	}
-}
-
-// TestPassthroughRejectedInsidePipe locks in ast.PassthroughStmt's core
-// design constraint: $cmd is never offered as a primary-expression
-// option (unlike %cmd/ExternalCall), so it can't appear as a pipe's
-// right-hand side or any other expression operand -- there's no
-// captured value for it to produce, so composing it wouldn't make
-// sense.
-func TestPassthroughRejectedInsidePipe(t *testing.T) {
-	p := New(`%echo "x" | $cat`)
+// TestDollarSigilRemoved locks in that $cmd (ast.PassthroughStmt) is
+// gone: '$' lexes as ILLEGAL now, so any source using it is a parse
+// error -- superseded by %cmd's own fullscreen-program detection (see
+// kyu/eval/fullscreen.go), which works everywhere $cmd's direct-terminal
+// path didn't, including inside the TUI pane multiplexer.
+func TestDollarSigilRemoved(t *testing.T) {
+	p := New(`$vim "file.txt"`)
 	p.ParseProgram()
 	if len(p.Errors()) == 0 {
-		t.Fatal("$cmd used as a pipe's right-hand side should be a parse error")
-	}
-}
-
-func TestPassthroughAmpersandRejected(t *testing.T) {
-	p := New(`$vim "file.txt" &`)
-	p.ParseProgram()
-	if len(p.Errors()) == 0 {
-		t.Fatal("'&' after $cmd should be a parse error -- there's no job to background")
+		t.Fatal("'$' should be an illegal token now that $cmd is removed")
 	}
 }
 

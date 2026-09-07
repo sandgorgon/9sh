@@ -23,6 +23,7 @@ import (
 	"github.com/sandgorgon/tui/term"
 	"github.com/sandgorgon/tui/tui"
 
+	"github.com/sandgorgon/9sh/config"
 	"github.com/sandgorgon/9sh/dotfiles"
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/eval"
@@ -166,9 +167,9 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 	// hidden getenv/setenv side-table — via the same dirfs-over-a-real-
 	// directory trick /local above already uses. Seeded from os.Environ()
 	// (after _9SH_UNIX_SOCK above, so a job reading /env still inherits
-	// it) so %cmd/$cmd subprocesses keep inheriting PATH/HOME/etc by
+	// it) so %cmd subprocesses keep inheriting PATH/HOME/etc by
 	// default exactly as before this existed — see kyu/eval's envSlice,
-	// which %cmd/$cmd now build their environment from instead of the
+	// which %cmd now builds its environment from instead of the
 	// os/exec "nil Cmd.Env" implicit-inherit default. Ephemeral by
 	// design, like Plan 9's own tmpfs-backed /env: cleaned up via
 	// envScratchDir's caller-side defer, not meant to persist across runs.
@@ -186,6 +187,20 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 		envScratchDir = ""
 	}
 
+	// /config exposes 9sh's own settings (starting with
+	// fullscreen_programs — see kyu/eval/fullscreen.go) as a real,
+	// checkout-able namespace path, same dirfs-over-a-real-directory
+	// trick as /local and /env above. EnsureDefault seeds config.ky with
+	// sensible defaults on a fresh install without ever overwriting an
+	// existing one.
+	if err := config.EnsureDefault(); err == nil {
+		if dir, err := config.Dir(); err == nil {
+			if fs, err := dirfs.New(dir); err == nil {
+				namespace.BindFS(fs, "", "/config", ns.Replace)
+			}
+		}
+	}
+
 	recorder, sessionDir := bootstrapSession(mgr)
 	env := eval.NewGlobalEnv(namespace)
 	if recorder != nil {
@@ -201,9 +216,15 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 			})
 		})
 	}
-	// Loaded last, once /jobs, /local, -listen, and session history are
-	// all already wired up: common.ky/hosts/<hostname>.ky may reasonably
-	// want to bind, dial, or background jobs of their own.
+	// config.Load runs before dotfiles.Load: config.ky's defaults (e.g.
+	// fullscreen_programs) should already be in scope by the time
+	// common.ky/hosts/<hostname>.ky run, so they can extend rather than
+	// having to redeclare them whole
+	// (fullscreen_programs := fullscreen_programs + ["mytool"]).
+	config.Load(env)
+	// Loaded last, once /jobs, /local, -listen, session history, and
+	// /config are all already wired up: common.ky/hosts/<hostname>.ky may
+	// reasonably want to bind, dial, or background jobs of their own.
 	dotfiles.Load(env)
 	return env, recorder, sessionDir, envScratchDir
 }
@@ -264,13 +285,17 @@ const (
 // bootstrapSession for what "" versus a real-but-recorder-less dir
 // means here.
 func runTUI(env *eval.Env, sessionDir string) error {
-	// $cmd (kyu's real-TTY passthrough, ast.PassthroughStmt) would race
-	// tui.App.Run's own raw-mode stdin reader for every keystroke and
-	// write into a screen buffer the TUI still thinks it owns -- see
-	// Env.SetPassthroughBlocked's doc comment. Every kyu-repl pane this
-	// session creates (including ones opened later via split) shares
-	// this same root env, so one call here covers all of them.
-	env.SetPassthroughBlocked("not supported inside the TUI pane (would corrupt terminal input/output) — open a Shell pane instead, or run this from 9sh's plain REPL (-repl) or a script")
+	// Direct stdio inheritance for a fullscreen %cmd (see
+	// runExternalFullscreen) would race tui.App.Run's own raw-mode stdin
+	// reader for every keystroke and write into a screen buffer the TUI
+	// still thinks it owns -- see Env.SetPassthroughBlocked's doc
+	// comment. Inside the TUI, a fullscreen command instead goes through
+	// the checkout-and-pty-handoff path (package pane), which this
+	// setting doesn't affect; this only guards the fallback case where
+	// no pane has registered a fullscreen handler at all. Every kyu-repl
+	// pane this session creates (including ones opened later via split)
+	// shares this same root env, so one call here covers all of them.
+	env.SetPassthroughBlocked("this pane has no fullscreen handler registered — open a Shell pane instead, or run this from 9sh's plain REPL (-repl) or a script")
 
 	m := pane.New(env, sessionDir, pane.KyuReplSpec("kyu", env))
 	app := tui.NewApp(m, 80, 24) // Run resizes to the real terminal size on start
@@ -352,7 +377,7 @@ func printResult(v value.Value) {
 // doc comment), a Ctrl-C here is a real OS SIGINT, delivered
 // asynchronously regardless of what the process is doing. signal.Notify
 // below overrides Go's default "kill the process" disposition for it:
-// this goroutine forwards each SIGINT to whatever foreground %cmd/$cmd
+// this goroutine forwards each SIGINT to whatever foreground %cmd
 // currently has an interrupt handler registered (see
 // Env.SetInterruptHandler), or does nothing if nothing's running —
 // matching a normal shell's "Ctrl-C at an idle prompt does nothing."

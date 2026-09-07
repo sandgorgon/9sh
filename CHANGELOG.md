@@ -8,6 +8,16 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.17] - 2026-09-06
+
+### Added
+
+- `round(places, number)` builtin — rounds to a fixed number of decimal
+  digits, half-away-from-zero, always returning a Float. Fills the gap
+  `format`'s `"{}"` doesn't cover (shortest round-trip formatting, no
+  precision control): `number | round(2) | format("{}")` for a String
+  with a guaranteed decimal precision.
+
 ## [0.4.16] - 2026-09-06
 
 ### Added

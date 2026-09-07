@@ -109,7 +109,10 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   check. `to_int(str)`/`to_float(str)` parse a String into a number —
   otherwise there'd be no way to do arithmetic on a script's own `args`,
   which are always `String`; an unparseable input is an `ErrorVal`, not
-  a hard error.
+  a hard error. `round(places, number)` rounds to a fixed number of
+  decimal digits (half-away-from-zero, always a `Float`) — pipe into
+  `format` for a String with guaranteed decimal precision, e.g.
+  `number | round(2) | format("{}")`.
 - `vars()` lists your own `:=`-defined kyu variables — name, kind, and
   live value, as a `Table` (pipeable: `vars() | where { |v| v.kind == "path" }`).
   Unlike `/env`, kyu variables are plain lexical scope, not namespace
@@ -432,7 +435,7 @@ A Unix socket path is capped at 108 bytes by the OS
 
 ## Status
 
-Pre-1.0 (`v0.4.16`). The full v1 build-order plan (namespace core, jobs,
+Pre-1.0 (`v0.4.17`). The full v1 build-order plan (namespace core, jobs,
 kyu, the TUI pane multiplexer, session history, remote namespace/auth,
 dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real

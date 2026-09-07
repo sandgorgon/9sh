@@ -1,4 +1,4 @@
-package pane
+package replui
 
 import (
 	"os"
@@ -6,15 +6,46 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sandgorgon/9p/examples/dirfs"
 	"github.com/sandgorgon/tui/input"
 	"github.com/sandgorgon/tui/tui"
 
 	"github.com/sandgorgon/9sh/kyu/eval"
+	"github.com/sandgorgon/9sh/ns"
 )
 
 func newTestReplWidget(t *testing.T) *kyuReplWidget {
 	t.Helper()
 	return &kyuReplWidget{env: eval.NewGlobalEnv(nil)}
+}
+
+// newNamespaceTestEnv binds a real dirfs-backed temp directory (with a
+// file and a subdirectory, to exercise both entry kinds) at /x, and
+// returns a shared *eval.Env over that namespace — used by the
+// namespace-path-completion tests below, which need something real to
+// complete against beyond the local real filesystem alone.
+func newNamespaceTestEnv(t *testing.T) *eval.Env {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("A"), 0644); err != nil {
+		t.Fatalf("seed a.txt: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "b.txt"), []byte("B"), 0644); err != nil {
+		t.Fatalf("seed sub/b.txt: %v", err)
+	}
+
+	fs, err := dirfs.New(dir)
+	if err != nil {
+		t.Fatalf("dirfs.New: %v", err)
+	}
+	namespace := ns.New()
+	if err := namespace.BindFS(fs, "", "/x", ns.Replace); err != nil {
+		t.Fatalf("bind /x: %v", err)
+	}
+	return eval.NewGlobalEnv(namespace)
 }
 
 func sendRunes(w *kyuReplWidget, s string) {
@@ -639,12 +670,12 @@ func TestKyuReplTabCompletesRealFilesystemPath(t *testing.T) {
 }
 
 // TestKyuReplTabCompletesNamespacePath is the namespace-side sibling:
-// /x/a.txt only exists inside the bound namespace (newBrowserTestEnv's
+// /x/a.txt only exists inside the bound namespace (newNamespaceTestEnv's
 // dirfs backing directory has a different real path entirely), so this
 // only passes if pathCandidates' namespace source (Env.ListNamespaceDir)
 // is actually contributing, not just the real-filesystem source.
 func TestKyuReplTabCompletesNamespacePath(t *testing.T) {
-	env := newBrowserTestEnv(t)
+	env := newNamespaceTestEnv(t)
 	w := &kyuReplWidget{env: env}
 	sendRunes(w, "/x/a")
 	sendKey(w, input.KeyTab)
@@ -659,7 +690,7 @@ func TestKyuReplTabCompletesNamespacePath(t *testing.T) {
 // without it, a directory dead-ends after one Tab instead of inviting a
 // second one straight into it.
 func TestKyuReplTabCompletesNamespaceDirWithTrailingSlash(t *testing.T) {
-	env := newBrowserTestEnv(t)
+	env := newNamespaceTestEnv(t)
 	w := &kyuReplWidget{env: env}
 	sendRunes(w, "/x/su")
 	sendKey(w, input.KeyTab)
@@ -673,7 +704,7 @@ func TestKyuReplTabCompletesNamespaceDirWithTrailingSlash(t *testing.T) {
 // kyu/lexer lastWasExternalName fix is what makes this position lex as a
 // Path at all) completes against the namespace, not just standalone.
 func TestKyuReplTabPathCompletionAsExternalCallArgument(t *testing.T) {
-	env := newBrowserTestEnv(t)
+	env := newNamespaceTestEnv(t)
 	w := &kyuReplWidget{env: env}
 	sendRunes(w, "%cat /x/a")
 	sendKey(w, input.KeyTab)
@@ -686,7 +717,7 @@ func TestKyuReplTabPathCompletionAsExternalCallArgument(t *testing.T) {
 // no-match test: a fragment matching nothing in either source leaves the
 // input untouched rather than, say, clearing it.
 func TestKyuReplTabPathCompletionNoMatchIsNoop(t *testing.T) {
-	env := newBrowserTestEnv(t)
+	env := newNamespaceTestEnv(t)
 	w := &kyuReplWidget{env: env}
 	sendRunes(w, "/x/zzz_no_such_thing")
 	before := w.input
@@ -764,7 +795,7 @@ func TestKyuReplTabCycleResetsOnUnrelatedKey(t *testing.T) {
 }
 
 // TestKyuReplClaimsRawTab locks in a real, previously-missing piece of
-// wiring: tui.App.HandleInput intercepts Tab globally for pane-focus
+// wiring: tui.App.HandleInput intercepts Tab globally for focus
 // navigation *before* it ever reaches a widget's own HandleEvent,
 // unless the focused widget implements tui.RawKeyClaimer and
 // WantsRawTab() returns true (see that interface's own doc comment).
@@ -887,10 +918,10 @@ func TestKyuReplPaintDoesNotPanicOnTinyRect(t *testing.T) {
 	sendRunes(w, "1 + 1")
 	sendEnter(w)
 	// Paint needs a *cell.Painter; exercised indirectly via the full
-	// pane integration tests in model_test.go/browser_test.go, which
-	// drive real tui.App rendering. This test just confirms Focusable/
-	// SetFocused/Reconcile satisfy the Widget interface without a
-	// separate compile-time assertion elsewhere.
+	// integration tests in model_test.go, which drive real tui.App
+	// rendering. This test just confirms Focusable/SetFocused/Reconcile
+	// satisfy the Widget interface without a separate compile-time
+	// assertion elsewhere.
 	if !w.Focusable() {
 		t.Fatal("kyuReplWidget should be focusable")
 	}
@@ -899,4 +930,46 @@ func TestKyuReplPaintDoesNotPanicOnTinyRect(t *testing.T) {
 		t.Fatal("SetFocused(true) should set focused")
 	}
 	w.Reconcile(struct{}{})
+}
+
+// TestKyuReplF1TogglesHelp locks in F1's new role now that this
+// package has no control strip to host a help button on — see
+// handleKey's own doc comment.
+func TestKyuReplF1TogglesHelp(t *testing.T) {
+	w := newTestReplWidget(t)
+	cmd := w.HandleEvent(input.KeyEvent{Key: input.KeyF1})
+	if cmd == nil {
+		t.Fatal("expected a Cmd from F1")
+	}
+	if _, ok := cmd().(toggleHelpMsg); !ok {
+		t.Fatalf("Cmd produced %T, want toggleHelpMsg", cmd())
+	}
+}
+
+// TestKyuReplCtrlDAtEmptyPromptQuits locks in the bash/zsh-style
+// "Ctrl-D at an empty prompt exits" convention this package uses in
+// place of a quit button.
+func TestKyuReplCtrlDAtEmptyPromptQuits(t *testing.T) {
+	w := newTestReplWidget(t)
+	cmd := w.HandleEvent(input.KeyEvent{Rune: 'd', Mod: input.ModCtrl})
+	if cmd == nil {
+		t.Fatal("expected a Cmd from Ctrl+D at an empty prompt")
+	}
+	if _, ok := cmd().(tui.QuitMsg); !ok {
+		t.Fatalf("Cmd produced %T, want tui.QuitMsg", cmd())
+	}
+}
+
+// TestKyuReplCtrlDMidInputIsNoop confirms Ctrl+D only quits at an
+// empty prompt -- typed input must never be silently discarded.
+func TestKyuReplCtrlDMidInputIsNoop(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "abc")
+	cmd := w.HandleEvent(input.KeyEvent{Rune: 'd', Mod: input.ModCtrl})
+	if cmd != nil {
+		t.Fatalf("expected no Cmd from Ctrl+D mid-input, got one (input: %q)", w.input)
+	}
+	if w.input != "abc" {
+		t.Fatalf("input = %q, want unchanged (abc)", w.input)
+	}
 }

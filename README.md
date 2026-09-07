@@ -7,8 +7,7 @@ pipes, and a small scripting language called **kyu**, built on top of
 [`9p`](https://github.com/sandgorgon/9p), [`9vcs`](https://github.com/sandgorgon/9vcs),
 [`9auth`](https://github.com/sandgorgon/9auth), and
 [`tui`](https://github.com/sandgorgon/tui). It's meant to be the actual
-shell you work in day to day, not a compositor that just hosts `bash` in
-a pane.
+shell you work in day to day.
 
 The goal is genuine innovation, not another bash/zsh/fish remix: lean
 into Plan 9's ideas — everything is reachable through one composable
@@ -44,9 +43,14 @@ Or build from source:
 go build -o 9sh ./cmd/9sh
 ```
 
-Run it with no arguments in a real terminal to get the pane multiplexer
-(the default, primary way to use it); pipe something into stdin or pass
-`-repl` for a plain line-based REPL; pass a script path to run headlessly.
+Run it with no arguments in a real terminal to get 9sh's own single-
+screen interactive TUI (the default, primary way to use it — live
+syntax highlighting, Ctrl-R history search, Tab completion); pipe
+something into stdin or pass `-repl` for a plain line-based REPL; pass
+a script path to run headlessly. For a real multi-pane terminal (9sh
+alongside a shell, or several 9sh sessions side by side), see
+[`9mux`](https://github.com/sandgorgon/9mux) — a separate project, not
+something this binary hosts itself (see "Design" below for why).
 
 ## Quick start
 
@@ -71,10 +75,9 @@ Run it with no arguments in a real terminal to get the pane multiplexer
 - A `%cmd` whose name is listed in `fullscreen_programs` (a kyu
   variable, defaulted in `/config/config.ky` — `vim`, `top`, `ssh`,
   `man`, ... out of the box) gets the real screen and keyboard
-  directly instead of a job-tracked buffer, in every mode including
-  the pane multiplexer's kyu-repl pane — it hands that pane's screen to
-  the program until it exits, the same real-pty machinery a `+ shell`
-  pane always used, just attached on demand. A namespace-only `Path`
+  directly instead of a job-tracked buffer, in every mode including the
+  interactive TUI — it hands the whole screen to the program until it
+  exits, then returns to the kyu prompt. A namespace-only `Path`
   argument is transparently checked out to a real scratch location and
   written back on exit, instead of erroring the way an ordinary `%cmd`
   would. No job, no captured value, and it can't be backgrounded with
@@ -85,7 +88,7 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   construct; recursion via a self-referencing closure still works too.
 - `cd(path)` sets the working directory `%cmd` subprocesses run
   in — per-session state (like `bind`), not a real `chdir`, since every
-  pane in a TUI session shares one process. `pwd()` reads it back
+  entry point into a session shares one process. `pwd()` reads it back
   in-process (no `%pwd` subprocess needed), falling back to the real
   `os.Getwd()` before the first `cd()`.
 - `getenv(name)`/`setenv(name, value)`/`unsetenv(name)` read and write
@@ -164,8 +167,8 @@ Run it with no arguments in a real terminal to get the pane multiplexer
   stays a keyword). Unbinding something never bound is an error.
 - `help(name)` — e.g. `help("bind")` — returns that builtin/keyword's
   signature and description as a `Record`; `help()` with no arguments
-  returns every documented entry as a `Table`. The pane multiplexer's
-  `?` screen renders the exact same table as its language-reference
+  returns every documented entry as a `Table`. The interactive TUI's
+  `F1` screen renders the exact same table as its language-reference
   section (press `2` there to jump straight to it), so the two can't
   drift apart.
 - Closures take default parameters: `{ |a, b = 10| a + b }` — a later
@@ -333,57 +336,22 @@ directory" to resolve a relative one against — see above) and, like
 `dial`, returns an ordinary `ErrorVal` rather than aborting if the path
 doesn't exist.
 
-## Using the pane multiplexer
+## Using the interactive TUI
 
-Run `9sh` with no arguments in a real terminal and you land in the pane
-multiplexer — 9sh's primary, default way to work, not a fallback. It
-starts with one kyu REPL pane; everything else is built up from there.
-The same reference is built into 9sh itself: click **help** in the
-control strip (or Tab/Shift-Tab to it and press Enter) any time.
-
-### The control strip
-
-The always-visible top row:
-
-| Button | Does |
-|---|---|
-| `+ shell` / `+ kyu` / `+ browse` / `+ jobs` / `+ history` | Add a pane of that kind |
-| `help` | Open the built-in keybinding reference |
-| `theme` | Flip light/dark, live, no restart |
-| `quit` | Quit 9sh |
-
-`+` always splits the last pane in document order (see below), not
-"whatever's focused" — `tui`, the TUI toolkit 9sh is built on, doesn't
-give application code a way to ask "what currently has focus," only to
-set it, so this is a deliberate, deterministic choice, not a
-limitation you're expected to work around.
-
-### Every pane's title bar
-
-| Key | Does |
-|---|---|
-| `x` | Close this pane |
-| `d` / `r` | Split down / right — then pick the new sibling's kind: `s`=shell, `k`=kyu, `b`=browse, `j`=jobs, `h`=history (anything else cancels) |
-| `z` | Zoom this pane to fill the whole content area, or un-zoom it back — every other pane's process keeps running the whole time, just out of view |
-| `+` / `-` | Resize along the split axis, down to one visible content line — smaller than that, minimize instead |
-| click / Enter | Minimize/restore (only along a vertical split — collapsing a horizontal sibling's *width* to one column would garble its title sideways, so those can't minimize; the chevron drops accordingly) |
-| `F1`-`F9` | Jump keyboard focus straight to pane 1-9 (each title bar shows its own `[F#]` once assigned) |
-
-Repeated `+` clicks and `d`/`r` splits both build a genuine 2D tiling
-tree (alternating direction on `+`, your choice on `d`/`r`) — there's
-no single-axis "everything stacks one way" limitation.
-
-### Inside a kyu REPL pane
-
-Once the pane's *content* has focus (not just its title bar — Tab or
-click into it):
+Run `9sh` with no arguments in a real terminal and you land in the
+interactive TUI — 9sh's primary, default way to work, not a fallback.
+It's always exactly one kyu session filling the whole screen, by
+design: for a real multi-pane terminal (9sh alongside a shell, or
+several 9sh sessions side by side), see
+[`9mux`](https://github.com/sandgorgon/9mux) instead, a separate
+project this binary doesn't host itself. The same keybinding reference
+below is built into 9sh: press `F1` any time.
 
 | Key | Does |
 |---|---|
 | `Enter` | Submit, or keep editing if brackets are still open |
 | `Tab` | Complete the identifier before the cursor (variables, builtins, keywords) — right after a `%` sigil, an external command name from `PATH`; inside a bare `Path` literal, entries from both the real filesystem and the attached namespace, merged — fills the longest common match, cycles through candidates on repeated `Tab` |
 | Ctrl+R | Reverse history search (bash's reverse-i-search) — type to search, `Enter` runs the match immediately, `Esc` loads it into the input line without running it, repeated Ctrl+R searches further back |
-| Ctrl+\\ | Release keyboard focus back to navigating panes/title bars/the control strip — `Tab`'s normally-global pane-navigation meaning is claimed by this pane's own completion instead, the same trade shell panes already make for real tab-completion in the hosted shell |
 | `←`/`→`, Ctrl+`←`/`→` | Move the cursor by character / by word |
 | `Home`/`End`, Ctrl+A/Ctrl+E | Jump to the start/end of the current line |
 | `Backspace`/`Delete` | Delete before/after the cursor |
@@ -394,6 +362,8 @@ click into it):
 | Ctrl+C | Copy the whole transcript |
 | Alt+C | Copy only what's currently visible on screen |
 | paste | Inserts at the cursor |
+| `F1` | Toggle the built-in help screen |
+| Ctrl+D (at an empty prompt) | Quit 9sh — bash/zsh's own "EOF at an empty prompt exits" convention |
 
 Ctrl+C is "copy all," not the Ctrl+Shift+C you might expect from a
 desktop terminal: most terminal emulators (this one's own standing
@@ -414,29 +384,10 @@ an open multi-line continuation navigate lines, not history) —
 deliberate scope cuts for a REPL input line, not a general text
 editor.
 
-### Inside a shell pane
-
-Once the pane's content has focus, Tab reaches the hosted shell
-directly — real completion, not pane navigation. **Ctrl+\\** releases
-focus back to navigating panes/title bars/the control strip.
-
-### Inside a namespace-browser pane
-
-Once the pane's content has focus:
-
-| Key | Does |
-|---|---|
-| `↑`/`↓` | Move the cursor |
-| `Enter` / click | A directory descends into it; a file previews its content in place — this pane's equivalent of `cat(path)` |
-| `Backspace` | Go up a directory — or, while previewing a file, back to the listing it came from |
-| `Esc` | (preview only) same as `Backspace` |
-| `PageUp`/`PageDown`, mouse wheel | (preview only) Scroll the file |
-
-### Mouse
-
-Click a pane's content to focus it; click a title bar to minimize/
-restore it; click any control-strip or title-bar button the same way
-you'd press its key. Mouse wheel scrolls a kyu REPL pane's transcript.
+Running a fullscreen program (`vim`, `top`, `ssh`, ... — see
+`fullscreen_programs` above) hands the whole screen and keyboard to it
+directly until it exits; a namespace-only `Path` argument is checked
+out and written back automatically, no `checkout()` call needed.
 
 ## Local namespace access
 
@@ -476,27 +427,35 @@ A Unix socket path is capped at 108 bytes by the OS
 
 ## Status
 
-Pre-1.0 (`v0.4.22`). The full v1 build-order plan (namespace core, jobs,
-kyu, the TUI pane multiplexer, session history, remote namespace/auth,
-dotfiles sync) is implemented and covered by real tests — real 9P
+Pre-1.0 (`v0.4.22`, plus the interactive-TUI split described below,
+unreleased as of this writing). The full v1 build-order plan (namespace
+core, jobs, kyu, an interactive TUI, session history, remote namespace/
+auth, dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real
 mutual-TLS handshakes between distinct identities, `-race` clean
 throughout, and every phase additionally exercised through the actual
 built binary, not just `go test`.
 
-The pane multiplexer has had substantial real hands-on use, not just
-headless `tui.App` tests — several real bugs (invisible keyboard focus
-on launch, blank control-strip/title-bar chrome, an invisible cursor,
+9sh's interactive TUI used to be a full multi-pane multiplexer
+(package `pane`) — several real bugs (invisible keyboard focus on
+launch, blank control-strip/title-bar chrome, an invisible cursor,
 stale content surviving a window resize, a resize floor with no room
-to actually shrink) were found and fixed this way, not caught by any
-automated test. Pane management has grown well past the original v1
-scope: a real 2D tiling tree (not a single-axis stack), maximize/zoom,
-per-pane box-drawing frames, a runtime theme toggle, and a full kyu
-REPL line editor (cursor movement, history recall, kill commands,
-paste, independent scrolling, clipboard copy) are all in place, plus a
-built-in help screen — see [Using the pane multiplexer](#using-the-pane-multiplexer).
-Two more namespace-aware panes (a job viewer, a session-history viewer)
-round out the design doc's original differentiator list.
+to actually shrink) were found and fixed through substantial real
+hands-on use, not caught by any headless `tui.App` test, and pane
+management grew well past the original v1 scope (a real 2D tiling
+tree, maximize/zoom, per-pane box-drawing frames, two more namespace-
+aware panes for jobs and session history). That generic multi-pane
+capability has since moved to its own project,
+[`9mux`](https://github.com/sandgorgon/9mux) — 9sh itself now ships a
+single-screen interactive TUI (package `replui`) with everything that
+was always specific to *it* (the full kyu REPL line editor: cursor
+movement, history recall, kill commands, paste, independent scrolling,
+clipboard copy, live syntax highlighting, a built-in help screen — see
+[Using the interactive TUI](#using-the-interactive-tui)) and nothing
+that was only ever about hosting several panes at once. See `9mux`'s
+own README for the split's full rationale, including the 9P-browsing
+pane it scopes as the planned (not yet built) generalized answer for
+the old job-viewer/namespace-browser/session-viewer panes' capability.
 
 Getting close to usable as an actual daily driver, not just ready for
 hands-on testing — but the kyu language itself is still young enough
@@ -539,7 +498,7 @@ than the full remote-peer trust machinery.
   and proxy jobs alike — mutual TLS authenticates once at the transport
   layer, so `Tattach`'s `uname` is never a client-asserted string.
 - Package doc comments throughout (`ns`, `job`, `kyu/eval`, `remote`,
-  `session`, `dotfiles`, `config`, `pane`) go into the "why," not just
+  `session`, `dotfiles`, `config`, `replui`) go into the "why," not just
   the "what," for anyone picking a subsystem apart.
 
 ## Testing

@@ -29,10 +29,10 @@ type Env struct {
 // FullscreenHandlerFunc is how a fullscreen %cmd (see
 // runExternalFullscreen) gets its real screen inside the TUI, where
 // blocking synchronously for the child's whole lifetime would freeze
-// every other pane too (kyu evaluation and the TUI's render loop share
-// one goroutine). cmd is built (argv, Dir, Env, resolved Path) but not
-// yet started — no Stdin/Stdout/Stderr set — since starting it and
-// attaching a pty is the registrant's job (package pane, via
+// the TUI's own render loop too (kyu evaluation and rendering share one
+// goroutine). cmd is built (argv, Dir, Env, resolved Path) but not yet
+// started — no Stdin/Stdout/Stderr set — since starting it and
+// attaching a pty is the registrant's job (package replui, via
 // widget.Terminal). The handler must return immediately without
 // blocking; onDone must be called exactly once, whenever the child
 // actually exits, so the caller can write any checked-out namespace
@@ -87,19 +87,19 @@ func (e *Env) ProxyRecorder() ProxyRecorderFunc {
 // runExternalFullscreen) can connect its child directly to this
 // process's own stdin/stdout/stderr, process-wide like the namespace
 // and proxy recorder. cmd/9sh's runTUI calls this before starting the
-// pane multiplexer: direct-stdio inheritance is only safe outside the
-// TUI — tui.App.Run puts the terminal in raw mode and the alt screen for
-// its entire session and runs a background goroutine that keeps reading
-// os.Stdin for its own input decoding the whole time, so a subprocess
-// sharing that fd would race it for every keystroke rather than
-// receiving them reliably, on top of writing into a screen buffer the
-// TUI still thinks it owns. Inside the TUI, a fullscreen command instead
-// takes the checkout-and-pty-handoff path (see runExternalFullscreen and
-// package pane's fullscreen handling), never direct stdio inheritance.
-// The plain line REPL (cmd/9sh's repl(), reached via -repl or
-// non-terminal stdin) has neither hazard — a bare bufio.Scanner loop, no
-// raw mode, nothing else ever reads stdin — so it never calls this, and
-// a fullscreen command there inherits stdio directly. "" (the default)
+// TUI: direct-stdio inheritance is only safe outside it — tui.App.Run
+// puts the terminal in raw mode and the alt screen for its entire
+// session and runs a background goroutine that keeps reading os.Stdin
+// for its own input decoding the whole time, so a subprocess sharing
+// that fd would race it for every keystroke rather than receiving them
+// reliably, on top of writing into a screen buffer the TUI still thinks
+// it owns. Inside the TUI, a fullscreen command instead takes the
+// checkout-and-pty-handoff path (see runExternalFullscreen and package
+// replui's fullscreen handling), never direct stdio inheritance. The
+// plain line REPL (cmd/9sh's repl(), reached via -repl or non-terminal
+// stdin) has neither hazard — a bare bufio.Scanner loop, no raw mode,
+// nothing else ever reads stdin — so it never calls this, and a
+// fullscreen command there inherits stdio directly. "" (the default)
 // means direct inheritance is allowed.
 func (e *Env) SetPassthroughBlocked(reason string) {
 	e.root().passthroughBlocked = reason
@@ -113,16 +113,15 @@ func (e *Env) PassthroughBlocked() string {
 
 // SetFullscreenHandler registers the hook a fullscreen %cmd (see
 // runExternalFullscreen) calls when PassthroughBlocked() is non-empty —
-// process-wide like the namespace. Registered per kyu-repl pane (see
-// package pane), around each single evaluation, the same set-before/
+// process-wide like the namespace. Registered by package replui's
+// kyu-repl widget around each single evaluation, the same set-before/
 // clear-after-one-call pattern SetInterruptHandler already uses; safe
 // because kyu evaluation is already inherently single-threaded — no two
 // evaluate() calls ever overlap, so there's never ambiguity about which
-// pane's handler should receive a given fullscreen command. nil (the
-// default, and the state outside any evaluate() call) means no handler
-// is registered; runExternalFullscreen falls back to an ErrorVal
-// mentioning PassthroughBlocked's reason in that case rather than
-// blocking.
+// call this handler is for. nil (the default, and the state outside any
+// evaluate() call) means no handler is registered; runExternalFullscreen
+// falls back to an ErrorVal mentioning PassthroughBlocked's reason in
+// that case rather than blocking.
 func (e *Env) SetFullscreenHandler(fn FullscreenHandlerFunc) {
 	e.root().fullscreenHandler = fn
 }
@@ -135,12 +134,11 @@ func (e *Env) FullscreenHandler() FullscreenHandlerFunc {
 
 // SetCwd sets the working directory `%cmd` subprocesses run in —
 // process-wide like the namespace, not lexical, and deliberately not a
-// real os.Chdir(): every kyu-repl pane in a TUI session shares this same
-// root Env (no eval.NewEnv call anywhere in package pane — every pane's
-// Spec carries the same *Env), so a real chdir would silently redirect
-// every pane's subsequent commands at once, not just the one that called
-// cd. "" (the default) means subprocesses inherit 9sh's own process cwd,
-// unchanged from today's behavior.
+// real os.Chdir(): every 9sh entry point (script, -repl, the TUI's
+// kyu-repl widget) shares this same root Env, so a real chdir would
+// affect every consumer of it at once rather than being scoped to the
+// one that called cd. "" (the default) means subprocesses inherit 9sh's
+// own process cwd, unchanged from today's behavior.
 func (e *Env) SetCwd(path string) {
 	e.root().cwd = path
 }

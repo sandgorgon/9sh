@@ -142,7 +142,7 @@ func runExternalFullscreen(env *Env, name string, argExprs []ast.Expr) (value.Va
 			cleanupCheckouts(checkouts)
 			return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %s", name, reason)}, nil
 		}
-		// The handler (package pane) starts cmd itself, attached to a real
+		// The handler (package replui) starts cmd itself, attached to a real
 		// pty -- this function must not block, so any exit-code/write-back
 		// handling happens later, from onDone, not here.
 		handler(cmd, func(waitErr error) {

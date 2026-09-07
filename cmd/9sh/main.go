@@ -1,10 +1,15 @@
-// Command 9sh is the shell's entry point: a real terminal launches the
-// pane multiplexer (a native kyu REPL pane by default, shell and
-// namespace-browser panes addable from there); piped/non-terminal
-// stdin falls back to a line-based REPL; a script argument runs
-// headlessly either way. All three share one bootstrap and one kyu
-// evaluation environment, so kyu code behaves identically regardless
-// of how it's reached — see bootstrap and package pane's doc comment.
+// Command 9sh is the shell's entry point: a real terminal launches
+// package replui's single-screen interactive TUI (a native kyu REPL
+// with live syntax highlighting, history search, and Tab completion);
+// piped/non-terminal stdin falls back to a line-based REPL; a script
+// argument runs headlessly either way. All three share one bootstrap
+// and one kyu evaluation environment, so kyu code behaves identically
+// regardless of how it's reached — see bootstrap. For a real multi-pane
+// terminal (several 9sh sessions, or 9sh alongside a shell, side by
+// side), see github.com/sandgorgon/9mux — that used to be part of this
+// binary (package pane, removed in the same change that added
+// package replui); see replui's own doc comment and 9mux's README for
+// the full split rationale.
 package main
 
 import (
@@ -19,7 +24,6 @@ import (
 	"time"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
-	"github.com/sandgorgon/tui/input"
 	"github.com/sandgorgon/tui/term"
 	"github.com/sandgorgon/tui/tui"
 
@@ -30,8 +34,8 @@ import (
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/kyu/value"
 	"github.com/sandgorgon/9sh/ns"
-	"github.com/sandgorgon/9sh/pane"
 	"github.com/sandgorgon/9sh/remote"
+	"github.com/sandgorgon/9sh/replui"
 	"github.com/sandgorgon/9sh/session"
 )
 
@@ -64,7 +68,13 @@ func run() int {
 		return 0
 	}
 
-	env, recorder, sessionDir, envScratchDir := bootstrap(*listenAddr, *listenUnixPath)
+	// sessionDir (bootstrap's third return) fed the old pane
+	// multiplexer's "+ history" button — package replui has no
+	// equivalent (see 9mux's own 9P-browsing pane for where that
+	// capability's heading), so it's unused here now; bootstrap's own
+	// signature is otherwise untouched (session history recording via
+	// recorder is unrelated to reading it back for display).
+	env, recorder, _, envScratchDir := bootstrap(*listenAddr, *listenUnixPath)
 	if recorder != nil {
 		defer recorder.Close()
 	}
@@ -89,7 +99,7 @@ func run() int {
 	}
 
 	if !*forceRepl && term.IsTerminal(os.Stdin) {
-		if err := runTUI(env, sessionDir); err != nil {
+		if err := runTUI(env); err != nil {
 			fmt.Fprintln(os.Stderr, "9sh:", err)
 			return 1
 		}
@@ -102,15 +112,17 @@ func run() int {
 
 // bootstrap wires up 9sh's namespace, its job manager, and (best-effort)
 // session history, returning the shared kyu evaluation environment used
-// by every mode (script, line REPL, and the tui pane multiplexer's own
-// kyu-repl pane) so kyu code behaves identically no matter how it's
-// reached. The returned *session.Recorder is nil if session history
-// isn't available this run (no 9vcs on PATH, no writable home
-// directory, ...) — that's never fatal to starting the shell at all,
-// only to the history feature itself; the returned dir (for
-// pane.SessionViewerSpec, see runTUI) is still worth passing on even
-// then, since it may hold real history from an earlier run when 9vcs
-// *was* available — reading it back is pure disk I/O, no 9vcs needed.
+// by every mode (script, line REPL, and replui's own single-screen TUI)
+// so kyu code behaves identically no matter how it's reached. The
+// returned *session.Recorder is nil if session history isn't available
+// this run (no 9vcs on PATH, no writable home directory, ...) — that's
+// never fatal to starting the shell at all, only to the history feature
+// itself; the returned dir is still worth returning even then, since it
+// may hold real history from an earlier run when 9vcs *was* available —
+// reading it back is pure disk I/O, no 9vcs needed (no caller currently
+// reads it back — package replui has no session-history view, unlike
+// the old pane package's session-viewer pane; see 9mux's own README for
+// where that capability is headed).
 func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder, string, string) {
 	namespace := ns.New()
 	mgr := job.NewManager()
@@ -237,9 +249,9 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 // 9vcs error) is printed once and otherwise ignored: session history is
 // a feature 9sh can run perfectly well without, not a startup
 // requirement. The returned dir is "" only when os.UserHomeDir itself
-// failed (nothing meaningful to read even for pane.SessionViewerSpec);
-// any other failure (no 9vcs on PATH in particular) still returns the
-// real dir, since reading past history back doesn't need 9vcs at all.
+// failed (nothing meaningful to read); any other failure (no 9vcs on
+// PATH in particular) still returns the real dir, since reading past
+// history back doesn't need 9vcs at all.
 func bootstrapSession(mgr *job.Manager) (*session.Recorder, string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -274,41 +286,27 @@ const (
 	disablePaste = "\x1b[?2004l"
 )
 
-// runTUI launches the pane multiplexer as 9sh's primary interactive
-// experience: it starts with one native kyu REPL pane (sharing env
-// with every other mode via bootstrap), with shell, namespace-browser,
-// job-viewer, and session-viewer panes addable from the control strip.
-// See package pane's doc comment for the design rationale (why
-// minimize is click/Enter-driven rather than a global hotkey, and why
-// a pane's process survives being minimized). sessionDir is passed
-// straight through to pane.New for the "+ history" button; see
-// bootstrapSession for what "" versus a real-but-recorder-less dir
-// means here.
-func runTUI(env *eval.Env, sessionDir string) error {
+// runTUI launches package replui's single-screen interactive TUI as
+// 9sh's primary interactive experience — a native kyu REPL (sharing env
+// with every other mode via bootstrap) with live syntax highlighting,
+// Ctrl-R history search, and Tab completion; see replui's own doc
+// comment for why it's still a real tui.Model rather than a bare
+// widget (the built-in help overlay and the fullscreen-%cmd handoff
+// both need something above the REPL widget itself in the tree).
+func runTUI(env *eval.Env) error {
 	// Direct stdio inheritance for a fullscreen %cmd (see
 	// runExternalFullscreen) would race tui.App.Run's own raw-mode stdin
 	// reader for every keystroke and write into a screen buffer the TUI
 	// still thinks it owns -- see Env.SetPassthroughBlocked's doc
 	// comment. Inside the TUI, a fullscreen command instead goes through
-	// the checkout-and-pty-handoff path (package pane), which this
+	// the checkout-and-pty-handoff path (package replui), which this
 	// setting doesn't affect; this only guards the fallback case where
-	// no pane has registered a fullscreen handler at all. Every kyu-repl
-	// pane this session creates (including ones opened later via split)
-	// shares this same root env, so one call here covers all of them.
-	env.SetPassthroughBlocked("this pane has no fullscreen handler registered — open a Shell pane instead, or run this from 9sh's plain REPL (-repl) or a script")
+	// no fullscreen handler is registered at all (a nil w.env in a
+	// bare-widget test, e.g.).
+	env.SetPassthroughBlocked("no fullscreen handler registered — run this from 9sh's plain REPL (-repl) or a script instead")
 
-	m := pane.New(env, sessionDir, pane.KyuReplSpec("kyu", env))
-	app := tui.NewApp(m, 80, 24) // Run resizes to the real terminal size on start
+	app := tui.NewApp(replui.New(env), 80, 24) // Run resizes to the real terminal size on start
 	defer app.Close()
-
-	// Land keyboard focus on the kyu-repl pane's own content before Run
-	// ever reads real input, not tui.App's zero-value default (the
-	// control strip's first button) — see pane.InitialFocusAdvances'
-	// doc comment for why this needs replaying real Tab events rather
-	// than a simpler fix.
-	for range pane.InitialFocusAdvances() {
-		app.HandleInput(input.KeyEvent{Key: input.KeyTab})
-	}
 
 	fmt.Print(enableMouse)
 	defer fmt.Print(disableMouse)
@@ -370,8 +368,8 @@ func printResult(v value.Value) {
 // `{ |j|\n  j.status == "running"\n}` spans several lines, so a strict
 // line-at-a-time reader would misparse it mid-statement. This is the
 // fallback for non-interactive/piped stdin (runTUI needs a real raw-
-// mode terminal) or an explicit -repl; pane.kyuReplWidget uses the
-// same parser.BracketDepth check for the native tui REPL pane.
+// mode terminal) or an explicit -repl; replui's own kyu-repl widget
+// uses the same parser.BracketDepth check for the TUI.
 // repl's stdin loop is a bare bufio.Scanner — no raw mode, nothing else
 // ever reads os.Stdin — so unlike the TUI (see Env.SetPassthroughBlocked's
 // doc comment), a Ctrl-C here is a real OS SIGINT, delivered

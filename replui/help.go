@@ -1,4 +1,4 @@
-package pane
+package replui
 
 import (
 	"strings"
@@ -11,91 +11,62 @@ import (
 )
 
 // helpText is the built-in help screen's content, assembled once (see
-// buildHelpText) from three sections a user coming from a Unix shell
-// actually needs, not just pane-multiplexer keybindings: this doc's
-// own doc comment on why that used to be all there was.
+// buildHelpText) from three sections a user actually needs: this
+// screen's own keybindings, the kyu language reference, and the
+// bash/zsh mental-model section. Multi-pane content (control-strip
+// buttons, split/zoom/minimize, F1-F9 pane jump, the namespace-browser/
+// job-viewer/session-viewer panes) lived here before this package
+// replaced github.com/sandgorgon/9sh's old multi-pane pane package —
+// see github.com/sandgorgon/9mux for where that capability went.
 var helpText, helpSectionStart = buildHelpText()
 
 // keybindingHelp is the original (and still first) section — kept as
 // plain data (not generated from the hotkey-handling code it
 // documents) so it can be scanned and edited on its own; keep it in
 // sync by hand whenever a binding changes elsewhere in this package
-// (controlStrip, paneNode's title-bar switch, kyuReplWidget.handleKey).
+// (kyuReplWidget.handleKey).
 var keybindingHelp = []string{
-	"Control strip (always visible, top row):",
-	"  + shell / + kyu / + browse / + jobs / + history   add a pane of that kind",
-	"  theme                                              toggle light/dark",
-	"  quit                                               quit 9sh",
-	"",
-	"Every pane's title bar:",
-	"  x              close this pane",
-	"  d              split down (then pick a kind: s/k/b/j/h, or anything",
-	"                 else to cancel)",
-	"  r              split right (same kind-picker as d)",
-	"  z              zoom/un-zoom this pane to fill the whole screen",
-	"  + / -          resize this pane along its split axis, down to one",
-	"                 visible content line — smaller than that, minimize",
-	"                 instead",
-	"  click/Enter    minimize/restore (only along a vertical split axis)",
-	"  F1-F9          jump keyboard focus straight to pane N",
-	"",
-	"Inside a namespace-browser pane, once its content has focus:",
-	"  Up/Down                move the cursor",
-	"  Enter/click             a directory descends into it; a file",
-	"                          previews its content (cat(path)'s own",
-	"                          TUI equivalent)",
-	"  Backspace               go up a directory -- or, while previewing",
-	"                          a file, back to the listing it came from",
-	"  Esc                     (preview only) same as Backspace",
-	"  PgUp/PgDown, wheel      (preview only) scroll the file",
-	"",
-	"Inside a kyu REPL pane, once its content (not just its title bar)",
-	"has focus:",
-	"  Enter                  submit, or continue if brackets are still open",
-	"  Tab                    complete the identifier before the cursor",
-	"                         (variables, builtins, keywords) -- right after",
-	"                         a % sigil, an external command from PATH;",
-	"                         inside a bare Path, real filesystem and",
-	"                         namespace entries merged -- fills the longest",
-	"                         common match, cycles candidates on repeated Tab",
-	"  Ctrl+R                  reverse history search -- type to search,",
-	"                           Enter runs the match, Esc loads it without",
-	"                           running it",
-	"  Ctrl+\\                  release focus back to pane navigation --",
-	"                           Tab's normal pane-navigation meaning is",
-	"                           claimed by completion inside this pane",
-	"  Left/Right              move the cursor; Ctrl+Left/Right by word",
-	"  Home/End (Ctrl+A/E)     jump to the start/end of the current line",
-	"  Backspace/Delete        delete before/after the cursor",
-	"  Ctrl+W                  delete the word before the cursor",
-	"  Ctrl+U / Ctrl+K          delete to line start / delete to line end",
-	"  Up/Down                  recall previous/next submitted input",
-	"                           (only when not mid multi-line input)",
-	"  PgUp/PgDown, mouse wheel  scroll the transcript",
-	"  Ctrl+C                   copy the whole transcript",
-	"  Alt+C                    copy only what's currently visible",
-	"  paste                    inserts at the cursor",
+	"Enter                  submit, or continue if brackets are still open",
+	"Tab                    complete the identifier before the cursor",
+	"                       (variables, builtins, keywords) -- right after",
+	"                       a % sigil, an external command from PATH;",
+	"                       inside a bare Path, real filesystem and",
+	"                       namespace entries merged -- fills the longest",
+	"                       common match, cycles candidates on repeated Tab",
+	"Ctrl+R                  reverse history search -- type to search,",
+	"                         Enter runs the match, Esc loads it without",
+	"                         running it",
+	"Left/Right              move the cursor; Ctrl+Left/Right by word",
+	"Home/End (Ctrl+A/E)     jump to the start/end of the current line",
+	"Backspace/Delete        delete before/after the cursor",
+	"Ctrl+W                  delete the word before the cursor",
+	"Ctrl+U / Ctrl+K          delete to line start / delete to line end",
+	"Up/Down                  recall previous/next submitted input",
+	"                         (only when not mid multi-line input)",
+	"PgUp/PgDown, mouse wheel  scroll the transcript",
+	"Ctrl+C                   copy the whole transcript",
+	"Alt+C                    copy only what's currently visible",
+	"paste                    inserts at the cursor",
+	"F1                       toggle this help screen",
+	"Ctrl+D (at an empty prompt)  quit 9sh",
 	"",
 	"Running a fullscreen program (vim, top, ssh, ... -- see",
-	"fullscreen_programs in /config/config.ky) hands this pane's screen",
-	"and keyboard to it directly, same as a shell pane, until it exits;",
-	"a namespace-only Path argument is checked out and written back",
-	"automatically, no checkout() call needed.",
+	"fullscreen_programs in /config/config.ky) hands this whole screen",
+	"and keyboard to it directly until it exits; a namespace-only Path",
+	"argument is checked out and written back automatically, no",
+	"checkout() call needed.",
 	"",
-	"Inside a shell pane, once its content has focus: Tab reaches the",
-	"hosted shell directly (real completion); Ctrl+\\ releases focus back",
-	"to pane navigation.",
+	"For a real multi-pane terminal (a shell and a kyu session side by",
+	"side, say) see github.com/sandgorgon/9mux -- this screen is always",
+	"exactly one kyu session, by design (see this package's own doc",
+	"comment).",
 }
 
 // bashZshHelp is the mental-model section — a plain-text condensation
 // of the README's "Coming from bash/zsh: there is no current
 // directory", kept in sync with that section by hand (same reasoning
 // as keybindingHelp above: hand-maintained, scannable data, not
-// generated). This is the part a Unix-shell user actually needs
-// spelled out, not just discovered the hard way — a pane's title bar
-// or 9sh's own -repl/script mode are read-only from a Unix shell's
-// perspective, so this deserves to be reachable without leaving the
-// terminal.
+// generated).
 var bashZshHelp = []string{
 	"The single easiest wrong assumption to carry over from a Unix",
 	"shell: /local (or wherever you've bind-ed things) is NOT \"where",
@@ -271,10 +242,9 @@ func (w *helpWidget) HandleEvent(e input.Event) tui.Cmd {
 		switch {
 		case ev.Key == input.KeyEsc, ev.Rune == '?', ev.Rune == 'q':
 			// Safe to claim these here (unlike a global hotkey elsewhere
-			// in this package — see controlStrip's own doc comment on
-			// why '?' isn't bound globally to *open* help): widget.Modal
-			// claims focus exclusively for its body while open, so
-			// nothing else could receive this key instead.
+			// in this package): widget.Modal claims focus exclusively
+			// for its body while open, so nothing else could receive
+			// this key instead.
 			return func() tui.Msg { return closeHelpMsg{} }
 		case ev.Key == input.KeyPgUp:
 			w.scrollOffset = max0(w.scrollOffset - max0(w.lastHeight-1))

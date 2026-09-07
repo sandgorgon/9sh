@@ -1,4 +1,4 @@
-package pane
+package replui
 
 import (
 	"context"
@@ -27,24 +27,23 @@ var (
 	// Live-input syntax-highlighting palette — see highlightSpans. Kept
 	// distinct from promptStyle/errorStyle/cursorStyle's own colors
 	// (cyan/red/yellow) so a token's color always means the same thing
-	// regardless of where else that color shows up in the pane.
+	// regardless of where else that color shows up on screen.
 	keywordStyle = cell.Style{Fg: cell.ANSIColor(5)} // magenta
 	stringStyle  = cell.Style{Fg: cell.ANSIColor(2)} // green
 	numberStyle  = cell.Style{Fg: cell.ANSIColor(3)} // yellow (foreground here, unlike cursorStyle's yellow background — visually distinct)
 	pathStyle    = cell.Style{Fg: cell.ANSIColor(4)} // blue
-	// sigilStyle is bold cyan, not plain cyan (promptStyle) — %/$/@ are
+	// sigilStyle is bold cyan, not plain cyan (promptStyle) — %/@ are
 	// kyu's own "this is special" markers, worth standing out even from
 	// the prompt's already-cyan "9sh> ".
 	sigilStyle = cell.Style{Fg: cell.ANSIColor(6), Attr: cell.AttrBold}
 
 	// cursorStyle is an explicit, theme-independent block color (ANSI
 	// yellow bg, black fg) rather than bare AttrReverse against the
-	// terminal's own default colors — reported invisible in practice
-	// (2026-08-30): reverse-video against two *unset* colors doesn't
-	// reliably read as a visible block on every terminal's own default
-	// palette. Yellow reads clearly against both light and dark
-	// backgrounds, which this pane can't assume just one of (see New's
-	// own doc comment on theme detection).
+	// terminal's own default colors — reverse-video against two *unset*
+	// colors doesn't reliably read as a visible block on every
+	// terminal's own default palette. Yellow reads clearly against both
+	// light and dark backgrounds, which this screen can't assume just
+	// one of (see Model.theme's own doc comment on autodetection).
 	cursorStyle = cell.Style{Bg: cell.ANSIColor(3), Fg: cell.ANSIColor(0), Attr: cell.AttrBold}
 )
 
@@ -58,15 +57,18 @@ const promptWidth = 5
 // (PgUp/PgDown's job).
 const scrollStep = 3
 
-// kyuReplNode is a native (not pty-hosted) kyu REPL: input is
-// evaluated directly against env — the same *eval.Env every other
-// 9sh entry point shares (see cmd/9sh's bootstrap) — rather than
-// shelling out to another 9sh process. env is captured once at
-// construction, like widget.Terminal's Command; it never changes for
-// this pane's lifetime, so it isn't threaded through Reconcile props.
-func kyuReplNode(id int, env *eval.Env) tui.Node {
-	return tui.Component(paneKey(id, "kyurepl"), struct{}{}, func() tui.Widget {
-		return &kyuReplWidget{env: env, paneID: id}
+// kyuReplNode is 9sh's native (not pty-hosted) kyu REPL: input is
+// evaluated directly against env — the same *eval.Env every other 9sh
+// entry point shares (see cmd/9sh's bootstrap) — rather than shelling
+// out to another 9sh process. env is captured once at construction,
+// like widget.Terminal's Command; it never changes for this widget's
+// lifetime, so it isn't threaded through Reconcile props. A fixed key
+// is enough (unlike the pane multiplexer this package replaced, which
+// needed one key per pane — see 9mux's own history): Model.View only
+// ever mounts one of these at a time.
+func kyuReplNode(env *eval.Env) tui.Node {
+	return tui.Component("kyu-repl", struct{}{}, func() tui.Widget {
+		return &kyuReplWidget{env: env}
 	})
 }
 
@@ -88,15 +90,12 @@ type replSpan struct {
 	style cell.Style
 }
 
-// kyuReplWidget is a native (in-pane) line editor + transcript for
-// kyu: cursor movement (char- and word-wise), Home/End, history
-// recall (Up/Down, only when not mid multi-line continuation — see
-// historyPrev/historyNext), kill-to-line-start/kill-to-line-end/kill-
-// word-backward (Ctrl+U/Ctrl+K/Ctrl+W), bracketed paste, and scrolling
-// the transcript independently of the input (scrollOffset). Was
-// deliberately scoped down to append/backspace-only editing with no
-// history when this pane was a fallback, not the primary way into
-// 9sh — this rewrite (2026-08-30) closes that gap now that it is.
+// kyuReplWidget is a native line editor + transcript for kyu: cursor
+// movement (char- and word-wise), Home/End, history recall (Up/Down,
+// only when not mid multi-line continuation — see historyPrev/
+// historyNext), kill-to-line-start/kill-to-line-end/kill-word-backward
+// (Ctrl+U/Ctrl+K/Ctrl+W), bracketed paste, and scrolling the transcript
+// independently of the input (scrollOffset).
 //
 // Deliberately still no undo/redo: this is a REPL input line, not a
 // general text editor, and the kill commands already cover the common
@@ -105,7 +104,6 @@ type replSpan struct {
 // missed.
 type kyuReplWidget struct {
 	env     *eval.Env
-	paneID  int // this pane's id, for startFullscreenMsg -- see attachFullscreen
 	lines   []replLine
 	input   string
 	cursor  int // rune index into []rune(input), 0..len(runes(input))
@@ -397,15 +395,15 @@ func (w *kyuReplWidget) HandleEvent(e input.Event) tui.Cmd {
 	return nil
 }
 
-// handleKey returns a Cmd only for the copy bindings (see
-// tui.CopyToClipboard) — every other case mutates the widget directly
-// and returns nil, same as before this needed a return value at all.
-// Ctrl-R is checked before everything else, whether or not search mode
-// is already active (it means "start searching" the first time,
-// "search further back" on every press after) — see searchStep. Once
-// in search mode, every other key routes to handleSearchKey instead of
-// the normal editing switch below; bash's own reverse-i-search doesn't
-// support arbitrary mid-search editing either, so this doesn't try to.
+// handleKey returns a Cmd for the copy bindings (tui.CopyToClipboard),
+// F1 (help), and Ctrl+D at an empty prompt (quit) — every other case
+// mutates the widget directly and returns nil. Ctrl-R is checked before
+// everything else, whether or not search mode is already active (it
+// means "start searching" the first time, "search further back" on
+// every press after) — see searchStep. Once in search mode, every
+// other key routes to handleSearchKey instead of the normal editing
+// switch below; bash's own reverse-i-search doesn't support arbitrary
+// mid-search editing either, so this doesn't try to.
 func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	ctrl := ke.Mod&input.ModCtrl != 0
 	alt := ke.Mod&input.ModAlt != 0
@@ -427,6 +425,21 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	}
 
 	switch {
+	case ke.Key == input.KeyF1:
+		// The multiplexer this package replaced toggled help from a
+		// control-strip button; there's no control strip here, so this
+		// is its one keybinding instead — F1 is otherwise unused now
+		// that F1-F9's pane-jump meaning went with the split tree.
+		return func() tui.Msg { return toggleHelpMsg{} }
+	case ctrl && ke.Rune == 'd' && w.input == "":
+		// bash/zsh's own "Ctrl-D at an empty prompt exits the shell" —
+		// the TUI's equivalent of EOF on repl()'s bufio.Scanner loop,
+		// which has no raw-mode keyboard of its own to bind this to.
+		// Only at an empty prompt: mid-input, Ctrl+D should behave like
+		// ordinary text-entry muscle memory expects (a no-op here, since
+		// this widget has no forward-delete-at-cursor binding on Ctrl+D
+		// to begin with), not silently discard what's been typed.
+		return tui.Quit()
 	case ke.Key == input.KeyTab && !ctrl && !alt:
 		w.completeTab()
 	case ke.Key == input.KeyEnter:
@@ -641,7 +654,7 @@ func (w *kyuReplWidget) killWordBackward() {
 
 // allText is the entire transcript (every evaluated line, plus the
 // in-progress input if any) joined with '\n', regardless of scroll
-// position — "copy all of the content in a pane".
+// position — "copy all of the content on screen".
 func (w *kyuReplWidget) allText() string {
 	inputLines, _, _ := w.renderInput()
 	all := append(append([]replLine(nil), w.lines...), inputLines...)
@@ -649,7 +662,7 @@ func (w *kyuReplWidget) allText() string {
 }
 
 // visibleText is only the lines currently in the scrolled viewport —
-// "copy all of the visible text in a pane". Recomputes the same
+// "copy all of the visible text on screen". Recomputes the same
 // window Paint's own start/end does rather than sharing state with it,
 // since this only runs on an explicit copy keypress (not a hot path)
 // and keeping it independent means a future change to Paint's own
@@ -680,7 +693,7 @@ func joinLineText(lines []replLine) string {
 // historyPrev/historyNext are no-ops while input contains a '\n':
 // mid multi-line continuation, Up/Down recalling a different
 // submission entirely would be more confusing than useful, and this
-// pane doesn't attempt real multi-line-aware history (recalling one
+// widget doesn't attempt real multi-line-aware history (recalling one
 // line at a time within a continuation) — a deliberate, documented
 // scope cut, not an oversight.
 func (w *kyuReplWidget) historyPrev() {
@@ -793,7 +806,7 @@ func (w *kyuReplWidget) exitSearch(doSubmit bool) {
 // evaluates and clears it otherwise. Inserting at the cursor rather
 // than always appending at the end matters now that the cursor can sit
 // mid-line (e.g. Home, then Enter, to open a new line above what's
-// already there) — append-only was fine when this pane had no cursor
+// already there) — append-only was fine when this widget had no cursor
 // movement at all.
 func (w *kyuReplWidget) submit() {
 	rs := w.runes()
@@ -821,7 +834,7 @@ func (w *kyuReplWidget) submit() {
 	// A submit is a deliberate user action, unlike output arriving
 	// passively while reviewing history — snapping back to the latest
 	// output here is what every real shell does, and unlike a plain
-	// scroll-follow-if-already-at-bottom rule (which this pane also
+	// scroll-follow-if-already-at-bottom rule (which this widget also
 	// has, for free, by never touching scrollOffset on its own — see
 	// scrollOffset's own doc comment) this needs to be unconditional:
 	// you just typed something, you want to see what happened.
@@ -844,10 +857,9 @@ func (w *kyuReplWidget) evaluate(src string) {
 	// set-before/clear-after pattern Env.SetInterruptHandler already
 	// uses -- safe because evaluate() calls never overlap (one dispatch
 	// goroutine). See attachFullscreen's doc comment for what this
-	// actually does. w.env is nil in a handful of pane-behavior-only
-	// tests that don't exercise evaluation semantics (e.g. KyuReplSpec's
-	// env argument left nil) -- guarded the same way eval.Eval below
-	// already tolerates a nil Env for those.
+	// actually does. w.env is nil in a handful of widget-behavior-only
+	// tests that don't exercise evaluation semantics -- guarded the same
+	// way eval.Eval below already tolerates a nil Env for those.
 	if w.env != nil {
 		w.env.SetFullscreenHandler(w.attachFullscreen)
 	}
@@ -864,14 +876,13 @@ func (w *kyuReplWidget) evaluate(src string) {
 	}
 }
 
-// attachFullscreen is registered as this pane's eval.FullscreenHandlerFunc
-// for the duration of each evaluate() call (see evaluate). It doesn't
-// start cmd itself -- it just records the attachment so handleKey's
-// Enter case (see consumeFullscreenCmd) can turn it into a
-// startFullscreenMsg once evaluate() returns, handing this pane's
-// content over to a widget.Terminal in paneNode (see pane/model.go) —
-// the same real-pty machinery `+ shell` panes already use, just
-// attached to an existing kyu-repl pane instead of a dedicated one.
+// attachFullscreen is registered as eval.FullscreenHandlerFunc for the
+// duration of each evaluate() call (see evaluate). It doesn't start cmd
+// itself -- it just records the attachment so handleKey's Enter case
+// (see consumeFullscreenCmd) can turn it into a startFullscreenMsg once
+// evaluate() returns, handing the whole screen over to a
+// widget.Terminal in Model.View — the same real-pty machinery
+// 9mux's Terminal pane kind uses, just hosted directly here.
 func (w *kyuReplWidget) attachFullscreen(cmd *exec.Cmd, onDone func(err error)) {
 	w.pendingFullscreen = &fullscreenAttach{cmd: cmd, onDone: onDone}
 }
@@ -886,8 +897,7 @@ func (w *kyuReplWidget) consumeFullscreenCmd() tui.Cmd {
 	}
 	attach := w.pendingFullscreen
 	w.pendingFullscreen = nil
-	id := w.paneID
-	return func() tui.Msg { return startFullscreenMsg{id: id, attach: attach} }
+	return func() tui.Msg { return startFullscreenMsg{attach: attach} }
 }
 
 // resultLines renders a top-level evaluation result as one or more
@@ -1034,8 +1044,8 @@ func splitPathFragment(fragment string) (dirPart, partial string) {
 // filesystem and the attached namespace, merged into one candidate list
 // rather than chosen by surrounding context. A Path argument to %cmd
 // is legitimately either — a real /etc/hosts is exactly as valid as
-// a namespace /local/foo (see external.go's checkNamespaceOnlyPath,
-// which has to tell the two apart precisely because both are real
+// a namespace /local/foo (see kyu/eval's checkNamespaceOnlyPath, which
+// has to tell the two apart precisely because both are real
 // possibilities there). Completion doesn't need that same precision:
 // unlike the guardrail, where guessing wrong means silently reading the
 // wrong data, a completion candidate that doesn't fit the call it's
@@ -1082,7 +1092,7 @@ func (w *kyuReplWidget) pathCandidates(fragment string) []string {
 // bash/zsh completion: no dropdown/menu UI, just in-place text
 // replacement.
 //
-// Right after a '%'/'$' sigil the candidates are PATH executables (see
+// Right after a '%' sigil the candidates are PATH executables (see
 // currentExternalNameBounds/externalNameCandidates); inside a bare Path
 // literal they're real filesystem and namespace entries merged (see
 // currentPathBounds/pathCandidates); everywhere else they're
@@ -1179,16 +1189,17 @@ func (w *kyuReplWidget) Focusable() bool         { return true }
 func (w *kyuReplWidget) SetFocused(focused bool) { w.focused = focused }
 
 // WantsRawTab/ReleaseKey implement tui.RawKeyClaimer. Without this,
-// tui.App.HandleInput intercepts Tab globally for pane-focus
-// navigation before it's ever forwarded to HandleEvent at all (see its
-// own doc comment) — completeTab would be silently unreachable dead
-// code in the real app despite working correctly in every direct-call
-// unit test, since those bypass App.HandleInput entirely. Ctrl+\,
-// matching widget.Terminal's own default release key (see its
-// TerminalOptions.ReleaseKey), so shell panes and kyu-repl panes share
-// one "how do I get my keyboard focus back" muscle memory — not Esc,
-// which this widget already uses for a different purpose (exiting
-// reverse history search, see exitSearch).
+// tui.App.HandleInput intercepts Tab globally for focus navigation
+// before it's ever forwarded to HandleEvent at all (see its own doc
+// comment) — completeTab would be silently unreachable dead code in
+// the real app despite working correctly in every direct-call unit
+// test, since those bypass App.HandleInput entirely. ReleaseKey is
+// Ctrl+\, matching widget.Terminal's own default (see its
+// TerminalOptions.ReleaseKey) purely for muscle-memory consistency with
+// a fullscreen attachment's own Terminal — there's nothing else in this
+// single-widget screen to release focus *to*, so pressing it is
+// harmless, not meaningful. Not Esc, which this widget already uses for
+// a different purpose (exiting reverse history search, see exitSearch).
 func (w *kyuReplWidget) WantsRawTab() bool { return true }
 func (w *kyuReplWidget) ReleaseKey() input.KeyEvent {
 	return input.KeyEvent{Rune: '\\', Mod: input.ModCtrl}

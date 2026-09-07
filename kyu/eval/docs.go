@@ -7,9 +7,9 @@ import (
 )
 
 // BuiltinDoc is one language-reference entry — the single source of
-// truth for both help(name) (biHelp, this file) and the pane package's
-// expanded '?' help screen's language-reference section (see
-// pane/help.go), so the two can never drift apart the way two
+// truth for both help(name) (biHelp, this file) and package replui's
+// expanded F1 help screen's language-reference section (see
+// replui/help.go), so the two can never drift apart the way two
 // hand-maintained copies of the same reference would.
 type BuiltinDoc struct {
 	Name        string
@@ -22,7 +22,7 @@ type BuiltinDoc struct {
 // rather than alphabetically — matching the README's own Quick Start
 // grouping, since learning the language by category reads better than
 // an A-Z dump; help(name) already covers "I know the name, look it
-// up" directly. Exported so pane/help.go (a different package) can
+// up" directly. Exported so replui/help.go (a different package) can
 // render the same table without duplicating it.
 func Docs() []BuiltinDoc {
 	return builtinDocs
@@ -71,7 +71,7 @@ var builtinDocs = []BuiltinDoc{
 
 	// Process / subprocess
 	{"cd", "cd(path)",
-		"Sets the working directory %cmd subprocesses run in — per-session state, not a real chdir, since every pane in a session shares one process."},
+		"Sets the working directory %cmd subprocesses run in — per-session state, not a real chdir, since every entry point into a session shares one process."},
 	{"pwd", "pwd()",
 		"Reads cd's working directory back in-process, falling back to the real os.Getwd() before cd() has ever been called."},
 	{"exit_code", "exit_code()",
@@ -161,7 +161,7 @@ func docRecord(d BuiltinDoc) *value.Record {
 // biHelp implements `help()`/`help(name)`: with no arguments, every
 // documented name as a Table (Record: name, signature, description);
 // with one String name, that single entry's Record. The same table
-// pane/help.go's expanded '?' screen language-reference section
+// replui/help.go's expanded F1 screen language-reference section
 // renders (see Docs), so the two can't drift apart.
 //
 // An unknown name is an ordinary in-stream ErrorVal, not a hard Go

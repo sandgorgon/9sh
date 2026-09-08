@@ -31,11 +31,13 @@ once a first tagged release is cut.
   job-viewer/session-viewer panes) is gone from this binary. Its
   generic mechanics moved to a new, separate project,
   [`9mux`](https://github.com/sandgorgon/9mux) (any command in a pane,
-  9sh included) — a plain multi-pane terminal today, not yet a
-  replacement for the removed browser/job-viewer/session-viewer panes'
-  own capability specifically: 9mux's README scopes a 9P-browsing pane
-  as its planned, not-yet-built answer for that (see that repo for
-  status). 9sh itself now ships a single-screen interactive TUI instead
+  9sh included), which as of its own `v0.1.0` also ships a native 9P-
+  browsing pane — pointed at a running 9sh's `-listen-unix` socket, it
+  reproduces the removed browser/job-viewer panes' own capability (a
+  live directory listing; a job table with live wait-driven auto-
+  refresh and a kill keybinding) without 9mux depending on 9sh as a Go
+  library — see that repo's README for the browsing-preset config
+  syntax. 9sh itself now ships a single-screen interactive TUI instead
   (new package `replui`) — the same kyu REPL
   editing experience (live syntax highlighting, Ctrl-R history search,
   Tab completion, the fullscreen-`%cmd` handoff above) with no split

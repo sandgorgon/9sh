@@ -236,6 +236,17 @@ below. Anything `9sh -listen-unix` spawns as a job can find its way back
 in with zero configuration: the socket path is exported to it as
 `$_9SH_UNIX_SOCK`.
 
+That same socket is also what [`9mux`](https://github.com/sandgorgon/9mux)'s
+native 9P-browsing pane points at for a live, in-memory-fast view of
+this namespace from outside the process — a directory listing, or a
+job table (with a wait-driven auto-refresh and a kill keybinding) when
+the target looks like `/jobs`:
+
+```
+# ~/.config/9mux/config
+jobs = browse unix:/run/user/1000/9sh/main.sock
+```
+
 Drop `common.ky` / `hosts/<hostname>.ky` under `~/.config/9/ns` and 9sh
 runs them at startup, against the same environment, for persistent bind
 rules/aliases/env defaults — see [Design](#design) and
@@ -453,9 +464,11 @@ movement, history recall, kill commands, paste, independent scrolling,
 clipboard copy, live syntax highlighting, a built-in help screen — see
 [Using the interactive TUI](#using-the-interactive-tui)) and nothing
 that was only ever about hosting several panes at once. See `9mux`'s
-own README for the split's full rationale, including the 9P-browsing
-pane it scopes as the planned (not yet built) generalized answer for
-the old job-viewer/namespace-browser/session-viewer panes' capability.
+own README for the split's full rationale, including the native 9P-
+browsing pane (shipped as of `9mux` `v0.1.0`) that generalizes the old
+job-viewer/namespace-browser/session-viewer panes' capability — point
+it at a running 9sh's `-listen-unix` socket for a live directory
+listing or job table, no dependency on 9sh as a Go library either way.
 
 Getting close to usable as an actual daily driver, not just ready for
 hands-on testing — but the kyu language itself is still young enough

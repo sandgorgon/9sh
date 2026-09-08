@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -146,6 +147,7 @@ func runExternalFullscreen(env *Env, name string, argExprs []ast.Expr) (value.Va
 		// pty -- this function must not block, so any exit-code/write-back
 		// handling happens later, from onDone, not here.
 		handler(cmd, func(waitErr error) {
+			env.SetLastExitCode(exitCodeFromWaitErr(waitErr))
 			if ev := writeBackCheckouts(name, checkouts); ev != nil {
 				fmt.Fprintf(os.Stderr, "9sh: %s\n", ev.Msg)
 			}
@@ -175,4 +177,25 @@ func runExternalFullscreen(env *Env, name string, argExprs []ast.Expr) (value.Va
 		return *ev, nil
 	}
 	return value.Null{}, nil
+}
+
+// exitCodeFromWaitErr extracts a *exec.Cmd.Wait() error into the same
+// shape cmd.ProcessState.ExitCode() would give the direct-inheritance
+// path just above -- 0 on a clean exit (waitErr == nil), the real exit
+// code for an *exec.ExitError, or -1 for anything else (a signal, a
+// start failure surfacing here instead of where it's normally caught)
+// matching os/exec's own ExitCode() convention for "no real exit code
+// available." The TUI-attached path's onDone only ever receives the
+// widget.Terminal-wrapped Wait() result, never cmd.ProcessState
+// directly, so this is that path's own equivalent of the three lines
+// just above it.
+func exitCodeFromWaitErr(waitErr error) *int {
+	code := 0
+	if waitErr != nil {
+		code = -1
+		if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
+			code = exitErr.ExitCode()
+		}
+	}
+	return &code
 }

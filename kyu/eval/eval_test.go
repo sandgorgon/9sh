@@ -879,6 +879,40 @@ func TestPassthroughBlockedByEnv(t *testing.T) {
 	}
 }
 
+// TestFullscreenTUIAttachedSetsExitCode locks in a real gap found and
+// fixed 2026-09-08: the TUI-attached path (a FullscreenHandler
+// registered, e.g. by package replui) used to never call
+// Env.SetLastExitCode at all -- onDone only wrote back checkouts --
+// so exit_code() went stale after running a fullscreen %cmd inside the
+// interactive TUI, the primary way 9sh is used today. This handler
+// never actually starts cmd; it calls onDone directly with a real
+// *exec.ExitError (obtained by actually running a failing command),
+// simulating what package replui's fullscreenExitedMsg handling does
+// once a real pty-hosted child exits -- what's under test is
+// exitCodeFromWaitErr's translation, not process management itself,
+// which TestPassthroughInheritsRealStdio above already covers.
+func TestFullscreenTUIAttachedSetsExitCode(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	realExitErr := exec.Command("sh", "-c", "exit 3").Run()
+	if realExitErr == nil {
+		t.Fatal("expected `sh -c \"exit 3\"` to fail")
+	}
+
+	env := jobsEnv(t)
+	markFullscreen(env, "sh")
+	env.SetPassthroughBlocked("blocked for this test")
+	env.SetFullscreenHandler(func(cmd *exec.Cmd, onDone func(err error)) {
+		onDone(realExitErr)
+	})
+
+	runEnv(t, `%sh "-c" "exit 3"`, env)
+
+	code := env.LastExitCode()
+	if code == nil || *code != 3 {
+		t.Fatalf("LastExitCode() = %v, want 3", code)
+	}
+}
+
 func TestPassthroughBadCommandIsErrorVal(t *testing.T) {
 	env := jobsEnv(t)
 	markFullscreen(env, "this-command-does-not-exist-9sh")

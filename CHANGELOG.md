@@ -23,6 +23,16 @@ once a first tagged release is cut.
   `fullscreen_programs` are now real, namespace-visible, checkout-able
   files instead of hidden Go-side state, loaded before `common.ky`/
   `hosts/<hostname>.ky` so dotfiles can extend them.
+- New `/session` namespace path, backed by the same directory session
+  history is already recorded to (`~/.config/9/session`) — the day-
+  sharded `.nrl` history files are now real, namespace-visible,
+  checkout-able files, reachable the same way `/jobs`/`/local` already
+  are (including from an external tool like `9mux`'s 9P-browsing pane
+  over `-listen-unix`, with no bespoke session-viewer needed on that
+  side). Bound unconditionally whenever a home directory exists, even
+  without `9vcs` on `PATH` — reading past history back is plain disk
+  I/O — so a 9vcs-less run still gets a (possibly empty) `/session`,
+  just without new entries being recorded into it.
 
 ### Changed
 

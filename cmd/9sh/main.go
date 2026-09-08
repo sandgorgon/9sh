@@ -214,6 +214,29 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 	}
 
 	recorder, sessionDir := bootstrapSession(mgr)
+	// /session exposes session history the same dirfs-over-a-real-
+	// directory way /local, /env, and /config do — sessionDir is "" only
+	// when bootstrapSession's os.UserHomeDir itself failed (see its own
+	// doc comment), in which case there's no real directory to bind at
+	// all. MkdirAll here (dirfs.New requires the directory to already
+	// exist, unlike config.EnsureDefault's own mkdir) means /session is
+	// bound unconditionally whenever a home directory exists, even on a
+	// fresh install that has never had `9vcs` on PATH: reading past
+	// history back is plain disk I/O, no 9vcs needed, and a directory
+	// session.New's own ensureRepo hasn't touched yet is just an empty
+	// history/-less /session until 9vcs becomes available and records
+	// something into it. This is what lets a generic 9P-browsing tool
+	// (see github.com/sandgorgon/9mux) reach session history the same
+	// way it already reaches /jobs and /local, rather than needing its
+	// own bespoke session-viewer pane — see that project's README for
+	// the design this completes.
+	if sessionDir != "" {
+		if err := os.MkdirAll(sessionDir, 0755); err == nil {
+			if fs, err := dirfs.New(sessionDir); err == nil {
+				namespace.BindFS(fs, "", "/session", ns.Replace)
+			}
+		}
+	}
 	env := eval.NewGlobalEnv(namespace)
 	if recorder != nil {
 		// The local-side half of @host{} session recording: the remote

@@ -238,9 +238,10 @@ in with zero configuration: the socket path is exported to it as
 
 That same socket is also what [`9mux`](https://github.com/sandgorgon/9mux)'s
 native 9P-browsing pane points at for a live, in-memory-fast view of
-this namespace from outside the process — a directory listing, or a
-job table (with a wait-driven auto-refresh and a kill keybinding) when
-the target looks like `/jobs`:
+this namespace from outside the process — a directory listing (for
+`/local`, `/config`, `/session`, ...), or a job table (with a wait-
+driven auto-refresh and a kill keybinding) when the target looks like
+`/jobs`:
 
 ```
 # ~/.config/9mux/config

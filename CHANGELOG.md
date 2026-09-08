@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.23] - 2026-09-07
+
 ### Added
 
 - `%cmd` now detects fullscreen programs (`vim`, `top`, `htop`, `less`,

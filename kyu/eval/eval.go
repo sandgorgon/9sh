@@ -100,6 +100,14 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("cp", &Builtin{Name: "cp", Fn: func(args []value.Value) (value.Value, error) {
 		return biCp(env, args)
 	}})
+	// rm/mv need the calling Env's namespace — same closure-capture shape
+	// as cp above. See rm.go's biRm, mv.go's biMv doc comments.
+	env.Define("rm", &Builtin{Name: "rm", Fn: func(args []value.Value) (value.Value, error) {
+		return biRm(env, args)
+	}})
+	env.Define("mv", &Builtin{Name: "mv", Fn: func(args []value.Value) (value.Value, error) {
+		return biMv(env, args)
+	}})
 	// ps needs the calling Env's namespace — same closure-capture shape
 	// as glob/checkout above. See ps.go's biPs doc comment.
 	env.Define("ps", &Builtin{Name: "ps", Fn: func(args []value.Value) (value.Value, error) {

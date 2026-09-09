@@ -8,6 +8,51 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `rm(path)`/`mv(src, dst)` namespace builtins — `server.File.Remove`/
+  `WStat`, already implemented by every backend a namespace can bind,
+  now exposed to kyu directly. `mv` does a real in-place rename via
+  `WStat` when `src`/`dst` share a parent directory, falling back to
+  copy-then-remove otherwise. Both regular-file only, no recursive
+  directory support yet, same v1 scope as `cp`.
+- `format_time(layout, epoch_seconds)`/`humanize_time(epoch_seconds)`
+  give `stat`/`ls`'s raw Unix-epoch `mtime`/`atime` fields a
+  human-readable rendering (a fixed Go reference-time layout, or a
+  short relative phrase like `"5 minutes ago"`).
+- Ctrl+L clears the interactive TUI's transcript (bash/zsh/readline
+  convention) — history (Up/Down, Ctrl-R) is untouched.
+- A third call-name tier alongside kyu builtins and `%cmd`: a new
+  `native_programs` kyu variable (mirrors `fullscreen_programs`,
+  defaulted in `/config/config.ky`) names external programs that are
+  themselves namespace-aware — `9ed` is the first, seeded by default.
+  Listed names are callable bareword, no `%` sigil needed (including
+  Plan-9-style digit-leading names like `9ed`), and a namespace-only
+  `Path` argument gets the same transparent checkout-and-write-back
+  treatment `fullscreen_programs` already gets, instead of `%cmd`'s
+  ordinary error. Composes into pipes and closures exactly like `%cmd`
+  does, since it produces the identical AST node under the hood.
+
+### Fixed
+
+- A foreground `%cmd`'s captured stderr was written straight to the
+  real `os.Stderr` unconditionally, corrupting the interactive TUI's
+  own screen (it owns the terminal via a diffed renderer; a raw write
+  outside that renderer's bookkeeping desyncs "what's on screen" from
+  reality). Now routed through the same transcript ordinary results
+  already go through, whenever the TUI is running.
+- `list + list` had no case in kyu's `+` operator at all, despite
+  `fullscreen_programs`' own docs already describing `x := x + [...]`
+  as the way to extend a config-driven list variable — nobody had
+  exercised it until `native_programs` needed the identical pattern.
+
+### Changed
+
+- Bumped the `tui` dependency to v0.6.2: retunes `DefaultDark`/
+  `DefaultLight`'s `Border`/`Muted` contrast and `Success`/`Warning`/
+  `Error` colorblind-safety/ANSI-16 fallback — the exact theme the
+  help overlay renders with.
+
 ## [0.4.23] - 2026-09-07
 
 ### Added

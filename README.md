@@ -145,6 +145,10 @@ something this binary hosts itself (see "Design" below for why).
   those `Record`s) instead of bare `Path`s — the real `ls -la`
   experience, native to the namespace. `glob` itself is left alone for
   when you just want plain `Path`s to pipe into `bind`/`checkout`/etc.
+  `stat`/`ls`'s `mtime`/`atime` are raw Unix-epoch `Int`s — pipe them
+  into `format_time(layout, epoch_seconds)` for a fixed rendering (Go's
+  reference-time layout string) or `humanize_time(epoch_seconds)` for a
+  short relative one (`"5 minutes ago"`, `"in 3 hours"`).
 - `find(dir, pattern)` is `glob`'s recursive sibling: walks every
   subdirectory beneath `dir`, matching `pattern` against each entry's
   base name at every depth (both files and directories are eligible,
@@ -162,6 +166,11 @@ something this binary hosts itself (see "Design" below for why).
   regular file; `dst` may be an existing file (overwritten) or a new
   one at an already-existing directory level — like `checkout`'s own
   write-back, neither builtin creates a new namespace subdirectory.
+  `rm(path)` removes one namespace file, anywhere `cp`'s `dst` can
+  reach. `mv(src, dst)` moves/renames — a real in-place rename (no
+  content copied) when `src`/`dst` share a parent directory, a
+  copy-then-remove otherwise. Both `regular file only, no directories
+  yet`, same v1 scope as `cp`.
 - `unbind DST` clears whatever's bound at `DST` — the inverse of
   `bind`, same statement-not-function shape (a namespace-mutating verb
   stays a keyword). Unbinding something never bound is an error.
@@ -306,10 +315,12 @@ cosmetic:
   instead of reaching the binary as a meaningless literal string. Tab
   completion (inside a bare `Path`) offers both real filesystem and
   namespace entries, which is exactly how this mistake tends to get
-  typed in the first place. A fullscreen program (`vim`, ... — see
-  `fullscreen_programs`) is the one exception: there, a namespace-only
-  `Path` is checked out and written back automatically instead of
-  erroring.
+  typed in the first place. Two exceptions: a fullscreen program
+  (`vim`, ... — see `fullscreen_programs`) and a native program (`9ed`,
+  ... — see `native_programs`) both get a namespace-only `Path` checked
+  out and written back automatically instead of erroring — a native
+  program also doesn't need the `%` sigil at all, callable bareword
+  like a builtin.
 
 ### Example: a starter `common.ky`
 
@@ -369,6 +380,7 @@ below is built into 9sh: press `F1` any time.
 | `Backspace`/`Delete` | Delete before/after the cursor |
 | Ctrl+W | Delete the word before the cursor |
 | Ctrl+U / Ctrl+K | Delete to line start / delete to line end |
+| Ctrl+L | Clear the transcript (bash/zsh/readline convention) — history (Up/Down, Ctrl-R) is untouched |
 | `↑`/`↓` | Recall previous/next submitted input (only outside a multi-line continuation) |
 | `PageUp`/`PageDown`, mouse wheel | Scroll the transcript, independent of the input line |
 | Ctrl+C | Copy the whole transcript |

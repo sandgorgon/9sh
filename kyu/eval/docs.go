@@ -140,8 +140,45 @@ var builtinDocs = []BuiltinDoc{
 	{"while", "while cond { ... }", "kyu's only loop construct, with break/continue. A self-referencing closure also works for recursion."},
 	{"if", "if cond { ... } [else { ... }]", "A block's last expression is its value — what prints at the REPL."},
 	{"%cmd", "%cmd arg1 arg2 ...", "Calls an ordinary external/legacy binary. Routes through /jobs when a namespace is attached, so it shows up in session history like any job. A Path argument that only resolves in the namespace, not on the real filesystem, errors with a hint to use checkout instead of reaching the binary as a meaningless literal string. If the command's name is listed in the fullscreen_programs kyu variable (see /config/config.ky), it instead gets the real screen and keyboard directly — no job, no capture — with any namespace-only Path argument transparently checked out and written back instead of erroring; can't be backgrounded with &."},
+	{"native_programs", "cmdname arg1 arg2 ...  (no % needed)", `A third call form, for external programs that are themselves namespace-aware (e.g. 9ed) rather than legacy Bytes-only binaries: any name listed in the native_programs kyu variable (see /config/config.ky) can be called bareword, no % sigil, same argument shape %cmd takes. Namespace-only Path arguments are handled the same transparent, checkout-based way fullscreen_programs gets rather than erroring — native programs are meant to be more capable than an ordinary %cmd, not more error-prone. Extend it like fullscreen_programs: native_programs := native_programs + ["mytool"].`},
 	{"&", "%cmd ... &", `Backgrounds a %cmd as a live job record: j.status, j.ctl = "stop", j | wait. Refused for a fullscreen program (see %cmd) -- nothing to hand the real screen to if it isn't in the foreground.`},
 	{"@host", "@host { ... }", "Re-roots job creation at a dial()'d remote peer's own /jobs for the block — 'proxy jobs,' no separate remote-job protocol."},
+}
+
+// namespaceAppNames is every BuiltinDoc name that's a namespace-aware
+// "app" (an in-process Go function that touches env.Namespace()) rather
+// than a pure language builtin (data pipeline, strings, control flow,
+// process-state accessors like cd/pwd/host that read/write Env fields
+// but never the namespace itself) — the first two of the three tiers
+// README's Design section describes; the third (native external
+// programs, config-driven via native_programs, see fullscreen.go's
+// sibling isNativeProgram) isn't a BuiltinDoc at all, since membership
+// is runtime config, not a compiled-in name — see the dedicated %cmd-
+// adjacent doc entry above for that tier instead.
+//
+// Kept as an explicit set here, checked by name in Category() below,
+// rather than a new BuiltinDoc struct field: BuiltinDoc's literals above
+// are all positional (Go requires every field when a struct literal is
+// positional), so adding a field would mean touching all ~60 existing
+// entries just to tag them — this reaches the same three-way split
+// without that diff.
+var namespaceAppNames = map[string]bool{
+	"bind": true, "unbind": true, "glob": true, "ls": true, "stat": true,
+	"checkout": true, "find": true, "cat": true, "cp": true, "rm": true, "mv": true,
+	"dial": true, "dir": true, "getenv": true, "setenv": true, "unsetenv": true,
+	"vars": true, "unset": true, "ps": true, "wait": true,
+	"%cmd": true, "&": true, "@host": true,
+}
+
+// Category classifies d as "language" (no namespace/OS involvement) or
+// "namespace-app" (touches env.Namespace()) — see namespaceAppNames'
+// doc comment for the full three-tier picture and why this is a lookup
+// rather than a struct field.
+func (d BuiltinDoc) Category() string {
+	if namespaceAppNames[d.Name] {
+		return "namespace-app"
+	}
+	return "language"
 }
 
 // docByName looks up one entry by exact name, for biHelp.
@@ -163,6 +200,7 @@ func docRecord(d BuiltinDoc) *value.Record {
 	r.Set("name", value.String(d.Name))
 	r.Set("signature", value.String(d.Signature))
 	r.Set("description", value.String(d.Description))
+	r.Set("category", value.String(d.Category()))
 	return r
 }
 

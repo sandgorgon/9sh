@@ -280,7 +280,7 @@ func stringRawLen(line []rune, start int) int {
 // either) becomes its own unstyled span, so this degrades gracefully
 // through a lex error too — an ILLEGAL token still carries a real
 // Line/Col/Literal, it just doesn't match any case in tokenStyle.
-func highlightSpans(input string) map[int][]replSpan {
+func highlightSpans(input string, isNative func(string) bool) map[int][]replSpan {
 	lines := strings.Split(input, "\n")
 	lineRunes := make([][]rune, len(lines))
 	for i, l := range lines {
@@ -290,6 +290,7 @@ func highlightSpans(input string) map[int][]replSpan {
 
 	out := map[int][]replSpan{}
 	l := lexer.New(input)
+	l.NativeProgramLookup = isNative
 	for {
 		tok := l.Next()
 		if tok.Kind == token.EOF {
@@ -348,7 +349,7 @@ func (w *kyuReplWidget) renderInput() (lines []replLine, cursorLine, cursorCol i
 		return []replLine{{text: text, style: promptStyle}}, 0, len([]rune(text))
 	}
 
-	highlighted := highlightSpans(w.input)
+	highlighted := highlightSpans(w.input, w.nativeProgramLookup())
 	rs := w.runes()
 	lineStart := 0
 	col := 0
@@ -480,6 +481,8 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 		w.killToLineEnd()
 	case ctrl && ke.Rune == 'w':
 		w.killWordBackward()
+	case ctrl && ke.Rune == 'l':
+		w.clearTranscript()
 	case ctrl && ke.Rune == 'c':
 		// Not Ctrl+Shift+C: most terminals (including VTE/gnome-
 		// terminal, this project's own standing verification target —
@@ -648,6 +651,19 @@ func (w *kyuReplWidget) killWordBackward() {
 	rs = append(rs[:i], rs[w.cursor:]...)
 	w.input = string(rs)
 	w.cursor = i
+}
+
+// clearTranscript implements Ctrl+L: bash/zsh/readline convention for
+// "clear the screen." Unlike a real terminal's clear (which just moves
+// the scroll region — history is still one scroll-back away), this
+// widget owns its own transcript buffer directly (see w.lines' doc
+// comment), so clearing means actually discarding it, not just
+// repainting over it — there's no separate terminal scrollback to fall
+// back to. history (Up/Down, Ctrl-R) is untouched; only the visible
+// transcript goes.
+func (w *kyuReplWidget) clearTranscript() {
+	w.lines = nil
+	w.scrollOffset = 0
 }
 
 // ---- copy (Ctrl+C / Alt+C — see handleKey) ----
@@ -841,11 +857,25 @@ func (w *kyuReplWidget) submit() {
 	w.scrollOffset = 0
 }
 
+// nativeProgramLookup builds the `func(string) bool` lexer.Lexer/
+// parser.Parser both want from w.env (see eval.IsNativeProgram) -- nil
+// when w.env is nil (a handful of widget-behavior-only tests that don't
+// exercise evaluation semantics, same guard evaluate() below already
+// uses for SetFullscreenHandler/SetExternalOutputSink), which both
+// Lexer.NativeProgramLookup and parser.WithNativeProgramLookup already
+// treat as "no native programs recognized," matching plain old behavior.
+func (w *kyuReplWidget) nativeProgramLookup() func(string) bool {
+	if w.env == nil {
+		return nil
+	}
+	return func(name string) bool { return eval.IsNativeProgram(w.env, name) }
+}
+
 func (w *kyuReplWidget) evaluate(src string) {
 	if !trimmedNonEmpty(src) {
 		return
 	}
-	p := parser.New(src)
+	p := parser.New(src, parser.WithNativeProgramLookup(w.nativeProgramLookup()))
 	prog := p.ParseProgram()
 	if errs := p.Errors(); len(errs) > 0 {
 		for _, e := range errs {
@@ -860,12 +890,19 @@ func (w *kyuReplWidget) evaluate(src string) {
 	// actually does. w.env is nil in a handful of widget-behavior-only
 	// tests that don't exercise evaluation semantics -- guarded the same
 	// way eval.Eval below already tolerates a nil Env for those.
+	//
+	// SetExternalOutputSink is registered the same way, for the same
+	// reason a bare %cmd's stderr must never reach the real fd directly
+	// while this widget owns the screen -- see Env.SetExternalOutputSink
+	// and appendExternalStderr's own doc comments.
 	if w.env != nil {
 		w.env.SetFullscreenHandler(w.attachFullscreen)
+		w.env.SetExternalOutputSink(w.appendExternalStderr)
 	}
 	v, err := eval.Eval(prog, w.env)
 	if w.env != nil {
 		w.env.SetFullscreenHandler(nil)
+		w.env.SetExternalOutputSink(nil)
 	}
 	if err != nil {
 		w.lines = append(w.lines, replLine{text: err.Error(), style: errorStyle})
@@ -874,6 +911,23 @@ func (w *kyuReplWidget) evaluate(src string) {
 	if v.Kind() != "null" {
 		w.lines = append(w.lines, resultLines(v)...)
 	}
+}
+
+// appendExternalStderr is w's Env.ExternalOutputSink for the duration of
+// each evaluate() call (see the set-before/clear-after registration
+// above) -- a foreground %cmd's captured stderr lands here instead of
+// being written to the real os.Stderr, which would otherwise corrupt
+// this widget's own screen: replui owns the terminal via a diffed cell
+// renderer (see package doc comment), and a raw write outside that
+// renderer's own "what's on screen" bookkeeping desyncs it from reality.
+// Styled the same as an ordinary result (resultStyle, not errorStyle):
+// stderr isn't necessarily an error in kyu's sense (plenty of real CLI
+// tools use it for progress/informational output), and this is relaying
+// whatever bytes the child wrote, unstyled, the same as a direct
+// terminal write would have shown them -- not editorializing based on
+// which fd they came from.
+func (w *kyuReplWidget) appendExternalStderr(stderr []byte) {
+	w.lines = append(w.lines, textLines(string(stderr), resultStyle)...)
 }
 
 // attachFullscreen is registered as eval.FullscreenHandlerFunc for the
@@ -915,6 +969,14 @@ func resultLines(v value.Value) []replLine {
 	if b, ok := v.(value.Bytes); ok {
 		text = string(b)
 	}
+	return textLines(text, resultStyle)
+}
+
+// textLines splits text into one replLine per line, in style -- the
+// shared tail of resultLines and appendExternalStderr, factored out
+// once a second caller needed the exact same "trim one trailing
+// newline, split on the rest, empty text produces no lines" behavior.
+func textLines(text string, style cell.Style) []replLine {
 	text = strings.TrimSuffix(text, "\n")
 	if text == "" {
 		return nil
@@ -922,7 +984,7 @@ func resultLines(v value.Value) []replLine {
 	rows := strings.Split(text, "\n")
 	lines := make([]replLine, len(rows))
 	for i, row := range rows {
-		lines[i] = replLine{text: row, style: resultStyle}
+		lines[i] = replLine{text: row, style: style}
 	}
 	return lines
 }

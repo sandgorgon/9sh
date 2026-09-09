@@ -42,10 +42,43 @@ type Parser struct {
 	peek token.Token
 
 	errs []error
+
+	// isNativeProgram, when set (via WithNativeProgramLookup), reports
+	// whether a bareword IDENT names a live native program (see
+	// kyu/eval's isNativeProgram) -- checked in parsePrefix's IDENT case
+	// before falling into the ordinary parseIdentOrCall path. nil (the
+	// default) means no native programs are recognized.
+	isNativeProgram func(name string) bool
 }
 
-func New(src string) *Parser {
+// Option configures a Parser at construction time -- New's cur/peek
+// priming below happens before New returns, so anything that needs to
+// affect the very first token(s) (isNativeProgram included: it also has
+// to reach this Parser's own internal Lexer, see WithNativeProgramLookup)
+// must be applied before that priming, not after New returns a *Parser a
+// caller could otherwise configure. A plain post-construction field
+// works fine for Lexer (see lexer.Lexer.NativeProgramLookup) since
+// Lexer.New does no such priming itself.
+type Option func(*Parser)
+
+// WithNativeProgramLookup wires fn into both this Parser's own bareword
+// recognition and its internal Lexer's identical hazard (a native name
+// right before a bare Path argument -- see
+// lexer.Lexer.NativeProgramLookup's doc comment for why that needs
+// lexer-level cooperation too). Omit it (every existing New caller) for
+// the old behavior: no native programs recognized.
+func WithNativeProgramLookup(fn func(name string) bool) Option {
+	return func(p *Parser) {
+		p.isNativeProgram = fn
+		p.l.NativeProgramLookup = fn
+	}
+}
+
+func New(src string, opts ...Option) *Parser {
 	p := &Parser{l: lexer.New(src)}
+	for _, opt := range opts {
+		opt(p)
+	}
 	p.next()
 	p.next()
 	return p
@@ -287,6 +320,9 @@ func (p *Parser) parseExpr(prec precedence) ast.Expr {
 func (p *Parser) parsePrefix() ast.Expr {
 	switch p.cur.Kind {
 	case token.IDENT:
+		if p.isNativeProgram != nil && p.isNativeProgram(p.cur.Literal) {
+			return p.parseNativeCall()
+		}
 		return p.parseIdentOrCall()
 	case token.INT:
 		return p.parseIntLit()
@@ -564,7 +600,29 @@ func (p *Parser) parseExternalCall() ast.Expr {
 		p.errorf("expected command name after '%%', got %s", p.cur.Kind)
 		return nil
 	}
-	name := p.cur.Literal
+	return p.parseExternalCallArgs(tok, p.cur.Literal)
+}
+
+// parseNativeCall is parseExternalCall's prefix-free sibling: reached
+// from parsePrefix's IDENT case (see isNativeProgram there) when p.cur
+// is already the command name — a native program (see kyu/eval's
+// isNativeProgram, e.g. 9ed) needs no '%'/'$' sigil to consume first.
+// Deliberately builds the exact same *ast.ExternalCall node
+// parseExternalCall does, not a new AST type: that's what makes
+// backgrounding (parseValueExpr's *ast.ExternalCall type check, right
+// below), the fullscreen guard (isFullscreenProgram(env, x.Call.Name) in
+// evalBackground), and ordinary job execution (runExternal dispatches on
+// x.Name) all keep working with zero duplicated logic on the eval side.
+func (p *Parser) parseNativeCall() ast.Expr {
+	return p.parseExternalCallArgs(p.cur, p.cur.Literal)
+}
+
+// parseExternalCallArgs builds an ExternalCall named name (tok is
+// whichever token the call started at — the '%'/'$' sigil for
+// parseExternalCall, the bare command-name IDENT itself for
+// parseNativeCall) and consumes its space-separated argument list, the
+// shared tail both callers need identically.
+func (p *Parser) parseExternalCallArgs(tok token.Token, name string) ast.Expr {
 	call := &ast.ExternalCall{Tok: tok, Name: name}
 	for !endsExternalCallArgs(p.peek.Kind) {
 		p.next()

@@ -503,6 +503,22 @@ than the full remote-peer trust machinery.
   fullscreen program (`fullscreen_programs`, e.g. `vim`) is the third
   tier automated: `checkout`'s own materialize-and-write-back runs
   transparently around it instead of erroring.
+- **Three call-name categories, one of them config-driven.** Everything
+  callable in kyu is either a language builtin (`where`, `format`, no
+  namespace/OS involvement), a namespace app (`cat`, `cp`, `rm`, `mv`,
+  `stat`, ... — in-process Go functions that touch the namespace,
+  already called bareword), or an external program reached with `%`
+  (Bytes-only, legacy). A fourth spelling of the third category —
+  `native_programs` — is for external programs that are themselves
+  namespace-aware (`9ed` is the first): listed there, callable bareword
+  like a namespace app with no `%`, and given the same transparent
+  `checkout`-on-namespace-only-Path treatment `fullscreen_programs` gets,
+  instead of `%cmd`'s ordinary error. Extend it the same way:
+  `native_programs := native_programs + ["mytool"]`. An existing
+  identifier (a builtin, or anything already defined) always wins over a
+  same-named `native_programs` entry, silently — matching how
+  PATH-resolved `%cmd` names already coexist with kyu identifiers with
+  no collision today.
 - **Structured pipes.** Records and tables flow through `|` by default
   (nushell/PowerShell-style); `%` marks a call into legacy/external
   Bytes-land.

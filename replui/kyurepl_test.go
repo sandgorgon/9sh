@@ -243,6 +243,19 @@ func TestKyuReplCtrlWKillsWordBackward(t *testing.T) {
 	}
 }
 
+func TestKyuReplCtrlLClearsTranscript(t *testing.T) {
+	w := newTestReplWidget(t)
+	w.lines = []replLine{{text: "leftover output"}, {text: "more leftover"}}
+	w.scrollOffset = 3
+	sendCtrl(w, 'l')
+	if len(w.lines) != 0 {
+		t.Fatalf("lines after Ctrl+L = %v, want empty", w.lines)
+	}
+	if w.scrollOffset != 0 {
+		t.Fatalf("scrollOffset after Ctrl+L = %d, want 0", w.scrollOffset)
+	}
+}
+
 func TestKyuReplCtrlUKillsToLineStart(t *testing.T) {
 	w := newTestReplWidget(t)
 	sendRunes(w, "abcdef")
@@ -428,7 +441,7 @@ func spansText(spans []replSpan) string {
 
 func TestHighlightSpansKeywordStringIdent(t *testing.T) {
 	src := `if x == "hi" { true }`
-	spans := highlightSpans(src)[1]
+	spans := highlightSpans(src, nil)[1]
 	if got := spansText(spans); got != src {
 		t.Fatalf("spans reconstruct to %q, want %q", got, src)
 	}
@@ -459,7 +472,7 @@ func TestHighlightSpansStringWithEscapeReconstructsRawText(t *testing.T) {
 	// plus quotes) -- the *decoded* Literal is only 3 runes (a, \n, b)
 	// -- stringRawLen has to use the raw length, not len(Literal).
 	src := `"a\nb"`
-	spans := highlightSpans(src)[1]
+	spans := highlightSpans(src, nil)[1]
 	if got := spansText(spans); got != src {
 		t.Fatalf("spans reconstruct to %q, want %q (raw source, not decoded)", got, src)
 	}
@@ -467,7 +480,7 @@ func TestHighlightSpansStringWithEscapeReconstructsRawText(t *testing.T) {
 
 func TestHighlightSpansSigilsAndPath(t *testing.T) {
 	src := `%ls "/local"`
-	spans := highlightSpans(src)[1]
+	spans := highlightSpans(src, nil)[1]
 	if got := spansText(spans); got != src {
 		t.Fatalf("spans reconstruct to %q, want %q", got, src)
 	}
@@ -484,7 +497,7 @@ func TestHighlightSpansSigilsAndPath(t *testing.T) {
 
 func TestHighlightSpansMultiLineAssignsCorrectLine(t *testing.T) {
 	src := "while true {\nbreak\n}"
-	byLine := highlightSpans(src)
+	byLine := highlightSpans(src, nil)
 	if got := spansText(byLine[1]); got != "while true {" {
 		t.Errorf("line 1 = %q, want %q", got, "while true {")
 	}
@@ -515,14 +528,14 @@ func TestHighlightSpansLexErrorStillReconstructsText(t *testing.T) {
 	// just runs to EOF looking for the closing quote) -- highlighting
 	// must not panic or drop text even when input isn't valid syntax.
 	src := `"unterminated`
-	spans := highlightSpans(src)[1]
+	spans := highlightSpans(src, nil)[1]
 	if got := spansText(spans); got != src {
 		t.Fatalf("spans reconstruct to %q, want %q", got, src)
 	}
 }
 
 func TestHighlightSpansEmptyInput(t *testing.T) {
-	if spans := highlightSpans("")[1]; len(spans) != 0 {
+	if spans := highlightSpans("", nil)[1]; len(spans) != 0 {
 		t.Errorf("empty input should produce no spans, got %#v", spans)
 	}
 }

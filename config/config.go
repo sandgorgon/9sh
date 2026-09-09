@@ -29,7 +29,20 @@ import (
 // common.ky/hosts/<host>.ky (loaded after this — see cmd/9sh's
 // bootstrap) can extend or replace it, and the user can edit config.ky
 // directly.
-const defaultConfig = `fullscreen_programs := ["vim", "vi", "nvim", "emacs", "top", "htop", "less", "man", "ssh", "nano", "mutt"]
+//
+// native_programs (see kyu/eval's Env.IsNativeProgram) names external
+// programs that are themselves namespace-aware — 9ed (a segmented TUI
+// editor, github.com/sandgorgon/9ed) is the first, and the seed reason
+// this list exists at all: callable bareword, no % sigil, and its
+// namespace-only Path arguments get the same transparent-checkout
+// treatment fullscreen_programs gets rather than %cmd's ordinary
+// checkout-and-error guard. Orthogonal to fullscreen_programs (one
+// controls terminal ownership, the other prefix-free calling +
+// namespace-path handling) — 9ed genuinely needs both, since it's a
+// terminal-owning TUI editor that's also namespace-aware, but a future
+// native program might need only one or the other.
+const defaultConfig = `fullscreen_programs := ["vim", "vi", "nvim", "emacs", "top", "htop", "less", "man", "ssh", "nano", "mutt", "9ed"]
+native_programs := ["9ed"]
 `
 
 // Dir returns this install's settings directory, ~/.config/9/config —

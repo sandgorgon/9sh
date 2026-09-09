@@ -567,6 +567,22 @@ func evalArith(op token.Kind, l, r value.Value) (value.Value, error) {
 				return ls + rs, nil
 			}
 		}
+		// List + List concatenates -- the documented way to extend a
+		// config-driven list variable (fullscreen_programs,
+		// native_programs: `x := x + ["mytool"]`, per config/config.go's
+		// and cmd/9sh/main.go's own doc comments) without redeclaring it
+		// whole. A pre-existing gap surfaced while building
+		// native_programs: this was already claimed working for
+		// fullscreen_programs before this session, but List+List had no
+		// case here at all.
+		if ll, ok := l.(*value.List); ok {
+			if rl, ok := r.(*value.List); ok {
+				elems := make([]value.Value, 0, len(ll.Elems)+len(rl.Elems))
+				elems = append(elems, ll.Elems...)
+				elems = append(elems, rl.Elems...)
+				return value.NewList(elems), nil
+			}
+		}
 	}
 	li, liOK := l.(value.Int)
 	ri, riOK := r.(value.Int)

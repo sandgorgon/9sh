@@ -38,6 +38,54 @@ func isFullscreenProgram(env *Env, name string) bool {
 	return false
 }
 
+// isNativeProgram reports whether name is listed in the kyu-level
+// native_programs variable (see package config's config.ky, same
+// loading mechanism as fullscreen_programs above) — external programs
+// that are themselves namespace-aware (9ed is the first), callable
+// bareword with no % sigil (see kyu/parser's IsNativeProgram-threaded
+// parseNativeCall) and given transparent checkout instead of %cmd's
+// ordinary namespace-only-Path error (see runExternalViaJob/
+// runExternalDirect in external.go).
+//
+// An existing identifier always wins silently: name must not already
+// resolve via env.Get (a builtin, or anything the user has defined) —
+// matching how PATH-resolved %cmd names already coexist with kyu
+// identifiers without collision today, this just extends the same
+// non-collision rule to bareword native-program names. A missing or
+// wrong-typed native_programs variable is "no native programs
+// configured," never an error, same posture isFullscreenProgram takes
+// for its own config variable — this is checked on every bareword
+// identifier the lexer/parser see, so a bad config value must not be
+// the reason ordinary kyu code stops working.
+func isNativeProgram(env *Env, name string) bool {
+	if _, defined := env.Get(name); defined {
+		return false
+	}
+	v, ok := env.Get("native_programs")
+	if !ok {
+		return false
+	}
+	list, ok := v.(*value.List)
+	if !ok {
+		return false
+	}
+	for _, elem := range list.Elems {
+		if s, ok := elem.(value.String); ok && string(s) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// IsNativeProgram is isNativeProgram, exported for package replui: the
+// kyu-repl widget needs to build a lexer.Lexer/parser.Parser-compatible
+// `func(string) bool` lookup from the shared *Env it already holds (see
+// kyurepl.go's nativeProgramLookup), and isNativeProgram itself is
+// unexported since nothing inside this package needs the exported form.
+func IsNativeProgram(env *Env, name string) bool {
+	return isNativeProgram(env, name)
+}
+
 // checkoutEntry tracks one namespace-only Path argument that
 // runExternalFullscreen materialized to a real scratch location (see
 // materializeNamespacePath in checkout.go), so it can be written back

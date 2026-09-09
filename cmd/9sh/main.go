@@ -350,7 +350,14 @@ func scriptArgsList(scriptArgs []string) *value.List {
 }
 
 func runSource(src string, env *eval.Env) bool {
-	p := parser.New(src)
+	// Covers both script/-c execution (line ~95) and the plain line
+	// REPL's per-line parse (repl(), below) -- native_programs (see
+	// kyu/eval's IsNativeProgram) is already loaded into env by the time
+	// either reaches here, since config.Load/dotfiles.Load both run
+	// during bootstrap before main ever calls runSource.
+	p := parser.New(src, parser.WithNativeProgramLookup(func(name string) bool {
+		return eval.IsNativeProgram(env, name)
+	}))
 	prog := p.ParseProgram()
 	if errs := p.Errors(); len(errs) > 0 {
 		for _, e := range errs {

@@ -28,6 +28,25 @@ type Lexer struct {
 	// that) — this only affects lexSlashOrPath's exemption, not the token's
 	// own Kind. See lexSlashOrPath's doc comment for why it's needed.
 	lastWasExternalName bool
+
+	// NativeProgramLookup, when set, reports whether a just-lexed IDENT
+	// names a live "native program" (see kyu/eval's isNativeProgram —
+	// an external program that's namespace-aware and callable bareword,
+	// no % sigil, e.g. 9ed). nil (the default, and every existing
+	// lexer.New caller) means no native programs are recognized — zero
+	// behavior change for any caller that doesn't opt in. When it does
+	// match, lexIdent sets lastWasExternalName exactly the way
+	// lexExternalName already does for a %cmd's own name, so a following
+	// bare '/path' argument lexes as PATH, not division — the identical
+	// hazard %/$ external names already had to solve, reused here rather
+	// than duplicated. Checked unconditionally, not gated to a
+	// statement-start position the way '%' itself is: unlike '%', which
+	// is genuinely ambiguous with the modulo operator, a name in this
+	// list can only ever mean the native program (kyu/eval's
+	// isNativeProgram already refuses to match anything that's also a
+	// real identifier binding), so there's no comparable ambiguity to
+	// gate against.
+	NativeProgramLookup func(name string) bool
 }
 
 // valuesCanEndStatement/valuesCanPrecedeSlash are the token kinds after which
@@ -96,6 +115,20 @@ func (l *Lexer) Next() token.Token {
 
 	switch {
 	case (isLetter(r) || isDigit(r)) && l.lastKind == token.PERCENT:
+		return l.lexExternalName(line, col)
+	// A digit-leading native-program name (9ed, 9term, ... -- Plan-9-
+	// style tool names, the exact reason lexExternalName exists at all)
+	// would otherwise fall straight into lexNumber below and choke on
+	// the trailing letters, since number-vs-identifier can't be told
+	// apart from the first rune alone once digit-leading identifiers are
+	// allowed outside '%'. Only digit-leading needs this pre-lex
+	// lookahead -- a letter-leading name is handled after the fact, in
+	// lexIdent, since lexIdent's own ordinary scan already produces the
+	// right token either way and checking post-lex avoids ever calling
+	// NativeProgramLookup for a keyword (if/while/true/...). See
+	// matchesDigitLeadingNativeName's own doc comment for why this is
+	// scoped to isDigit(r) only, not isLetter(r) too.
+	case isDigit(r) && l.NativeProgramLookup != nil && l.matchesDigitLeadingNativeName():
 		return l.lexExternalName(line, col)
 	case isDigit(r):
 		return l.lexNumber(line, col)
@@ -279,13 +312,61 @@ func (l *Lexer) lexExternalName(line, col int) token.Token {
 	return tok
 }
 
+// matchesDigitLeadingNativeName reports whether the current position
+// starts a digit-leading native-program name (9ed, 9term, ...) —
+// Next()'s pre-lex lookahead, needed only for the digit-leading case
+// (see its own doc comment for why letter-leading doesn't need this).
+//
+// Deliberately letters+digits only, no '-', unlike lexExternalName's own
+// scan: a hyphen here would let a no-space subtraction like `docker-
+// compose` (kyu's '-' needs no surrounding whitespace) silently lex as
+// one native-call token instead of two identifiers and a MINUS, if
+// "docker-compose" ever were itself a configured native-program name.
+// Scoping prefix-free recognition to un-hyphenated names avoids that
+// collision entirely — a hyphenated program name is still reachable via
+// the unambiguous %name form, which has no such conflict since nothing
+// but the sigil can precede it.
+//
+// Also skips the lookup entirely for a plain integer literal (a
+// non-letter digit run, the overwhelmingly common case at a digit-
+// leading position): a native program name always mixes in at least one
+// letter, so a lone number can never match and isn't worth the
+// NativeProgramLookup call.
+func (l *Lexer) matchesDigitLeadingNativeName() bool {
+	i := l.pos
+	sawLetter := false
+	for i < len(l.src) && (isLetter(l.src[i]) || isDigit(l.src[i])) {
+		if isLetter(l.src[i]) {
+			sawLetter = true
+		}
+		i++
+	}
+	if !sawLetter {
+		return false
+	}
+	return l.NativeProgramLookup(string(l.src[l.pos:i]))
+}
+
 func (l *Lexer) lexIdent(line, col int) token.Token {
 	start := l.pos
 	for isLetter(l.peek()) || isDigit(l.peek()) {
 		l.advance()
 	}
 	lit := string(l.src[start:l.pos])
-	return l.emitAt(token.LookupIdent(lit), lit, line, col)
+	kind := token.LookupIdent(lit)
+	tok := l.emitAt(kind, lit, line, col)
+	// Checked after lexing, not before: only a plain identifier (kind ==
+	// IDENT, not a keyword LookupIdent matched, e.g. "if"/"while"/"true")
+	// can ever be a native program name, so this never spends a lookup on
+	// a keyword. lexIdent's own scan already excludes '-', so there's no
+	// hyphen-vs-subtraction ambiguity to worry about here the way
+	// matchesDigitLeadingNativeName's own doc comment describes for the
+	// digit-leading case — lit is always exactly what a plain kyu
+	// identifier could be.
+	if kind == token.IDENT && l.NativeProgramLookup != nil && l.NativeProgramLookup(lit) {
+		l.lastWasExternalName = true
+	}
+	return tok
 }
 
 func (l *Lexer) lexString(line, col int) token.Token {

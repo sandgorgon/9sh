@@ -41,6 +41,7 @@ var keybindingHelp = []string{
 	"Backspace/Delete        delete before/after the cursor",
 	"Ctrl+W                  delete the word before the cursor",
 	"Ctrl+U / Ctrl+K          delete to line start / delete to line end",
+	"Ctrl+L                   clear the transcript (history is untouched)",
 	"Up/Down                  recall previous/next submitted input",
 	"                         (only when not mid multi-line input)",
 	"PgUp/PgDown, mouse wheel  scroll the transcript",

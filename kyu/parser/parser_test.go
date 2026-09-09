@@ -217,6 +217,127 @@ func TestExternalCallInPipe(t *testing.T) {
 	}
 }
 
+// parseOKNative is parseOK's sibling for tests exercising
+// WithNativeProgramLookup.
+func parseOKNative(t *testing.T, src string, isNative func(string) bool) *ast.Program {
+	t.Helper()
+	p := New(src, WithNativeProgramLookup(isNative))
+	prog := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		t.Fatalf("src %q: parse errors: %v", src, p.Errors())
+	}
+	return prog
+}
+
+// TestNativeCallParsesAsExternalCall is the parser half of the
+// prefix-free "native program" call form (see kyu/eval's
+// isNativeProgram, external.go's runExternalViaJob/runExternalDirect
+// for how it's executed once parsed). A bareword name matching the live
+// lookup must produce the exact same *ast.ExternalCall shape %name would
+// -- deliberately, not a new AST node, so backgrounding, the fullscreen
+// guard, and job execution all keep working with zero duplicated logic
+// (see parseNativeCall's own doc comment).
+func TestNativeCallParsesAsExternalCall(t *testing.T) {
+	isNative := func(name string) bool { return name == "9ed" }
+	prog := parseOKNative(t, `9ed "/some/ns/path"`, isNative)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	ext, ok := es.X.(*ast.ExternalCall)
+	if !ok {
+		t.Fatalf("want ExternalCall, got %T", es.X)
+	}
+	if ext.Name != "9ed" {
+		t.Errorf("want name 9ed, got %s", ext.Name)
+	}
+	if len(ext.Args) != 1 {
+		t.Fatalf("want 1 arg, got %d", len(ext.Args))
+	}
+}
+
+// TestNativeCallSupportsBackgrounding confirms `9ed foo &` reaches
+// *ast.Background the same way `%9ed foo &` does -- parseValueExpr only
+// checks the expression's Go type (*ast.ExternalCall), so this works for
+// free once parseNativeCall builds that same type; a regression here
+// would mean the two call forms had silently diverged.
+func TestNativeCallSupportsBackgrounding(t *testing.T) {
+	isNative := func(name string) bool { return name == "9ed" }
+	prog := parseOKNative(t, `9ed "/x" &`, isNative)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	if _, ok := es.X.(*ast.Background); !ok {
+		t.Fatalf("want Background, got %#v", es.X)
+	}
+}
+
+// TestNonNativeNameParsesAsOrdinaryIdent confirms a name the live
+// lookup doesn't match is completely unaffected -- WithNativeProgramLookup
+// being set at all must not change parsing for anything outside it.
+func TestNonNativeNameParsesAsOrdinaryIdent(t *testing.T) {
+	isNative := func(name string) bool { return name == "9ed" }
+	prog := parseOKNative(t, `notnative()`, isNative)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	if _, ok := es.X.(*ast.Call); !ok {
+		t.Fatalf("want an ordinary Call, got %#v", es.X)
+	}
+}
+
+// TestNativeCallAsPipeRHS and TestNativeCallAsPipeLHS confirm a native
+// call composes into a pipe exactly like %cmd does (TestExternalCallInPipe)
+// -- parseNativeCall is reached from the same parsePrefix/parseExpr
+// machinery a pipe's operands already use, with no %-token-specific
+// logic anywhere in that path (see eval.go's *ast.ExternalCall handling,
+// all plain Go type switches/assertions, never a literal-sigil check).
+func TestNativeCallAsPipeRHS(t *testing.T) {
+	isNative := func(name string) bool { return name == "9ed" }
+	prog := parseOKNative(t, `"hello" | 9ed "/some/path"`, isNative)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	pipe, ok := es.X.(*ast.PipeExpr)
+	if !ok {
+		t.Fatalf("want PipeExpr, got %#v", es.X)
+	}
+	if _, ok := pipe.Right.(*ast.ExternalCall); !ok {
+		t.Fatalf("want right=ExternalCall, got %#v", pipe.Right)
+	}
+}
+
+func TestNativeCallAsPipeLHS(t *testing.T) {
+	isNative := func(name string) bool { return name == "9ed" }
+	prog := parseOKNative(t, `9ed "/some/path" | trim`, isNative)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	pipe, ok := es.X.(*ast.PipeExpr)
+	if !ok {
+		t.Fatalf("want PipeExpr, got %#v", es.X)
+	}
+	if _, ok := pipe.Left.(*ast.ExternalCall); !ok {
+		t.Fatalf("want left=ExternalCall, got %#v", pipe.Left)
+	}
+}
+
+// TestNativeCallInsideClosure confirms a native call works inside a
+// closure body ({ |v| ... }, the each/where/etc. argument shape) the
+// same as any other expression -- a closure's body is parsed by the same
+// Parser instance (same p.isNativeProgram field), not a separate one, so
+// this works by construction rather than needing its own wiring.
+func TestNativeCallInsideClosure(t *testing.T) {
+	isNative := func(name string) bool { return name == "9ed" }
+	prog := parseOKNative(t, `paths | each { |v| 9ed v }`, isNative)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	pipe := es.X.(*ast.PipeExpr)
+	call, ok := pipe.Right.(*ast.Call)
+	if !ok {
+		t.Fatalf("want Call (each's pipe-RHS sugar), got %#v", pipe.Right)
+	}
+	closure, ok := call.Args[0].(*ast.Closure)
+	if !ok {
+		t.Fatalf("want Closure arg, got %#v", call.Args[0])
+	}
+	if len(closure.Body) != 1 {
+		t.Fatalf("want 1 statement in closure body, got %d", len(closure.Body))
+	}
+	bodyExpr := closure.Body[0].(*ast.ExprStmt)
+	if _, ok := bodyExpr.X.(*ast.ExternalCall); !ok {
+		t.Fatalf("want ExternalCall inside closure body, got %#v", bodyExpr.X)
+	}
+}
+
 func TestWhileExpr(t *testing.T) {
 	prog := parseOK(t, `while i < 5 { i = i + 1 }`)
 	es := prog.Stmts[0].(*ast.ExprStmt)

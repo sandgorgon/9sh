@@ -46,32 +46,89 @@ import (
 // namespace-only Path argument is transparently materialized via
 // checkout() rather than erroring, so it's handled before this
 // function's own arg-evaluation loop ever runs.
+//
+// x.Name is also checked against native_programs (see isNativeProgram,
+// fullscreen.go): unlike an ordinary %cmd, a native program (9ed is the
+// first) is namespace-aware and meant to be more capable than a legacy
+// binary, not more error-prone, so a namespace-only Path argument gets
+// the same transparent materialize-then-write-back treatment
+// runExternalFullscreen already gives fullscreen programs (reusing its
+// checkoutEntry/cleanupCheckouts/writeBackCheckouts helpers) instead of
+// checkNamespaceOnlyPath's hard error — still routed through /jobs like
+// any other foreground command (native programs aren't necessarily
+// fullscreen; that's fullscreen_programs' own, orthogonal, concern).
 func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, error) {
 	if isFullscreenProgram(env, x.Name) {
 		return runExternalFullscreen(env, x.Name, x.Args)
 	}
+	native := isNativeProgram(env, x.Name)
 	args := make([]string, len(x.Args))
+	var checkouts []checkoutEntry
 	for i, a := range x.Args {
 		v, err := evalExpr(a, env)
 		if err != nil {
+			cleanupCheckouts(checkouts)
 			return nil, err
 		}
 		if p, ok := v.(value.Path); ok {
+			if native && resolvesInNamespaceOnly(env, p) {
+				mat, merr := materializeNamespacePath(context.Background(), env.Namespace(), p)
+				if merr != nil {
+					cleanupCheckouts(checkouts)
+					return nil, fmt.Errorf("%%%s: %w", x.Name, merr)
+				}
+				checkouts = append(checkouts, checkoutEntry{nsPath: p, mat: mat})
+				args[i] = mat.scratchPath
+				continue
+			}
 			if bad := checkNamespaceOnlyPath(env, "%", x.Name, i, p); bad != nil {
+				cleanupCheckouts(checkouts)
 				return *bad, nil
 			}
 		}
 		s, err := argString(v)
 		if err != nil {
+			cleanupCheckouts(checkouts)
 			return nil, fmt.Errorf("%%%s: argument %d: %w", x.Name, i, err)
 		}
 		args[i] = s
 	}
 
+	var result value.Value
+	var callErr error
 	if env.Namespace() != nil {
-		return runExternalViaJob(env, x.Name, args, in)
+		result, callErr = runExternalViaJob(env, x.Name, args, in)
+	} else {
+		result, callErr = runExternalDirect(env, x.Name, args, in)
 	}
-	return runExternalDirect(env, x.Name, args, in)
+	if len(checkouts) == 0 {
+		return result, callErr
+	}
+	// Always write back/clean up, whether or not the command itself
+	// succeeded (writeBackCheckouts's own RemoveAll runs regardless) —
+	// but don't let a write-back failure clobber a real error or result
+	// the command already produced; only surface it as the call's own
+	// return value when the call otherwise looked like a clean success,
+	// same as checkout()/runExternalFullscreen's own convention. When it
+	// can't be returned (the call already failed or errored on its own),
+	// it still must not be silently dropped — a native program's edits
+	// to a materialized scratch file failing to write back is real data
+	// loss. Logged through Env.ExternalOutputSink when one's registered
+	// (inside the TUI), same as runExternalViaJob's own stderr forwarding
+	// just above — a direct os.Stderr write here would reintroduce the
+	// exact screen-corruption bug that mechanism exists to prevent.
+	if ev := writeBackCheckouts(x.Name, checkouts); ev != nil {
+		if _, isErr := result.(value.ErrorVal); callErr == nil && !isErr {
+			return *ev, nil
+		}
+		msg := fmt.Sprintf("9sh: %s\n", ev.Msg)
+		if sink := env.ExternalOutputSink(); sink != nil {
+			sink([]byte(msg))
+		} else {
+			os.Stderr.WriteString(msg)
+		}
+	}
+	return result, callErr
 }
 
 func runExternalDirect(env *Env, name string, args []string, in value.Value) (value.Value, error) {
@@ -82,7 +139,18 @@ func runExternalDirect(env *Env, name string, args []string, in value.Value) (va
 	}
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = os.Stderr
+	// See Env.SetExternalOutputSink's doc comment: a registered sink
+	// (set inside the TUI) means stderr must not go straight to the real
+	// fd, since replui owns the screen via its own diffed renderer and a
+	// raw write there desyncs it. Outside the TUI (no sink registered),
+	// direct inheritance is correct and unchanged.
+	var stderrBuf bytes.Buffer
+	sink := env.ExternalOutputSink()
+	if sink != nil {
+		cmd.Stderr = &stderrBuf
+	} else {
+		cmd.Stderr = os.Stderr
+	}
 
 	if err := cmd.Start(); err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %v", name, err)}, nil
@@ -96,6 +164,9 @@ func runExternalDirect(env *Env, name string, args []string, in value.Value) (va
 	code := cmd.ProcessState.ExitCode()
 	env.SetLastExitCode(&code)
 
+	if sink != nil {
+		sink(stderrBuf.Bytes())
+	}
 	return value.Bytes(stdout.Bytes()), nil
 }
 
@@ -278,6 +349,14 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 	// this, stderr silently vanishes for the common bare-%cmd case: nothing
 	// else reads or returns it, and there's no job handle in the caller's
 	// hands to fetch it from afterward.
+	//
+	// Forwarding target depends on Env.ExternalOutputSink (see its own doc
+	// comment): a direct os.Stderr.Write here used to be unconditional,
+	// which — because this function is the path every foreground %cmd
+	// actually takes once a namespace is attached, i.e. always inside
+	// replui's TUI — corrupted the TUI's own screen: replui owns the
+	// terminal via a diffed cell renderer, and a raw write outside that
+	// renderer's own bookkeeping desyncs "what's on screen" from reality.
 	stderrFile, err := openFile(ctx, root, p9.OREAD, jobPath(jobRoot, id, "stderr")...)
 	if err != nil {
 		return nil, err
@@ -287,7 +366,11 @@ func runExternalViaJob(env *Env, name string, args []string, in value.Value) (va
 	if err != nil {
 		return nil, fmt.Errorf("%%%s: reading stderr: %w", name, err)
 	}
-	os.Stderr.Write(errOut)
+	if sink := env.ExternalOutputSink(); sink != nil {
+		sink(errOut)
+	} else {
+		os.Stderr.Write(errOut)
+	}
 
 	return value.Bytes(out), nil
 }

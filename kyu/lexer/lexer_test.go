@@ -121,6 +121,136 @@ func TestPercentSigilVsModulo(t *testing.T) {
 	assertKinds(t, `10 % 3`, []token.Kind{token.INT, token.MOD, token.INT, token.EOF})
 }
 
+// lexAllNative is lexAll's sibling for tests exercising
+// NativeProgramLookup: same loop, but with that field set before the
+// first Next() call (required -- see NativeProgramLookup's own doc
+// comment on why a caller must set it before scanning starts, unlike a
+// Parser's WithNativeProgramLookup which handles that ordering itself).
+func lexAllNative(t *testing.T, src string, isNative func(string) bool) []token.Token {
+	t.Helper()
+	l := New(src)
+	l.NativeProgramLookup = isNative
+	var toks []token.Token
+	for {
+		tok := l.Next()
+		toks = append(toks, tok)
+		if tok.Kind == token.EOF {
+			break
+		}
+	}
+	return toks
+}
+
+// TestNativeProgramNameLexesAsExternalName is the lexer half of the
+// prefix-free "native program" call form (see kyu/eval's
+// isNativeProgram, kyu/parser's WithNativeProgramLookup/parseNativeCall):
+// a bareword IDENT matching NativeProgramLookup must lex exactly the way
+// a %cmd command name does (lexExternalName's IDENT, lastWasExternalName
+// set so a following bare Path doesn't re-lex as division) -- including
+// the digit-leading case (9ed) that's the entire reason this needs
+// lexer-level cooperation at all: outside '%', a leading digit would
+// otherwise commit to number-lexing and choke on the trailing letters
+// (see TestExternalCommandNameMayStartWithDigit's non-native version of
+// the same hazard).
+func TestNativeProgramNameLexesAsExternalName(t *testing.T) {
+	isNative := func(name string) bool { return name == "9ed" }
+
+	toks := lexAllNative(t, `9ed /some/ns/path`, isNative)
+	want := []token.Kind{token.IDENT, token.PATH, token.EOF}
+	if len(toks) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(toks), len(want), toks)
+	}
+	for i, k := range want {
+		if toks[i].Kind != k {
+			t.Errorf("token %d = %s(%q), want kind %s", i, toks[i].Kind, toks[i].Literal, k)
+		}
+	}
+	if toks[0].Literal != "9ed" {
+		t.Errorf("token 0 literal = %q, want %q", toks[0].Literal, "9ed")
+	}
+}
+
+// TestNonNativeNameUnaffectedByLookup confirms a name the live lookup
+// doesn't match lexes exactly as it always has (an ordinary IDENT, a
+// following bare Path re-lexing as division) -- NativeProgramLookup
+// being set at all must not change behavior for anything outside it.
+func TestNonNativeNameUnaffectedByLookup(t *testing.T) {
+	isNative := func(name string) bool { return name == "9ed" }
+	toks := lexAllNative(t, `notnative /a`, isNative)
+	want := []token.Kind{token.IDENT, token.SLASH, token.IDENT, token.EOF}
+	if len(toks) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(toks), len(want), toks)
+	}
+	for i, k := range want {
+		if toks[i].Kind != k {
+			t.Errorf("token %d = %s(%q), want kind %s", i, toks[i].Kind, toks[i].Literal, k)
+		}
+	}
+}
+
+// TestHyphenatedNativeNameNeverCollapsesSubtraction is the regression
+// test for a real bug caught in code review: an earlier version of
+// NativeProgramLookup's dispatch reused lexExternalName's own hyphen-
+// inclusive scan for its pre-lex lookahead too, so a no-space
+// subtraction like `docker-compose` (kyu's '-' needs no surrounding
+// whitespace) would silently collapse into one native-call token
+// instead of IDENT MINUS IDENT whenever "docker-compose" happened to be
+// a configured native-program name. A hyphenated bareword name is now
+// deliberately never recognized (lexIdent's own scan, and
+// matchesDigitLeadingNativeName's lookahead, both exclude '-') --
+// reachable only via the unambiguous %name form instead, which has no
+// such conflict since nothing but the sigil can precede it.
+func TestHyphenatedNativeNameNeverCollapsesSubtraction(t *testing.T) {
+	isNative := func(name string) bool { return name == "docker-compose" }
+	// Ordinary subtraction, unaffected even though the concatenated
+	// span would match if this were ever treated as one candidate.
+	toks := lexAllNative(t, `docker-compose`, isNative)
+	want := []token.Kind{token.IDENT, token.MINUS, token.IDENT, token.EOF}
+	if len(toks) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(toks), len(want), toks)
+	}
+	for i, k := range want {
+		if toks[i].Kind != k {
+			t.Errorf("token %d = %s(%q), want kind %s", i, toks[i].Kind, toks[i].Literal, k)
+		}
+	}
+	// The %-sigil form is unaffected by this restriction -- it was never
+	// ambiguous in the first place (nothing but '%' can precede it).
+	assertKinds(t, `%docker-compose foo`, []token.Kind{
+		token.PERCENT, token.IDENT, token.IDENT, token.EOF,
+	})
+}
+
+// TestKeywordNeverTriggersNativeProgramLookup confirms a keyword (which
+// can never legitimately be a native-program name) is never even handed
+// to NativeProgramLookup -- the lookup panics if called at all, so this
+// fails loudly if a regression reintroduces a pre-lex check that can't
+// yet tell a keyword from a plain identifier.
+func TestKeywordNeverTriggersNativeProgramLookup(t *testing.T) {
+	panicking := func(name string) bool { panic("NativeProgramLookup called for " + name) }
+	toks := lexAllNative(t, `if true { 1 } else { 2 }`, panicking)
+	if len(toks) == 0 || toks[len(toks)-1].Kind != token.EOF {
+		t.Fatalf("lexing failed unexpectedly: %v", toks)
+	}
+}
+
+// TestPlainIntegerNeverTriggersNativeProgramLookup is
+// matchesDigitLeadingNativeName's own regression test: a pure-digit span
+// (an ordinary integer literal, the overwhelmingly common case at a
+// digit-leading position) must never reach NativeProgramLookup at all --
+// a native program name always mixes in a letter, so this is pure
+// wasted work otherwise (flagged in code review as measurable lexing
+// overhead on every number literal once any native program is
+// configured, e.g. the "9ed" default).
+func TestPlainIntegerNeverTriggersNativeProgramLookup(t *testing.T) {
+	panicking := func(name string) bool { panic("NativeProgramLookup called for " + name) }
+	toks := lexAllNative(t, `42 + 100`, panicking)
+	want := []token.Kind{token.INT, token.PLUS, token.INT, token.EOF}
+	if len(toks) != len(want) {
+		t.Fatalf("got %d tokens, want %d: %v", len(toks), len(want), toks)
+	}
+}
+
 func TestExternalCommandNameMayStartWithDigit(t *testing.T) {
 	// Plan-9-style tool names (9ed, 9term, ...) start with a digit; the '%'
 	// sigil must still disambiguate as the external-call form rather than

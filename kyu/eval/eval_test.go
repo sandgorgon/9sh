@@ -50,6 +50,15 @@ func markFullscreen(env *Env, names ...string) {
 	env.Define("fullscreen_programs", value.NewList(elems))
 }
 
+// markNative is markFullscreen's sibling for native_programs.
+func markNative(env *Env, names ...string) {
+	elems := make([]value.Value, len(names))
+	for i, n := range names {
+		elems[i] = value.String(n)
+	}
+	env.Define("native_programs", value.NewList(elems))
+}
+
 // jobsAndEnvVarsEnv is jobsEnv plus /env bound over a fresh scratch
 // directory (dirfs, the same mechanism cmd/9sh's bootstrap uses for
 // /env — see main.go) — for tests exercising getenv/setenv/unsetenv and
@@ -68,6 +77,27 @@ func jobsAndEnvVarsEnv(t *testing.T) *Env {
 		t.Fatalf("bind /env: %v", err)
 	}
 	return env
+}
+
+// runEnvNative is runEnv's sibling for tests exercising a bareword
+// native-program call (see kyu/eval's isNativeProgram, kyu/parser's
+// WithNativeProgramLookup) -- runEnv's plain parser.New(src) has no
+// native-program awareness, so a source string using bareword native
+// syntax needs this variant instead to actually reach parseNativeCall.
+func runEnvNative(t *testing.T, src string, env *Env) value.Value {
+	t.Helper()
+	p := parser.New(src, parser.WithNativeProgramLookup(func(name string) bool {
+		return isNativeProgram(env, name)
+	}))
+	prog := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		t.Fatalf("src %q: parse errors: %v", src, p.Errors())
+	}
+	v, err := Eval(prog, env)
+	if err != nil {
+		t.Fatalf("src %q: eval error: %v", src, err)
+	}
+	return v
 }
 
 func runEnv(t *testing.T, src string, env *Env) value.Value {
@@ -127,6 +157,44 @@ func TestStringPlusNonStringStillErrors(t *testing.T) {
 	// of other kinds, matching kyu's general preference for explicit
 	// conversions over silently guessing what a mixed-type + should do.
 	runErr(t, `"n = " + 5`)
+}
+
+// TestListPlusListConcatenates is the regression test for a real,
+// pre-existing gap surfaced while building native_programs: config.go's
+// and cmd/9sh/main.go's own doc comments already documented "extend a
+// config list with x := x + [\"mytool\"]" for fullscreen_programs before
+// this session, but evalArith had no List+List case at all -- caught by
+// smoke-testing native_programs extension against a real built binary,
+// not by go test (nothing exercised list + list before).
+func TestListPlusListConcatenates(t *testing.T) {
+	v := run(t, `[1, 2] + [3, 4]`)
+	list, ok := v.(*value.List)
+	if !ok {
+		t.Fatalf("got %#v (%s), want a List", v, v.Kind())
+	}
+	want := []int64{1, 2, 3, 4}
+	if len(list.Elems) != len(want) {
+		t.Fatalf("got %d elements, want %d: %v", len(list.Elems), len(want), list.Elems)
+	}
+	for i, w := range want {
+		if int64(list.Elems[i].(value.Int)) != w {
+			t.Errorf("element %d = %v, want %d", i, list.Elems[i], w)
+		}
+	}
+}
+
+// TestListPlusListSelfExtendPattern locks in the exact shape
+// native_programs/fullscreen_programs extension actually uses:
+// x := x + [...], reassigning the same name to its own extended value.
+func TestListPlusListSelfExtendPattern(t *testing.T) {
+	env := NewGlobalEnv(nil)
+	env.Define("native_programs", value.NewList([]value.Value{value.String("9ed")}))
+	runEnv(t, `native_programs := native_programs + ["sh"]`, env)
+	got, _ := env.Get("native_programs")
+	list := got.(*value.List)
+	if len(list.Elems) != 2 || list.Elems[0].(value.String) != "9ed" || list.Elems[1].(value.String) != "sh" {
+		t.Fatalf("got %v, want [9ed sh]", list.Elems)
+	}
 }
 
 func TestComparisonAndLogic(t *testing.T) {

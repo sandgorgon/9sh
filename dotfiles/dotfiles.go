@@ -66,7 +66,14 @@ func runIfExists(path string, env *eval.Env) {
 		}
 		return
 	}
-	p := parser.New(string(src))
+	// native_programs (see kyu/eval's IsNativeProgram) is already loaded
+	// by the time common.ky/hosts/<host>.ky get here -- config.Load runs
+	// before dotfiles.Load in cmd/9sh's bootstrap -- so a dotfile can
+	// both extend the list and reference a native program bareword in
+	// the same file.
+	p := parser.New(string(src), parser.WithNativeProgramLookup(func(name string) bool {
+		return eval.IsNativeProgram(env, name)
+	}))
 	prog := p.ParseProgram()
 	if errs := p.Errors(); len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "9sh: %s:\n", path)

@@ -24,7 +24,18 @@ type Env struct {
 	interruptHandler   func()                // process-wide, like ns; see SetInterruptHandler
 	lastExitCode       *int                  // process-wide, like ns; see SetLastExitCode
 	fullscreenHandler  FullscreenHandlerFunc // process-wide, like ns; see SetFullscreenHandler
+	externalOutputSink ExternalOutputSinkFunc // process-wide, like ns; see SetExternalOutputSink
 }
+
+// ExternalOutputSinkFunc receives a foreground %cmd's captured stderr
+// instead of it being written to the real os.Stderr — see
+// SetExternalOutputSink's doc comment for why this exists. Stdout isn't
+// routed through this: it's already returned as the call's own
+// value.Bytes result (runExternalViaJob/runExternalDirect), displayed by
+// whichever caller printed that result at a controlled point, never
+// written to the real fd mid-evaluation — stderr is the only one of the
+// two with nowhere else to go today.
+type ExternalOutputSinkFunc func(stderr []byte)
 
 // FullscreenHandlerFunc is how a fullscreen %cmd (see
 // runExternalFullscreen) gets its real screen inside the TUI, where
@@ -130,6 +141,33 @@ func (e *Env) SetFullscreenHandler(fn FullscreenHandlerFunc) {
 // if none is currently registered.
 func (e *Env) FullscreenHandler() FullscreenHandlerFunc {
 	return e.root().fullscreenHandler
+}
+
+// SetExternalOutputSink registers where a foreground %cmd's captured
+// stderr goes, process-wide like the namespace. runExternalViaJob/
+// runExternalDirect (external.go) write it directly to os.Stderr by
+// default (nil sink, the zero value) — correct outside the TUI (the
+// plain line REPL, script mode: nothing else owns the terminal, so
+// direct inheritance is the simplest correct thing, same reasoning as
+// PassthroughBlocked's doc comment above). Inside the TUI, replui's
+// Model registers a sink once at startup that appends into the same
+// transcript evaluate() already writes results into: replui owns the
+// screen via a diffed cell renderer, and a raw write to the real fd
+// desyncs that renderer's own "what's on screen" bookkeeping from
+// reality — a real, previously-shipped bug (os.Stderr.Write(errOut) in
+// runExternalViaJob), not a hypothetical one. Unlike
+// SetFullscreenHandler's per-evaluate set/clear pattern, this is set
+// once for the TUI's whole lifetime, since ordinary (non-fullscreen)
+// %cmd output can happen at any point, not just during a known handoff
+// window.
+func (e *Env) SetExternalOutputSink(fn ExternalOutputSinkFunc) {
+	e.root().externalOutputSink = fn
+}
+
+// ExternalOutputSink returns the hook set by SetExternalOutputSink, or
+// nil if none is registered (direct os.Stdout/os.Stderr inheritance).
+func (e *Env) ExternalOutputSink() ExternalOutputSinkFunc {
+	return e.root().externalOutputSink
 }
 
 // SetCwd sets the working directory `%cmd` subprocesses run in —

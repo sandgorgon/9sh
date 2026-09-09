@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.24] - 2026-09-08
+
 ### Added
 
 - `rm(path)`/`mv(src, dst)` namespace builtins — `server.File.Remove`/

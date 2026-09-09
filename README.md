@@ -491,7 +491,11 @@ session repo already logged for it); the remote-namespace ACL model
 gained a `propose` permission tier (enough to write/create, short of
 remove/wstat) and `ListenWithRootPerms`, scoping a distinct
 authorized-peers file to one exported root instead of only the single
-global allowlist `Listen` alone still uses.
+global allowlist `Listen` alone still uses. A `native_programs` kyu
+variable now lets an external program that's itself namespace-aware
+(9ed, the first) be called bareword — no `%` sigil — with the same
+transparent namespace-path handling `fullscreen_programs` gets; see
+"Three call-name categories" in Design below.
 
 `dial`/`bind` and a new `-listen-unix` now cover the same-machine half
 of namespace access without any TLS/`9auth` overhead — see

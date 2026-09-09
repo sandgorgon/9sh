@@ -1,8 +1,6 @@
 package eval
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/sandgorgon/9sh/kyu/value"
@@ -73,68 +71,37 @@ func TestNativeCallInsideEachClosure(t *testing.T) {
 	}
 }
 
-// TestNativeCallNamespaceOnlyPathTransparentlyCheckedOut is 6f's actual
-// functional payoff: a namespace-only Path argument (the literal string
-// "/src/greeting.txt" isn't itself a real OS path, even though it maps
-// to a real file through the /src bind -- see checkNamespaceOnlyPath's
-// own doc comment) errors for an ordinary %cmd
-// (TestExternalCallNamespaceOnlyPathIsGuardedErrorVal), but must be
-// transparently materialized for a native program instead -- native
-// programs are meant to be more capable than a legacy binary, not more
-// error-prone. Uses sh, not cat, as the "native" name: cat is already a
-// real kyu builtin (kyu/eval/cat.go's biCat), and isNativeProgram's own
-// precedence rule (an existing identifier always wins) would silently
-// refuse to treat it as a native call at all -- exactly as intended, but
-// wrong for this test's purpose.
+// TestNativeCallNamespaceOnlyPathPassedThroughLiterally is 6f's actual
+// functional payoff, updated for the post-9ed-v0.8.0 contract: a
+// namespace-only Path argument (the literal string "/src/greeting.txt"
+// isn't itself a real OS path, even though it maps to a real file
+// through the /src bind -- see checkNamespaceOnlyPath's own doc
+// comment) errors for an ordinary %cmd
+// (TestExternalCallNamespaceOnlyPathIsGuardedErrorVal), but must reach a
+// native program as its literal path text, untouched -- no checkout, no
+// scratch copy. A real native program (9ed) dials 9sh's namespace socket
+// itself and does its own Walk/fallback resolution; 9sh's job here is
+// only to not get in the way by rewriting the argument first. Uses sh,
+// not cat, as the "native" name: cat is already a real kyu builtin
+// (kyu/eval/cat.go's biCat), and isNativeProgram's own precedence rule
+// (an existing identifier always wins) would silently refuse to treat
+// it as a native call at all -- exactly as intended, but wrong for this
+// test's purpose.
 //
 // The namespace path is assigned to a variable first (see
-// TestNativeCallWriteBackPropagatesToNamespace's doc comment for why:
-// a bareword Path after a non-Path argument hits a known, pre-existing,
-// deliberately unfixed lexer gap shared with %cmd).
-func TestNativeCallNamespaceOnlyPathTransparentlyCheckedOut(t *testing.T) {
+// kyu/lexer's TestPathAsExternalCallFirstArg: a bareword Path after a
+// non-Path argument hits a known, pre-existing, deliberately unfixed
+// lexer gap shared with %cmd).
+func TestNativeCallNamespaceOnlyPathPassedThroughLiterally(t *testing.T) {
 	skipUnlessOnPath(t, "sh")
-	env, realDir := dirfsEnv(t)
-	if err := os.WriteFile(filepath.Join(realDir, "greeting.txt"), []byte("hi"), 0644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
+	env, _ := dirfsEnv(t)
 	markNative(env, "sh")
-	v := runEnvNative(t, "p := /src/greeting.txt\nsh \"-c\" \"cat $0\" p", env)
+	v := runEnvNative(t, "p := /src/greeting.txt\nsh \"-c\" \"echo -n $0\" p", env)
 	got, ok := v.(value.Bytes)
 	if !ok {
 		t.Fatalf("got %#v (%s), want value.Bytes", v, v.Kind())
 	}
-	if string(got) != "hi" {
-		t.Errorf("content = %q, want %q", string(got), "hi")
-	}
-}
-
-// TestNativeCallWriteBackPropagatesToNamespace confirms the write-back
-// half, not just the read half: a native program that modifies its
-// materialized scratch copy must have that change flow back into the
-// namespace once it exits -- same writeBackNamespacePath machinery
-// checkout()/fullscreen_programs already use.
-//
-// The namespace path is assigned to a variable first, then passed by
-// reference, rather than written as a bareword literal after other
-// string arguments -- sidesteps a known, pre-existing, deliberately
-// unfixed lexer gap (see kyu/lexer's TestPathAsExternalCallFirstArg: a
-// bareword Path after a non-Path argument still lexes as division,
-// documented there for %cmd and inherited as-is by native calls, since
-// both share the identical lastWasExternalName mechanism). A real
-// script hitting this would work around it the same way.
-func TestNativeCallWriteBackPropagatesToNamespace(t *testing.T) {
-	skipUnlessOnPath(t, "sh")
-	env, realDir := dirfsEnv(t)
-	if err := os.WriteFile(filepath.Join(realDir, "greeting.txt"), []byte("original"), 0644); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
-	markNative(env, "sh")
-	runEnvNative(t, "p := /src/greeting.txt\nsh \"-c\" \"echo -n changed > $0\" p", env)
-	got, err := os.ReadFile(filepath.Join(realDir, "greeting.txt"))
-	if err != nil {
-		t.Fatalf("read back greeting.txt: %v", err)
-	}
-	if string(got) != "changed" {
-		t.Errorf("greeting.txt = %q, want %q (write-back didn't propagate)", string(got), "changed")
+	if string(got) != "/src/greeting.txt" {
+		t.Errorf("argv[0] as seen by the native program = %q, want the literal namespace path %q (no checkout/materialize should happen for a native call)", string(got), "/src/greeting.txt")
 	}
 }

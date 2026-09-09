@@ -8,6 +8,20 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Changed
+
+- `native_programs`' namespace-only `Path` handling no longer checks
+  out/materializes to a scratch copy — a `Path` argument is now passed
+  through as its literal path text, untouched. This follows `9ed`
+  v0.8.0 dropping `$_9SH_NS_PATH` in favor of resolving namespace paths
+  itself (dialing `$_9SH_UNIX_SOCK`, trying an absolute argument as a
+  literal namespace `Walk` first or a relative one rooted at `/local`,
+  falling back to a real OS path only if the namespace doesn't claim
+  it): the checkout round-trip 9sh did on `9ed`'s behalf was not only
+  redundant but reintroduced the read/write staleness window
+  `native_programs` was meant to avoid. `fullscreen_programs`'
+  checkout-and-write-back treatment (`vim`, ...) is unchanged.
+
 ## [0.4.24] - 2026-09-08
 
 ### Added

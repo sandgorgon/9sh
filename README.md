@@ -316,11 +316,12 @@ cosmetic:
   completion (inside a bare `Path`) offers both real filesystem and
   namespace entries, which is exactly how this mistake tends to get
   typed in the first place. Two exceptions: a fullscreen program
-  (`vim`, ... — see `fullscreen_programs`) and a native program (`9ed`,
-  ... — see `native_programs`) both get a namespace-only `Path` checked
-  out and written back automatically instead of erroring — a native
-  program also doesn't need the `%` sigil at all, callable bareword
-  like a builtin.
+  (`vim`, ... — see `fullscreen_programs`) gets a namespace-only `Path`
+  checked out and written back automatically instead of erroring, and a
+  native program (`9ed`, ... — see `native_programs`) gets the `Path`
+  passed through as its literal path text, untouched, trusting the
+  program to resolve it itself — a native program also doesn't need the
+  `%` sigil at all, callable bareword like a builtin.
 
 ### Example: a starter `common.ky`
 
@@ -527,9 +528,14 @@ than the full remote-peer trust machinery.
   (Bytes-only, legacy). A fourth spelling of the third category —
   `native_programs` — is for external programs that are themselves
   namespace-aware (`9ed` is the first): listed there, callable bareword
-  like a namespace app with no `%`, and given the same transparent
-  `checkout`-on-namespace-only-Path treatment `fullscreen_programs` gets,
-  instead of `%cmd`'s ordinary error. Extend it the same way:
+  like a namespace app with no `%`, and given a namespace-only `Path`
+  argument as its literal path text, untouched, instead of `%cmd`'s
+  ordinary error — no `checkout`, no scratch copy; the program is
+  trusted to dial 9sh's namespace socket and resolve the path itself
+  (see 9ed's own `nsopen.go`: an absolute path is tried as a literal
+  namespace `Walk` first, a relative one is rooted at `/local`, and
+  either falls back to a real OS path only if the namespace doesn't
+  claim it). Extend it the same way:
   `native_programs := native_programs + ["mytool"]`. An existing
   identifier (a builtin, or anything already defined) always wins over a
   same-named `native_programs` entry, silently — matching how

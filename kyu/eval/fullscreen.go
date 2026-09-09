@@ -126,7 +126,13 @@ func writeBackCheckouts(name string, checkouts []checkoutEntry) *value.ErrorVal 
 // (materializeNamespacePath), instead of erroring the way an ordinary
 // %cmd would (checkNamespaceOnlyPath) -- the program gets a real
 // scratch path, and changes are written back into the namespace once it
-// exits.
+// exits. native skips all of that: a program that's also in
+// native_programs (9ed) does its own namespace resolution (dial the
+// namespace socket, literal-Walk an absolute path or one rooted at
+// /local, fall back to a real OS path only when the namespace doesn't
+// claim it -- see 9ed's cmd/9ed/nsopen.go), so its Path arguments are
+// passed through as their literal path text, untouched, instead of
+// being materialized to a scratch copy.
 //
 // A piped-in value (%cmd | %vim) is silently ignored -- there's no
 // sensible way to hand piped bytes to a program that's about to own the
@@ -138,7 +144,7 @@ func writeBackCheckouts(name string, checkouts []checkoutEntry) *value.ErrorVal 
 //
 // Backgrounding a fullscreen program is rejected before this function
 // is ever reached -- see evalBackground's own guard in namespace.go.
-func runExternalFullscreen(env *Env, name string, argExprs []ast.Expr) (value.Value, error) {
+func runExternalFullscreen(env *Env, name string, argExprs []ast.Expr, native bool) (value.Value, error) {
 	ctx := context.Background()
 	args := make([]string, len(argExprs))
 	var checkouts []checkoutEntry
@@ -148,7 +154,7 @@ func runExternalFullscreen(env *Env, name string, argExprs []ast.Expr) (value.Va
 			cleanupCheckouts(checkouts)
 			return nil, err
 		}
-		if p, ok := v.(value.Path); ok && resolvesInNamespaceOnly(env, p) {
+		if p, ok := v.(value.Path); ok && !native && resolvesInNamespaceOnly(env, p) {
 			mat, err := materializeNamespacePath(ctx, env.Namespace(), p)
 			if err != nil {
 				cleanupCheckouts(checkouts)

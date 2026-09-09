@@ -17,13 +17,13 @@ type Env struct {
 	vars               map[string]value.Value
 	parent             *Env
 	ns                 *ns.Namespace
-	jobRoot            []string              // nil = inherit from parent; see JobRoot
-	proxyRecorder      ProxyRecorderFunc     // process-wide, like ns; see ProxyRecorder
-	passthroughBlocked string                // process-wide, like ns; see SetPassthroughBlocked
-	cwd                string                // process-wide, like ns; see SetCwd
-	interruptHandler   func()                // process-wide, like ns; see SetInterruptHandler
-	lastExitCode       *int                  // process-wide, like ns; see SetLastExitCode
-	fullscreenHandler  FullscreenHandlerFunc // process-wide, like ns; see SetFullscreenHandler
+	jobRoot            []string               // nil = inherit from parent; see JobRoot
+	proxyRecorder      ProxyRecorderFunc      // process-wide, like ns; see ProxyRecorder
+	passthroughBlocked string                 // process-wide, like ns; see SetPassthroughBlocked
+	cwd                string                 // process-wide, like ns; see SetCwd
+	interruptHandler   func()                 // process-wide, like ns; see SetInterruptHandler
+	lastExitCode       *int                   // process-wide, like ns; see SetLastExitCode
+	fullscreenHandler  FullscreenHandlerFunc  // process-wide, like ns; see SetFullscreenHandler
 	externalOutputSink ExternalOutputSinkFunc // process-wide, like ns; see SetExternalOutputSink
 }
 

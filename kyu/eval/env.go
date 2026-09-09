@@ -150,16 +150,16 @@ func (e *Env) FullscreenHandler() FullscreenHandlerFunc {
 // plain line REPL, script mode: nothing else owns the terminal, so
 // direct inheritance is the simplest correct thing, same reasoning as
 // PassthroughBlocked's doc comment above). Inside the TUI, replui's
-// Model registers a sink once at startup that appends into the same
-// transcript evaluate() already writes results into: replui owns the
-// screen via a diffed cell renderer, and a raw write to the real fd
-// desyncs that renderer's own "what's on screen" bookkeeping from
-// reality — a real, previously-shipped bug (os.Stderr.Write(errOut) in
-// runExternalViaJob), not a hypothetical one. Unlike
-// SetFullscreenHandler's per-evaluate set/clear pattern, this is set
-// once for the TUI's whole lifetime, since ordinary (non-fullscreen)
-// %cmd output can happen at any point, not just during a known handoff
-// window.
+// kyu-repl widget registers a sink for the duration of each evaluate()
+// call (the same set-before/clear-after pattern SetFullscreenHandler
+// already uses, and for the same reason: evaluate() calls never
+// overlap, so there's no ambiguity about which call a callback is for)
+// that appends into the same transcript evaluate() already writes
+// results into: replui owns the screen via a diffed cell renderer, and
+// a raw write to the real fd desyncs that renderer's own "what's on
+// screen" bookkeeping from reality — a real, previously-shipped bug
+// (os.Stderr.Write(errOut) in runExternalViaJob), not a hypothetical
+// one.
 func (e *Env) SetExternalOutputSink(fn ExternalOutputSinkFunc) {
 	e.root().externalOutputSink = fn
 }

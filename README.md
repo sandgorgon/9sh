@@ -169,8 +169,8 @@ something this binary hosts itself (see "Design" below for why).
   `rm(path)` removes one namespace file, anywhere `cp`'s `dst` can
   reach. `mv(src, dst)` moves/renames — a real in-place rename (no
   content copied) when `src`/`dst` share a parent directory, a
-  copy-then-remove otherwise. Both `regular file only, no directories
-  yet`, same v1 scope as `cp`.
+  copy-then-remove otherwise. Both regular-file only, no directories
+  yet — same v1 scope as `cp`.
 - `unbind DST` clears whatever's bound at `DST` — the inverse of
   `bind`, same statement-not-function shape (a namespace-mutating verb
   stays a keyword). Unbinding something never bound is an error.

@@ -494,9 +494,9 @@ remove/wstat) and `ListenWithRootPerms`, scoping a distinct
 authorized-peers file to one exported root instead of only the single
 global allowlist `Listen` alone still uses. A `native_programs` kyu
 variable now lets an external program that's itself namespace-aware
-(9ed, the first) be called bareword — no `%` sigil — with the same
-transparent namespace-path handling `fullscreen_programs` gets; see
-"Three call-name categories" in Design below.
+(`9ed` and `9vcs` by default) be called bareword — no `%` sigil — with
+the same transparent namespace-path handling `fullscreen_programs`
+gets; see "Three call-name categories" in Design below.
 
 `dial`/`bind` and a new `-listen-unix` now cover the same-machine half
 of namespace access without any TLS/`9auth` overhead — see
@@ -527,11 +527,12 @@ than the full remote-peer trust machinery.
   already called bareword), or an external program reached with `%`
   (Bytes-only, legacy). A fourth spelling of the third category —
   `native_programs` — is for external programs that are themselves
-  namespace-aware (`9ed` is the first): listed there, callable bareword
-  like a namespace app with no `%`, and given a namespace-only `Path`
-  argument as its literal path text, untouched, instead of `%cmd`'s
-  ordinary error — no `checkout`, no scratch copy; the program is
-  trusted to dial 9sh's namespace socket and resolve the path itself
+  namespace-aware: `9ed` was the first, `9vcs` (its `-C <path>` flag,
+  as of 9vcs v0.1.7) is the second. Listed there, each is callable
+  bareword like a namespace app with no `%`, and given a namespace-only
+  `Path` argument as its literal path text, untouched, instead of
+  `%cmd`'s ordinary error — no `checkout`, no scratch copy; the program
+  is trusted to dial 9sh's namespace socket and resolve the path itself
   (see 9ed's own `nsopen.go`: an absolute path is tried as a literal
   namespace `Walk` first, a relative one is rooted at `/local`, and
   either falls back to a real OS path only if the namespace doesn't

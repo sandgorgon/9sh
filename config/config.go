@@ -32,18 +32,19 @@ import (
 //
 // native_programs (see kyu/eval's Env.IsNativeProgram) names external
 // programs that are themselves namespace-aware — 9ed (a segmented TUI
-// editor, github.com/sandgorgon/9ed) is the first, and the seed reason
-// this list exists at all: callable bareword, no % sigil, and its
-// namespace-only Path arguments are passed through as literal path
-// text, untouched, rather than %cmd's ordinary checkout-and-error
-// guard — 9ed dials 9sh's namespace socket itself and resolves the
-// path on its own. Orthogonal to fullscreen_programs (one controls
-// terminal ownership, the other prefix-free calling + namespace-path
-// handling) — 9ed genuinely needs both, since it's a terminal-owning
-// TUI editor that's also namespace-aware, but a future native program
-// might need only one or the other.
+// editor, github.com/sandgorgon/9ed) was the first and the seed reason
+// this list exists at all; 9vcs (github.com/sandgorgon/9vcs, its `-C
+// <path>` flag) is the second, as of its own v0.1.7. Listed here:
+// callable bareword, no % sigil, and namespace-only Path arguments are
+// passed through as literal path text, untouched, rather than %cmd's
+// ordinary checkout-and-error guard — each dials 9sh's namespace socket
+// itself and resolves the path on its own. Orthogonal to
+// fullscreen_programs (one controls terminal ownership, the other
+// prefix-free calling + namespace-path handling) — 9ed genuinely needs
+// both, since it's a terminal-owning TUI editor that's also
+// namespace-aware; 9vcs is an ordinary CLI, so it only needs this one.
 const defaultConfig = `fullscreen_programs := ["vim", "vi", "nvim", "emacs", "top", "htop", "less", "man", "ssh", "nano", "mutt", "9ed"]
-native_programs := ["9ed"]
+native_programs := ["9ed", "9vcs"]
 `
 
 // Dir returns this install's settings directory, ~/.config/9/config —

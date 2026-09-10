@@ -8,8 +8,31 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `9vcs` added to the default `native_programs` list, alongside `9ed`.
+  `9vcs` v0.1.7 added a `-C <path>` flag that, under a 9sh session
+  (`$_9SH_UNIX_SOCK` set), resolves against 9sh's own namespace first
+  — the same self-resolving pattern `9ed` already uses — so it
+  qualifies for the same literal-`Path`-passthrough treatment instead
+  of `%cmd`'s ordinary checkout guard. `9vcs` is an ordinary CLI, not
+  a terminal-owning program, so it's added only to `native_programs`,
+  not `fullscreen_programs`.
+
 ### Changed
 
+- Bumped `github.com/sandgorgon/9p` from v0.7.1 to v0.9.1 — no API
+  breakage, both intervening releases are additive/opt-in
+  (`client.File.Rename`/`Remove`; optional 9P2000.u symlink support
+  via `client.WithUnixExtensions()`, negotiated only when both sides
+  ask for it). Worth taking regardless of the additions: v0.8.0 also
+  fixed a real path-confinement gap in `examples/dirfs` — a symlink
+  planted at an intermediate path component could escape the exported
+  root at syscall time — and 9sh's own `/local`/`/env`/`/config`/
+  `/session` namespace binds go through that exact `dirfs` backend
+  (`cmd/9sh/main.go`, `kyu/eval/builtins.go`).
+- `sandgorgon/tui` checked against upstream — already at the latest
+  tag (`v0.6.2`, matching go.mod); no bump needed.
 - `native_programs`' namespace-only `Path` handling no longer checks
   out/materializes to a scratch copy — a `Path` argument is now passed
   through as its literal path text, untouched. This follows `9ed`

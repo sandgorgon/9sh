@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.25] - 2026-09-09
+
 ### Added
 
 - `9vcs` added to the default `native_programs` list, alongside `9ed`.

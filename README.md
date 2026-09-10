@@ -452,7 +452,7 @@ A Unix socket path is capped at 108 bytes by the OS
 
 ## Status
 
-Pre-1.0 (`v0.4.24`). The full v1 build-order plan (namespace
+Pre-1.0 (`v0.4.25`). The full v1 build-order plan (namespace
 core, jobs, kyu, an interactive TUI, session history, remote namespace/
 auth, dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real

@@ -412,7 +412,10 @@ editor.
 Running a fullscreen program (`vim`, `top`, `ssh`, ... — see
 `fullscreen_programs` above) hands the whole screen and keyboard to it
 directly until it exits; a namespace-only `Path` argument is checked
-out and written back automatically, no `checkout()` call needed.
+out and written back automatically, no `checkout()` call needed. Mouse
+wheel and `PageUp`/`PageDown` scroll its scrollback too (up to 10,000
+lines), unless the program manages its own full-screen display (`vim`,
+`htop`, `less`, ...), in which case those keys go to it as normal.
 
 ## Local namespace access
 
@@ -452,7 +455,7 @@ A Unix socket path is capped at 108 bytes by the OS
 
 ## Status
 
-Pre-1.0 (`v0.4.25`). The full v1 build-order plan (namespace
+Pre-1.0 (`v0.4.26`). The full v1 build-order plan (namespace
 core, jobs, kyu, an interactive TUI, session history, remote namespace/
 auth, dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real

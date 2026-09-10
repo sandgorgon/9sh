@@ -8,6 +8,22 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.26] - 2026-09-10
+
+### Changed
+
+- Bumped `github.com/sandgorgon/tui` from v0.6.2 to v0.8.0. The
+  fullscreen `%cmd` handoff (`vim`, `top`, `ssh`, ... — see
+  `fullscreen_programs`) now supports scrollback via mouse wheel and
+  `PageUp`/`PageDown` (up to 10,000 lines) — the same `widget.Terminal`
+  9mux's own Terminal pane uses — while leaving alt-screen programs
+  (`vim`, `htop`, `less`, ...) alone since they manage their own
+  scrolling. Wired the app's theme through so the "[scrollback N/M]"
+  indicator matches the rest of the UI instead of rendering unstyled.
+  v0.6.2 to v0.7.0 in between was theme-only (a new `Chrome`/
+  `ChromeText` pair backing the scrollback indicator's styling; no
+  9sh-visible effect on its own).
+
 ## [0.4.25] - 2026-09-09
 
 ### Added

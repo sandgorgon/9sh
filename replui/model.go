@@ -172,6 +172,7 @@ func (m Model) View() tui.Node {
 			Command:     m.fullscreen.cmd,
 			OnExit:      func(err error) tui.Msg { return fullscreenExitedMsg{err: err} },
 			WantsRawTab: true,
+			Theme:       m.theme,
 		}).Key("fullscreen-term")
 	}
 	return tui.Box(layout.Vertical,

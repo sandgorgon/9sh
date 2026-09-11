@@ -116,17 +116,65 @@ var bashZshHelp = []string{
 	"see the language reference above for both.",
 }
 
+// startupSequenceHelp is a plain-text condensation of the README's
+// "Startup sequence" section, kept in sync with it by hand (same
+// reasoning as keybindingHelp/bashZshHelp above: hand-maintained,
+// scannable data, not generated).
+var startupSequenceHelp = []string{
+	"Every mode (this TUI, -repl, or a script) shares one bootstrap, in",
+	"this order, before any of your own code runs:",
+	"",
+	"1. /jobs bound (the job manager).",
+	"2. /local bound -- the real directory 9sh was launched from.",
+	"3. -listen/-listen-unix, if passed, start serving this namespace",
+	"   out; -listen-unix also exports $_9SH_UNIX_SOCK so spawned jobs",
+	"   inherit it with zero configuration.",
+	"4. /env bound -- a one-time snapshot of os.Environ(), taken after",
+	"   step 3 so a job reading /env also sees _9SH_UNIX_SOCK. A",
+	"   snapshot, not a live view: setenv() writes into it, not into",
+	"   9sh's real process environment.",
+	"5. /config bound -- ~/.config/9/config/config.ky is seeded with",
+	"   defaults (fullscreen_programs, native_programs) the first time",
+	"   only; an existing file is never overwritten.",
+	"6. /session bound -- best-effort (needs 9vcs on PATH and a home",
+	"   directory); the directory is bound either way, so past history",
+	"   stays readable even when the recorder itself couldn't start.",
+	"7. The shared kyu Env is created, with all of the above already",
+	"   live in the namespace.",
+	"8. config.ky runs (~/.config/9/config/config.ky) -- settings like",
+	"   fullscreen_programs/native_programs.",
+	"9. Dotfiles run: ~/.config/9/ns/common.ky, then",
+	"   ~/.config/9/ns/hosts/<hostname>.ky, against that same Env.",
+	"",
+	"config.ky (8) runs before dotfiles (9) on purpose, so a dotfile can",
+	"extend fullscreen_programs/native_programs instead of redeclaring",
+	"the whole list. Both dotfiles run against the same Env, so",
+	"hosts/<hostname>.ky simply shadows whatever common.ky set --",
+	"there's no merging, the host file just loads second.",
+	"",
+	"~/.config/9 holds three separate, independently-optional things,",
+	"not one: config/config.ky (settings, auto-seeded once), ns/common.ky",
+	"+ ns/hosts/<hostname>.ky (namespace recipes, never auto-created),",
+	"and session/ (auto-managed history, not meant to be hand-edited).",
+	"Nothing in steps 3-9 is fatal to starting the shell except",
+	"-listen/-listen-unix itself failing to bind -- a missing 9vcs, no",
+	"home directory, or a broken config.ky/common.ky/hosts/<host>.ky",
+	"each print one warning and are otherwise skipped, independently of",
+	"each other.",
+}
+
 // buildHelpText assembles the full document once at package load:
 // keybindings, then the kyu language reference (generated from
 // eval.Docs() -- the same table help(name) reads, so the two can't
-// drift apart), then the bash/zsh mental-model section. Returns the
-// combined lines plus each section's starting line index, for '1'/
-// '2'/'3' to jump straight to (see helpWidget.HandleEvent).
-func buildHelpText() (lines []string, sectionStart [3]int) {
+// drift apart), then the bash/zsh mental-model section, then the
+// startup-sequence section. Returns the combined lines plus each
+// section's starting line index, for '1'/'2'/'3'/'4' to jump straight
+// to (see helpWidget.HandleEvent).
+func buildHelpText() (lines []string, sectionStart [4]int) {
 	lines = append(lines, "9sh — help",
 		"",
 		"Jump to a section: 1) keybindings  2) kyu language reference",
-		"                    3) coming from bash/zsh",
+		"                    3) coming from bash/zsh  4) startup sequence",
 		"PgUp/PgDown or the wheel to scroll; Esc, '?', or a click",
 		"outside this box to close.",
 		"")
@@ -141,6 +189,10 @@ func buildHelpText() (lines []string, sectionStart [3]int) {
 	lines = append(lines, "── coming from bash/zsh ──", "")
 	sectionStart[2] = len(lines) - 1
 	lines = append(lines, bashZshHelp...)
+
+	lines = append(lines, "", "── startup sequence ──", "")
+	sectionStart[3] = len(lines) - 2
+	lines = append(lines, startupSequenceHelp...)
 
 	return lines, sectionStart
 }
@@ -265,6 +317,8 @@ func (w *helpWidget) HandleEvent(e input.Event) tui.Cmd {
 			w.scrollOffset = helpSectionStart[1]
 		case ev.Rune == '3':
 			w.scrollOffset = helpSectionStart[2]
+		case ev.Rune == '4':
+			w.scrollOffset = helpSectionStart[3]
 		}
 	}
 	return nil

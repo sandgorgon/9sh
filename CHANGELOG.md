@@ -8,6 +8,22 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- Docs: a "Startup sequence" section in README.md spelling out
+  `bootstrap`'s exact order (namespace binds, `-listen`/`-listen-unix`,
+  then `config.ky`, then `common.ky`/`hosts/<hostname>.ky`) and the
+  nuances that fall out of it — `config.ky` loading before dotfiles so
+  a dotfile can extend `fullscreen_programs`/`native_programs` instead
+  of redeclaring them, the host file overriding `common.ky` because it
+  loads second, and which of the three separate `~/.config/9`
+  subdirectories are auto-seeded vs. auto-managed vs. never
+  auto-created. Previously only documented as Go doc comments on
+  `cmd/9sh`'s `bootstrap`, `config.Load`, and `dotfiles.Load`. Mirrored
+  as a fourth in-app `?`/F1 help-screen section (`replui/help.go`,
+  `startupSequenceHelp`), jumpable with `4` alongside the existing
+  `1`/`2`/`3` sections.
+
 ## [0.4.26] - 2026-09-10
 
 ### Changed

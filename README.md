@@ -360,6 +360,61 @@ directory" to resolve a relative one against — see above) and, like
 `dial`, returns an ordinary `ErrorVal` rather than aborting if the path
 doesn't exist.
 
+## Startup sequence
+
+Every mode (the interactive TUI, the plain `-repl`, or a script) shares
+one bootstrap, in this order, before any of your own code runs:
+
+1. `/jobs` is bound (the job manager).
+2. `/local` is bound — `dirfs` over the real directory 9sh was launched
+   from.
+3. `-listen`/`-listen-unix`, if either flag was passed, start serving
+   this namespace out. `-listen-unix` also exports
+   `$_9SH_UNIX_SOCK` into 9sh's own process environment, so every job
+   it spawns inherits it with zero configuration.
+4. `/env` is bound — a one-time snapshot of `os.Environ()`, taken
+   *after* step 3 so a job reading `/env` also sees
+   `_9SH_UNIX_SOCK`. It's a snapshot, not a live view: `setenv()`
+   writes into this snapshot, not into 9sh's real process environment.
+5. `/config` is bound — `~/.config/9/config/config.ky` is seeded with
+   defaults (`fullscreen_programs`, `native_programs`) the first time
+   only; an existing file is never overwritten.
+6. `/session` is bound — best-effort (needs `9vcs` on `PATH` and a home
+   directory); the directory is still bound even when the recorder
+   itself couldn't start, so past history stays readable as plain
+   files either way.
+7. The shared kyu `Env` is created, with everything above already
+   live in the namespace.
+8. **`config.ky` runs** (`~/.config/9/config/config.ky`) — settings
+   like `fullscreen_programs`/`native_programs`.
+9. **Dotfiles run**: `~/.config/9/ns/common.ky`, then
+   `~/.config/9/ns/hosts/<hostname>.ky`, against that same `Env`.
+
+Two things fall out of running in exactly this order:
+
+- **Settings are in scope before dotfiles run.** `config.ky` (step 8)
+  runs before dotfiles (step 9) specifically so a dotfile can *extend*
+  `fullscreen_programs`/`native_programs` (`native_programs :=
+  native_programs + ["mytool"]`) instead of having to redeclare the
+  whole list.
+- **The host file overrides common, because it loads second.** Both
+  files run against the same `Env`, so a variable redefined in
+  `hosts/<hostname>.ky` simply shadows whatever `common.ky` set —
+  there's no merging.
+
+There are three separate, independently-optional files/directories
+under `~/.config/9`, not one: `config/config.ky` (settings, auto-seeded
+once), `ns/common.ky` + `ns/hosts/<hostname>.ky` (namespace recipes,
+never auto-created — a fresh install has none of these), and
+`session/` (auto-managed history, not meant to be hand-edited). None of
+steps 3 through 9 are fatal to starting the shell on their own: a
+missing `9vcs`, no home directory, or a syntax error in `config.ky`/
+`common.ky`/`hosts/<hostname>.ky` each print one warning to stderr and
+are otherwise skipped — a broken `common.ky` doesn't even block a
+working `hosts/<hostname>.ky` from still loading. Only `-listen`/
+`-listen-unix` failing to bind is fatal, since you explicitly asked to
+serve on that address.
+
 ## Using the interactive TUI
 
 Run `9sh` with no arguments in a real terminal and you land in the

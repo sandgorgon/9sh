@@ -63,6 +63,11 @@ something this binary hosts itself (see "Design" below for why).
 9sh> j | wait
 ```
 
+Prefer to learn by running real programs instead of reading prose? See
+[`examples/`](examples/) — eight small, verified `.ky` scripts, one
+feature area each (namespace basics, jobs, data pipelines, strings,
+control flow, env/kyu vars, remote namespaces, file ops).
+
 - `bind SRC, DST[, before|after|replace]` grafts something onto the
   namespace — a local directory, a job-control tree, a dialed remote
   peer's whole namespace, all the same mechanism.

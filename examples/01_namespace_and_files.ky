@@ -1,0 +1,36 @@
+# Namespace basics: bind, glob, ls, stat, cat, and the format_time/
+# humanize_time helpers for turning raw epoch timestamps into
+# something readable.
+#
+# Run as a script (`9sh examples/01_namespace_and_files.ky`) and only
+# the last expression's value prints -- see examples/README.md for
+# why, and for how to instead paste this in a few lines at a time to
+# see every intermediate result too.
+
+# Give the launch directory a nicer name than the bootstrap default.
+bind /local, /work
+
+# glob() matches namespace entries in one directory -- just Paths, no
+# recursive **.
+go_files := glob("/work/kyu/eval/*.go")
+
+# ls() is glob's metadata-bearing sibling: same matching, a Table of
+# Records instead of bare Paths.
+listing := ls("/work/*.md")
+
+# stat() is ls's single-Path sibling -- one Record.
+readme := stat(/work/README.md)
+
+# cat() reads one namespace file's whole content back as a String, no
+# checkout() round trip needed.
+license_first_line := cat(/work/LICENSE) | split("\n") | first
+
+format(
+    "/work/kyu/eval has {} .go file(s); /work has {} top-level .md file(s); README.md is {} bytes, last touched {} ({}); LICENSE starts: {}",
+    go_files | count,
+    listing | count,
+    readme.size,
+    format_time("2006-01-02", readme.mtime),
+    humanize_time(readme.mtime),
+    license_first_line,
+)

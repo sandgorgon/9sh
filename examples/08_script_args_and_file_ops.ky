@@ -1,0 +1,42 @@
+# A script's own arguments are visible as `args` (a List of String) --
+# `9sh 08_script_args_and_file_ops.ky foo bar` sees
+# args == ["foo", "bar"]. Run with none and args is just [].
+arg_count := args | count
+arg_summary := if arg_count > 0 {
+    format("{} argument(s): {}", arg_count, args | join(", "))
+} else {
+    "no arguments passed"
+}
+
+# cp/mv/rm/find all work on ordinary namespace Paths -- a real OS
+# file, a remote /n/host mount, or anything else bound in, with no
+# separate transfer protocol since they're already the same
+# namespace once bound. bind /local and dir("/tmp") so this part is
+# fully self-contained: a real source file, a real scratch directory.
+bind /local, /work
+bind dir("/tmp"), /scratch
+
+cp(/work/LICENSE, /scratch/9sh-example-license.txt)
+copied_size := stat(/scratch/9sh-example-license.txt).size
+
+mv(/scratch/9sh-example-license.txt, /scratch/9sh-example-license-renamed.txt)
+old_name_gone := !stat(/scratch/9sh-example-license.txt)
+new_name_size := stat(/scratch/9sh-example-license-renamed.txt).size
+
+rm(/scratch/9sh-example-license-renamed.txt)
+new_name_gone_too := !stat(/scratch/9sh-example-license-renamed.txt)
+
+# find(dir, pattern) is glob's recursive sibling -- every subdirectory
+# beneath dir, pattern matched against each entry's base name at
+# every depth.
+docs_go_files := find(/work/kyu, "docs.go") | count
+
+format(
+    "{}; copied LICENSE ({} bytes), renamed (old name gone: {}, new name still {} bytes), then removed it (gone too: {}); find(/work/kyu, \"docs.go\") matched {} file(s)",
+    arg_summary,
+    copied_size,
+    old_name_gone,
+    new_name_size,
+    new_name_gone_too,
+    docs_go_files,
+)

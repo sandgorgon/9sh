@@ -1,0 +1,46 @@
+# String builtins -- split/trim/replace/join/contains/starts_with/
+# ends_with/index_of -- plus the pad_*/repeat/len group for building
+# exact-width output (format is for free-text templating instead),
+# and to_int for crossing the String/number boundary. skip/first
+# (data-pipeline builtins, not string-specific) pick fields back out
+# of the split List.
+
+# A "name, role, years" CSV row, sloppily spaced the way real input
+# usually is.
+csv_line := "  Alice, engineer, 3  "
+fields := csv_line | trim | split(",") | each { |f| f | trim }
+name := fields | first
+role := fields | skip(1) | first
+years_str := fields | last
+
+greeting := format("hello {}, you're a {} with {} year(s) on the team", name, role, years_str)
+
+# to_int parses a String into a number -- otherwise there'd be no way
+# to do arithmetic on a script's own args, which are always String.
+# Unparseable input is an ErrorVal, not a hard error.
+years_worked := years_str | to_int
+years_from_now := years_worked + 5
+years_from_now_str := years_from_now | format("{}")
+
+# A fixed-width two-column report: pad_right for alignment, repeat for
+# a separator rule -- the pad_*/repeat/len group is for an exact line
+# of output, not free-text templating.
+width := 18
+header := pad_right(width, "FIELD") + "VALUE"
+rule := repeat(30, "-")
+row1 := pad_right(width, "NAME") + name
+row2 := pad_right(width, "ROLE") + role
+row3 := pad_right(width, "YEARS FROM NOW") + years_from_now_str
+
+report := header + "\n" + rule + "\n" + row1 + "\n" + row2 + "\n" + row3
+
+format(
+    "{}\n\nfields: {} (\"role\" is at index {}); name contains \"lice\": {}, starts_with \"Al\": {}, ends_with \"ce\": {}, {} runes long",
+    report,
+    fields,
+    fields | index_of(role),
+    name | contains("lice"),
+    name | starts_with("Al"),
+    name | ends_with("ce"),
+    name | len,
+)

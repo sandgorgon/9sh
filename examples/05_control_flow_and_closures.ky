@@ -1,0 +1,60 @@
+# while is kyu's only loop construct (with break/continue); a
+# self-referencing closure covers recursion, since a name is resolved
+# when the closure is *called*, not frozen at creation -- no separate
+# func keyword. Closures also take default parameters, and errors are
+# ordinary values that flow through a pipeline unless promoted with a
+# trailing ?.
+
+# while + break/continue: sum only the even numbers below 10.
+i := 0
+even_sum := 0
+while i < 10 {
+    i = i + 1
+    if i % 2 != 0 {
+        continue
+    }
+    if i >= 10 {
+        break
+    }
+    even_sum = even_sum + i
+}
+
+# Named, self-recursive closures work via plain := -- no `func`.
+factorial := { |n|
+    if n <= 1 {
+        1
+    } else {
+        n * factorial(n - 1)
+    }
+}
+
+# Default parameters -- a later default may reference an earlier
+# parameter.
+greet := { |name, greeting = "hello", full = greeting + ", " + name|
+    full + "!"
+}
+
+# Errors are values in the stream, not pipeline-aborting -- where
+# drops a falsy ErrorVal with no special-casing. A trailing ? promotes
+# one to a hard abort instead.
+divide := { |a, b|
+    if b == 0 {
+        error("division by zero")
+    } else {
+        a / b
+    }
+}
+results := [10, 5, 0, 2] | each { |b| divide(100, b) }
+successes := results | where { |r| r } | count
+
+safe_result := divide(10, 2)?
+
+format(
+    "even numbers below 10 sum to {}; 5! = {}; greet(\"Bob\") = \"{}\"; {} of {} divisions succeeded; a checked-good division: {}",
+    even_sum,
+    factorial(5),
+    greet("Bob"),
+    successes,
+    results | count,
+    safe_result,
+)

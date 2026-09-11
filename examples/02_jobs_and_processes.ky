@@ -1,0 +1,36 @@
+# %cmd calls an ordinary external binary. A %cmd ... & job is a live
+# record backed by real namespace files under /jobs -- j.status,
+# j.ctl = "stop", j | wait all read/write through, not a snapshot.
+
+# A quick backgrounded job.
+j := %sleep "0.2" &
+before := j.status.state
+
+# Block until it reaches a terminal state, then read it again -- same
+# Record, updated in place.
+j | wait
+after := j.status.state
+
+# && / || chain by real exit status, like a shell -- but only a *bare*
+# %cmd operand gets this treatment (storing the result first, like j
+# above, opts out on purpose).
+%true && %echo "chained on success"
+
+# exit_code() is bash's $? -- it tracked that last foreground %cmd,
+# the %echo the chain above ran.
+chain_result := exit_code()
+
+# ps() is the structured, no-checkout-needed view of every job at
+# /jobs -- "every command is a job" is load-bearing, not incidental:
+# the background sleep *and* both foreground commands in the chain
+# above all show up here, which is what makes session history
+# meaningful in real use.
+job_count := ps() | count
+
+format(
+    "background job went from '{}' to '{}'; chained command's exit code was {}; {} job(s) total now recorded at /jobs",
+    before,
+    after,
+    chain_result,
+    job_count,
+)

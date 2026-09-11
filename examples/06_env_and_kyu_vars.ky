@@ -1,0 +1,36 @@
+# getenv/setenv/unsetenv read and write real files under /env -- Plan
+# 9's own convention (environment variables are namespace files), not
+# hidden shell state. vars()/unset() are the equivalent for plain
+# kyu := variables, which have no /env-like namespace presence at all.
+
+# setenv("PATH", ...) would genuinely change which binary %cmd
+# resolves -- here's a var that doesn't collide with anything real.
+setenv("NINESH_EXAMPLE", "hello-from-kyu")
+round_trip := getenv("NINESH_EXAMPLE")
+
+env_listing := ls("/env/*") | count
+unsetenv("NINESH_EXAMPLE")
+still_there := getenv("NINESH_EXAMPLE")
+
+# vars() lists your own := -defined kyu variables as a Table (name,
+# kind, value) -- unlike /env, there's no glob()-able equivalent;
+# vars() is the only way to see them, and it filters out builtins.
+example_var := 42
+another_one := "not a builtin"
+path_vars := vars() | where { |v| v.kind == "path" } | count
+my_vars := vars() | select("name", "kind") | sort_by("name")
+
+# unset(name) removes a kyu variable binding -- reports whether one
+# existed, refuses to remove a builtin.
+unset("another_one")
+still_bound := vars() | any { |v| v.name == "another_one" }
+
+format(
+    "round-tripped env var: \"{}\"; {} vars visible under /env; after unsetenv, getenv returns: {}; {} kyu vars are Path-typed; kyu vars in scope: {}; 'another_one' still bound after unset: {}",
+    round_trip,
+    env_listing,
+    still_there,
+    path_vars,
+    my_vars | each { |v| v.name },
+    still_bound,
+)

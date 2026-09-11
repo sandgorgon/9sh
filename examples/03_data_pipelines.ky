@@ -1,0 +1,44 @@
+# Structured pipes: | carries typed Records/Tables by default
+# (nushell/PowerShell-style), not raw bytes -- where/select/sort_by/
+# group_by/each and friends all compose the same way regardless of
+# where the Table came from (a literal here, ls()/ps() for real).
+
+readings := [
+    {sensor: "a", room: "kitchen", celsius: 21},
+    {sensor: "b", room: "kitchen", celsius: 23},
+    {sensor: "c", room: "office", celsius: 19},
+    {sensor: "d", room: "office", celsius: 18},
+    {sensor: "e", room: "hall", celsius: 17},
+]
+
+# where filters by a boolean expression per row.
+warm := readings | where { |r| r.celsius >= 20 }
+
+# select projects down to named fields; sort_by orders by a field name
+# or a closure.
+warm_summary := warm | select("sensor", "celsius") | sort_by({ |r| 0 - r.celsius })
+
+# group_by groups into {key, items} records; each maps a closure over
+# every element.
+by_room := readings | group_by("room")
+room_avgs := by_room | each { |g| {room: g.key, avg: g.items | each { |r| r.celsius } | avg} }
+
+# Aggregates: sum/min/max/avg/any/all all read a plain List (pull the
+# field out first with each or select | flatten).
+all_temps := readings | each { |r| r.celsius }
+hottest := all_temps | max
+coldest := all_temps | min
+mean := all_temps | avg
+any_freezing := all_temps | any { |c| c < 0 }
+
+format(
+    "{} of {} sensors read >= 20C (warmest first: {}); per-room averages: {}; overall {}..{}C, mean {}C, any freezing: {}",
+    warm | count,
+    readings | count,
+    warm_summary | each { |r| r.sensor } | join(", "),
+    room_avgs | each { |r| format("{}={}", r.room, r.avg | round(1)) } | join(", "),
+    coldest,
+    hottest,
+    mean | round(1),
+    any_freezing,
+)

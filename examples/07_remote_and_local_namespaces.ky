@@ -1,0 +1,40 @@
+# dir(path) wraps an arbitrary real host directory into a bindable
+# MountHandle -- dial's fully local sibling, no server/socket needed,
+# so this part of the script is fully self-contained.
+bind dir("/tmp"), /scratch
+tmp_listing := ls("/scratch/*") | count
+
+# join_path/path cross the String<->Path boundary explicitly -- kyu
+# never guesses one from the other based on what a value looks like.
+project := /scratch
+sub := join_path(project, "9sh-example-doesnotexist")
+built_from_string := path("/scratch/9sh-example-doesnotexist")
+
+# dial() reaches a remote 9sh/9P peer (host:port, mutual TLS) or a
+# local Unix-socket 9P server (same-UID trust only) -- here, nothing
+# is listening, which is the realistic first-run experience. Like
+# dir() above, it returns an ordinary ErrorVal instead of aborting, so
+# a startup dotfile can bind dial(...) best-effort (see README's
+# starter common.ky) and let the rest of the script keep running.
+# ErrorVal is falsy, so a plain `!` checks it without a special
+# is-this-an-error accessor.
+maybe_peer := dial("/tmp/9sh-example-nobody-listens-here.sock")
+dial_failed := !maybe_peer
+
+# The real version of this, once something IS listening (another 9sh
+# started with -listen-unix, say):
+#
+#   h := dial("/run/user/1000/9sh/main.sock")
+#   bind h, /n/otherhost
+#   @otherhost { %sh "-c" "echo hi" & } | wait
+#
+# @host{} re-roots job creation at the bound remote's own /jobs for
+# the block -- a "proxy job" is nothing more than that, no separate
+# remote-job protocol.
+
+format(
+    "/scratch (dir(/tmp)) has {} entries; join_path(...) and path(...) built the same Path: {}; dialing a nonexistent socket failed gracefully (not a hard abort): {}",
+    tmp_listing,
+    sub == built_from_string,
+    dial_failed,
+)

@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.27] - 2026-09-11
+
 ### Added
 
 - Docs: a "Startup sequence" section in README.md spelling out
@@ -23,6 +25,14 @@ once a first tagged release is cut.
   as a fourth in-app `?`/F1 help-screen section (`replui/help.go`,
   `startupSequenceHelp`), jumpable with `4` alongside the existing
   `1`/`2`/`3` sections.
+- Docs: an `examples/` directory with eight small, runnable `.ky`
+  scripts, one feature area each (namespace basics, jobs, data
+  pipelines, strings/formatting, control flow/closures, env vars vs.
+  kyu variables, remote/local namespaces, script args + file ops) —
+  each verified against the real built binary, not just written
+  prose. Previously every example anywhere in the docs was an inline
+  prose fragment; nothing a newcomer could actually run end to end.
+  Pointed to from README's Quick Start.
 
 ## [0.4.26] - 2026-09-10
 

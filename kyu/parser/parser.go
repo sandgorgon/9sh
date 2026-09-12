@@ -414,9 +414,19 @@ func (p *Parser) parseUnary() ast.Expr {
 func (p *Parser) parseGroupedExpr() ast.Expr {
 	p.next() // consume '('
 	expr := p.parseExpr(LOWEST)
-	if !p.expectPeekOrCur(token.RPAREN) {
+	// Deliberately not expectPeekOrCur: its "cur already is k" fast path
+	// is wrong here specifically, since RPAREN also closes a Call's own
+	// argument list -- an inner expr ending in a Call (or another
+	// grouped expr) already leaves cur sitting on *that* production's
+	// closing ')', which is a different token from this group's own. A
+	// grouped expression's content can never legitimately end with cur
+	// already on this group's real closer (the lexer always emits two
+	// separate RPARENs for "))"), so peek is required unconditionally.
+	if p.peek.Kind != token.RPAREN {
+		p.errorf("expected ')', got %s(%q)", p.peek.Kind, p.peek.Literal)
 		return nil
 	}
+	p.next()
 	return expr
 }
 

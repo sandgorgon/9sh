@@ -8,6 +8,23 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Fixed
+
+- `kyu/parser`'s `parseGroupedExpr` mis-parsed a parenthesized
+  expression whose content itself ended in a `Call` or a nested
+  group — `(5 | format("{}"))`, `(vars())`, `((1))` all failed with
+  "unexpected token )", while the unparenthesized form parsed fine.
+  Cause: `)` closes both a `Call`'s own argument list and a grouped
+  expression, and the helper used here accepted `cur` as the group's
+  closer whenever it already equaled `RPAREN` — true for the *inner*
+  Call's closing paren, which it isn't the same token as. Found while
+  writing `examples/`'s data-pipeline script. Fixed by always
+  requiring `peek` to be the group's own `)` here, never accepting
+  `cur` — the ambiguity is specific to this one call site, since
+  every other `expectPeekOrCur(...)` use closes a construct
+  (`if`/`while` blocks, record literals) whose closing token can't
+  also belong to an unrelated inner production the way `)` can.
+
 ## [0.4.27] - 2026-09-11
 
 ### Added

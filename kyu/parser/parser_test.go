@@ -558,3 +558,24 @@ func TestBackgroundRejectsNonExternalCall(t *testing.T) {
 		t.Fatal("backgrounding a non-external-call expression should be a parse error")
 	}
 }
+
+// TestGroupedExprEndingInCall guards against a real bug: parseGroupedExpr
+// used to accept cur if it already equaled RPAREN, but RPAREN also closes
+// a Call's own argument list -- a grouped expression whose content ends
+// in a Call (or another nested group) left cur sitting on *that*
+// production's closing ')', which parseGroupedExpr then wrongly treated
+// as its own closer, leaving the real outer ')' dangling for the next
+// statement to choke on. Reproduced concretely as `(5 | format("{}"))`
+// erroring "unexpected token )" while the unparenthesized form parsed
+// fine.
+func TestGroupedExprEndingInCall(t *testing.T) {
+	for _, src := range []string{
+		`x := (5 | format("{}"))`,
+		`x := (vars())`,
+		`x := ((1))`,
+		`x := (1 + 2)`,
+		`x := ([1, 2, 3])`,
+	} {
+		parseOK(t, src)
+	}
+}

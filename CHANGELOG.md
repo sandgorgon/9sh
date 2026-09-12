@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.28] - 2026-09-11
+
 ### Fixed
 
 - `kyu/parser`'s `parseGroupedExpr` mis-parsed a parenthesized

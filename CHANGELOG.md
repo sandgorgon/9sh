@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.29] - 2026-09-15
+
 ### Added
 
 - `mkdir(path)` namespace builtin — creates `path`, creating any

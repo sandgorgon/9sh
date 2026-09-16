@@ -167,15 +167,23 @@ control flow, env/kyu vars, remote namespaces, file ops).
   copies one `Path`'s content to another, both ordinary namespace
   paths — a real OS file, a remote `/n/host` mount, or anything else
   bound in can be either side, with no separate transfer protocol,
-  since they're already the same namespace once bound. `src` must be a
-  regular file; `dst` may be an existing file (overwritten) or a new
-  one at an already-existing directory level — like `checkout`'s own
-  write-back, neither builtin creates a new namespace subdirectory.
+  since they're already the same namespace once bound. For a regular
+  file, `dst` may be an existing file (overwritten) or a new one at an
+  already-existing directory level. For a directory `src`, `dst` is
+  created fresh as a full recursive copy of the tree — `dst` must not
+  already exist (no merge-into-an-existing-directory semantics yet).
   `rm(path)` removes one namespace file, anywhere `cp`'s `dst` can
-  reach. `mv(src, dst)` moves/renames — a real in-place rename (no
-  content copied) when `src`/`dst` share a parent directory, a
-  copy-then-remove otherwise. Both regular-file only, no directories
-  yet — same v1 scope as `cp`.
+  reach — use `rmdir` for a directory. `mv(src, dst)` moves/renames — a
+  real in-place rename (no content copied) when `src`/`dst` share a
+  parent directory (works on a directory `src` too, since it's a
+  metadata-only rename), otherwise a copy-then-remove (a recursive tree
+  copy for a directory `src`, same "`dst` must not already exist"
+  restriction as `cp`'s directory mode). `mkdir(path)` creates `path`,
+  creating any missing intermediate directories along the way (`mkdir
+  -p` semantics) — a no-op if `path` already exists as a directory.
+  `rmdir(path)` removes one empty namespace directory (errors, from the
+  real filesystem, if it isn't); `rmdir(path, true)` removes it and
+  everything beneath it.
 - `unbind DST` clears whatever's bound at `DST` — the inverse of
   `bind`, same statement-not-function shape (a namespace-mutating verb
   stays a keyword). Unbinding something never bound is an error.
@@ -420,6 +428,20 @@ working `hosts/<hostname>.ky` from still loading. Only `-listen`/
 `-listen-unix` failing to bind is fatal, since you explicitly asked to
 serve on that address.
 
+Steps 8-9 (`config.ky`, then `common.ky`/`hosts/<hostname>.ky`) are also
+callable again at runtime, without restarting 9sh: `source_config()`
+re-runs them against the current session, additively — a plain `bind`
+already defaults to replacing whatever's at its destination, and a `:=`
+redefinition is an ordinary overwrite, so this is exactly "pick up my
+dotfile edits" with no special-casing. `reset_config()` is its
+fresh-start sibling: it first clears every `:=`-defined variable and
+unbinds every namespace entry outside `/jobs`/`/local`/`/env`/`/config`/
+`/session` (those five are 9sh's own process bootstrap, not something
+the startup configs own, so a reset leaves them alone), then does
+exactly what `source_config()` does — so a bind rule or variable you've
+since removed from a dotfile actually disappears, instead of surviving
+from a previous load the way plain `source_config()` would leave it.
+
 ## Using the interactive TUI
 
 Run `9sh` with no arguments in a real terminal and you land in the
@@ -441,7 +463,7 @@ below is built into 9sh: press `F1` any time.
 | `Backspace`/`Delete` | Delete before/after the cursor |
 | Ctrl+W | Delete the word before the cursor |
 | Ctrl+U / Ctrl+K | Delete to line start / delete to line end |
-| Ctrl+L | Clear the transcript (bash/zsh/readline convention) — history (Up/Down, Ctrl-R) is untouched |
+| Ctrl+L | Clear the transcript (bash/zsh/readline convention) — history (Up/Down, Ctrl-R) is untouched; `history_clear()` clears that separately |
 | `↑`/`↓` | Recall previous/next submitted input (only outside a multi-line continuation) |
 | `PageUp`/`PageDown`, mouse wheel | Scroll the transcript, independent of the input line |
 | Ctrl+C | Copy the whole transcript |
@@ -468,6 +490,18 @@ No undo/redo, and no multi-line-aware history recall (Up/Down inside
 an open multi-line continuation navigate lines, not history) —
 deliberate scope cuts for a REPL input line, not a general text
 editor.
+
+History (Up/Down, Ctrl+R) is also reachable from kyu itself: `history()`
+returns it as a `Table` (`index`, `text`), pipeable like `vars()`/`ps()`;
+`history_delete(index)` removes one entry by the index `history()`
+showed you (reporting whether one existed there, `unset`'s own
+convention); `history_clear()` removes all of it. All three are
+TUI-only — the plain `-repl`/script entry points have no recall history
+to manage. `history_mode := "unique"` (default `"all"`, set in
+`config.ky`/`common.ky` the same way as `fullscreen_programs`) removes
+any earlier occurrence of an identical line before appending a new
+submission, so history never holds two copies of the same command and
+Ctrl+R search stays decluttered.
 
 Running a fullscreen program (`vim`, `top`, `ssh`, ... — see
 `fullscreen_programs` above) hands the whole screen and keyboard to it

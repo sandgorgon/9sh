@@ -58,17 +58,29 @@ const promptWidth = 5
 const scrollStep = 3
 
 // kyuReplNode is 9sh's native (not pty-hosted) kyu REPL: input is
-// evaluated directly against env — the same *eval.Env every other 9sh
+// evaluated directly against w.env — the same *eval.Env every other 9sh
 // entry point shares (see cmd/9sh's bootstrap) — rather than shelling
-// out to another 9sh process. env is captured once at construction,
-// like widget.Terminal's Command; it never changes for this widget's
-// lifetime, so it isn't threaded through Reconcile props. A fixed key
-// is enough (unlike the pane multiplexer this package replaced, which
-// needed one key per pane — see 9mux's own history): Model.View only
-// ever mounts one of these at a time.
-func kyuReplNode(env *eval.Env) tui.Node {
+// out to another 9sh process. w is Model's own long-lived instance
+// (Model.replWidget), not built fresh here: tui's reconciler only
+// retains a Component's Widget "for as long as the Node keeps matching
+// the same tree slot" (Widget's own doc comment, tui/node.go), and this
+// Node's tree slot goes missing entirely, for as many frames as it
+// takes, every time a fullscreen %cmd (vim, 9ed, ...) takes over the
+// whole screen (see Model.View swapping to widget.Terminal under
+// "fullscreen-term" instead, and back). newWidget handing back the
+// *same* pointer every time, rather than minting a fresh
+// &kyuReplWidget{}, is what makes the transcript and input history
+// survive that round trip regardless of what the reconciler's own
+// retained-tree bookkeeping does to the wrapper Node in between — a
+// real, previously-shipped bug: returning from a fullscreen program
+// used to reset the whole kyu-repl screen (empty transcript, empty
+// history) as if 9sh had just started. A fixed key is enough (unlike
+// the pane multiplexer this package replaced, which needed one key per
+// pane — see 9mux's own history): Model.View only ever mounts one of
+// these at a time.
+func kyuReplNode(w *kyuReplWidget) tui.Node {
 	return tui.Component("kyu-repl", struct{}{}, func() tui.Widget {
-		return &kyuReplWidget{env: env}
+		return w
 	})
 }
 
@@ -739,6 +751,71 @@ func (w *kyuReplWidget) historyNext() {
 	w.cursor = len(w.runes())
 }
 
+// historyUnique reports whether history_mode is set to "unique" (see
+// docs.go's own entry for it) — "all" (the default: history_mode unset,
+// or set to anything else) keeps every submission, duplicates included,
+// unchanged from this widget's original behavior.
+func (w *kyuReplWidget) historyUnique() bool {
+	if w.env == nil {
+		return false
+	}
+	v, ok := w.env.Get("history_mode")
+	if !ok {
+		return false
+	}
+	s, ok := v.(value.String)
+	return ok && string(s) == "unique"
+}
+
+// removeHistoryOccurrences drops every existing entry equal to src —
+// history_mode == "unique"'s own primitive (see submit()), an in-place
+// filter safe because it only ever writes at an index <= the one it's
+// currently reading (standard Go "filter without allocating" idiom).
+func (w *kyuReplWidget) removeHistoryOccurrences(src string) {
+	out := w.history[:0]
+	for _, h := range w.history {
+		if h != src {
+			out = append(out, h)
+		}
+	}
+	w.history = out
+}
+
+// historySnapshot is history()'s Env.HistoryAccess.List: a copy of
+// w.history, not the live slice, so a caller holding onto the returned
+// value can't alias (and later corrupt, via append's in-place reuse)
+// this widget's own backing array.
+func (w *kyuReplWidget) historySnapshot() []string {
+	out := make([]string, len(w.history))
+	copy(out, w.history)
+	return out
+}
+
+// deleteHistoryEntry is history_delete(index)'s Env.HistoryAccess.Delete.
+// historyIndex is clamped afterward the same way it already is
+// elsewhere (see historyNext) so a delete can never leave it pointing
+// past the end; it doesn't attempt to keep an in-progress Up/Down
+// browse position aligned with entries that shifted beneath it — an
+// accepted, narrow edge case (deleting history while also mid-recall of
+// it), not a correctness issue (nothing can go out of bounds).
+func (w *kyuReplWidget) deleteHistoryEntry(index int) bool {
+	if index < 0 || index >= len(w.history) {
+		return false
+	}
+	w.history = append(w.history[:index], w.history[index+1:]...)
+	if w.historyIndex > len(w.history) {
+		w.historyIndex = len(w.history)
+	}
+	return true
+}
+
+// clearHistoryEntries is history_clear()'s Env.HistoryAccess.Clear.
+func (w *kyuReplWidget) clearHistoryEntries() {
+	w.history = nil
+	w.historyIndex = 0
+	w.historyDraft = ""
+}
+
 // ---- reverse history search (Ctrl-R) ----
 
 // searchStep is Ctrl-R: enters reverse history search if not already
@@ -841,6 +918,9 @@ func (w *kyuReplWidget) submit() {
 	src := w.input
 	w.evaluate(src)
 	if trimmedNonEmpty(src) {
+		if w.historyUnique() {
+			w.removeHistoryOccurrences(src)
+		}
 		w.history = append(w.history, src)
 	}
 	w.historyIndex = len(w.history)
@@ -894,15 +974,25 @@ func (w *kyuReplWidget) evaluate(src string) {
 	// SetExternalOutputSink is registered the same way, for the same
 	// reason a bare %cmd's stderr must never reach the real fd directly
 	// while this widget owns the screen -- see Env.SetExternalOutputSink
-	// and appendExternalStderr's own doc comments.
+	// and appendExternalStderr's own doc comments. SetHistoryAccess is
+	// registered identically, so history()/history_delete/history_clear
+	// (kyu/eval/history.go) can reach this widget's own w.history -- see
+	// Env.HistoryAccess's own doc comment for why this needs to be a
+	// hook at all.
 	if w.env != nil {
 		w.env.SetFullscreenHandler(w.attachFullscreen)
 		w.env.SetExternalOutputSink(w.appendExternalStderr)
+		w.env.SetHistoryAccess(&eval.HistoryAccess{
+			List:   w.historySnapshot,
+			Delete: w.deleteHistoryEntry,
+			Clear:  w.clearHistoryEntries,
+		})
 	}
 	v, err := eval.Eval(prog, w.env)
 	if w.env != nil {
 		w.env.SetFullscreenHandler(nil)
 		w.env.SetExternalOutputSink(nil)
+		w.env.SetHistoryAccess(nil)
 	}
 	if err != nil {
 		w.lines = append(w.lines, replLine{text: err.Error(), style: errorStyle})

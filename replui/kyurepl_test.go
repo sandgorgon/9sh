@@ -11,6 +11,7 @@ import (
 	"github.com/sandgorgon/tui/tui"
 
 	"github.com/sandgorgon/9sh/kyu/eval"
+	"github.com/sandgorgon/9sh/kyu/value"
 	"github.com/sandgorgon/9sh/ns"
 )
 
@@ -349,6 +350,80 @@ func TestKyuReplHistoryDisabledMidMultilineInput(t *testing.T) {
 	sendKey(w, input.KeyUp)
 	if w.input != before {
 		t.Fatalf("Up during multi-line continuation changed input to %q, want unchanged (%q)", w.input, before)
+	}
+}
+
+func TestKyuReplHistoryModeUniqueMovesDuplicateToEnd(t *testing.T) {
+	w := newTestReplWidget(t)
+	w.env.Define("history_mode", value.String("unique"))
+	sendRunes(w, `"a"`)
+	sendEnter(w)
+	sendRunes(w, `"b"`)
+	sendEnter(w)
+	sendRunes(w, `"a"`)
+	sendEnter(w)
+
+	want := []string{`"b"`, `"a"`}
+	if len(w.history) != len(want) {
+		t.Fatalf("history = %v, want %v", w.history, want)
+	}
+	for i := range want {
+		if w.history[i] != want[i] {
+			t.Fatalf("history = %v, want %v", w.history, want)
+		}
+	}
+}
+
+func TestKyuReplHistoryModeAllKeepsDuplicates(t *testing.T) {
+	w := newTestReplWidget(t) // history_mode unset -- default is "all"
+	sendRunes(w, `"a"`)
+	sendEnter(w)
+	sendRunes(w, `"a"`)
+	sendEnter(w)
+
+	want := []string{`"a"`, `"a"`}
+	if len(w.history) != len(want) {
+		t.Fatalf("history = %v, want %v (duplicates kept)", w.history, want)
+	}
+}
+
+// TestHistoryBuiltinsReachThisWidget drives history()/history_delete/
+// history_clear through a real evaluate() call -- the same
+// set-before/clear-after Env.HistoryAccess registration production
+// code uses (see evaluate()) -- rather than calling
+// historySnapshot/deleteHistoryEntry/clearHistoryEntries directly, so a
+// regression in the wiring itself (not just the underlying methods)
+// would be caught here. Calling w.evaluate directly, not sendEnter,
+// deliberately keeps history_delete/history_clear's own call text out
+// of w.history (only submit(), sendEnter's target, appends to it), so
+// each assertion below reflects only what the two real submissions put
+// there and what the builtin call under test did to it.
+func TestHistoryBuiltinsReachThisWidget(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, `"first"`)
+	sendEnter(w)
+	sendRunes(w, `"second"`)
+	sendEnter(w)
+
+	w.evaluate(`history() | count`)
+	if got := w.lines[len(w.lines)-1].text; got != "2" {
+		t.Fatalf("history() | count after 2 submissions = %q, want \"2\"", got)
+	}
+
+	w.evaluate(`history_delete(0)`)
+	if got := w.lines[len(w.lines)-1].text; got != "true" {
+		t.Fatalf("history_delete(0) = %q, want \"true\"", got)
+	}
+	if len(w.history) != 1 {
+		t.Fatalf("history after history_delete(0) = %v, want 1 entry left", w.history)
+	}
+	if w.history[0] != `"second"` {
+		t.Fatalf("history[0] after deleting index 0 = %q, want %q", w.history[0], `"second"`)
+	}
+
+	w.evaluate(`history_clear()`)
+	if len(w.history) != 0 {
+		t.Fatalf("history after history_clear() = %v, want empty", w.history)
 	}
 }
 

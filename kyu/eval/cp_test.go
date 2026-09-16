@@ -46,9 +46,47 @@ func TestCpOverwritesExistingFile(t *testing.T) {
 	}
 }
 
-func TestCpSourceIsDirectoryIsErrorVal(t *testing.T) {
-	env, _ := globEnv(t)
-	v := runEnv(t, `cp(/testdir, /testdir/dst.txt)`, env)
+func TestCpDirectoryCopiesTree(t *testing.T) {
+	env, dir := globEnv(t)
+	if err := os.MkdirAll(dir+"/srcdir/nested", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(dir+"/srcdir/top.txt", []byte("top"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(dir+"/srcdir/nested/deep.txt", []byte("deep"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runEnv(t, `cp(/testdir/srcdir, /testdir/dstdir)`, env)
+	// src is untouched
+	if _, err := os.Stat(dir + "/srcdir"); err != nil {
+		t.Errorf("srcdir no longer exists: %v", err)
+	}
+	got, err := os.ReadFile(dir + "/dstdir/top.txt")
+	if err != nil {
+		t.Fatalf("read back dstdir/top.txt: %v", err)
+	}
+	if string(got) != "top" {
+		t.Errorf("dstdir/top.txt content = %q, want %q", got, "top")
+	}
+	got, err = os.ReadFile(dir + "/dstdir/nested/deep.txt")
+	if err != nil {
+		t.Fatalf("read back dstdir/nested/deep.txt: %v", err)
+	}
+	if string(got) != "deep" {
+		t.Errorf("dstdir/nested/deep.txt content = %q, want %q", got, "deep")
+	}
+}
+
+func TestCpDirectoryToExistingDestinationIsErrorVal(t *testing.T) {
+	env, dir := globEnv(t)
+	if err := os.Mkdir(dir+"/srcdir", 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	if err := os.Mkdir(dir+"/dstdir", 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	v := runEnv(t, `cp(/testdir/srcdir, /testdir/dstdir)`, env)
 	if v.Kind() != "error" {
 		t.Fatalf("got %#v (%s), want an ErrorVal", v, v.Kind())
 	}

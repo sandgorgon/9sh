@@ -131,7 +131,7 @@ func (f *nsFile) Remove(ctx context.Context) error {
 	if f.real != nil {
 		return f.real.Remove(ctx)
 	}
-	return errors.New("ns: cannot remove a namespace bind point directly (no unbind yet)")
+	return errors.New("ns: cannot remove a namespace bind point directly (use unbind instead)")
 }
 
 func (f *nsFile) Close() error {

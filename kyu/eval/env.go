@@ -25,6 +25,8 @@ type Env struct {
 	lastExitCode       *int                   // process-wide, like ns; see SetLastExitCode
 	fullscreenHandler  FullscreenHandlerFunc  // process-wide, like ns; see SetFullscreenHandler
 	externalOutputSink ExternalOutputSinkFunc // process-wide, like ns; see SetExternalOutputSink
+	sourceConfig       SourceConfigFunc       // process-wide, like ns; see SetSourceConfig
+	historyAccess      *HistoryAccess         // process-wide, like ns; see SetHistoryAccess
 }
 
 // ExternalOutputSinkFunc receives a foreground %cmd's captured stderr
@@ -59,6 +61,18 @@ type FullscreenHandlerFunc func(cmd *exec.Cmd, onDone func(err error))
 // already uses for the same reason.
 type ProxyRecorderFunc func(host string, remoteID int, argv []string, tsStart, tsEnd time.Time, exitCode *int, signal string)
 
+// SourceConfigFunc re-runs config.ky, then common.ky/hosts/<hostname>.ky,
+// against env -- exactly cmd/9sh's own bootstrap sequence (README's
+// "Startup sequence", steps 8-9). A hook rather than a direct call
+// because kyu/eval can't import package config or package dotfiles:
+// both of those already import kyu/eval to run kyu code against an Env,
+// so the reverse import would cycle. cmd/9sh's bootstrap sets this to
+// the same two calls (config.Load, dotfiles.Load) it already makes once
+// at process start, so there's exactly one place that knows what "the
+// startup configs" means. See source_config()/reset_config()
+// (kyu/eval/source.go) for the two ways kyu code can invoke it.
+type SourceConfigFunc func(env *Env)
+
 func NewEnv(parent *Env) *Env {
 	return &Env{vars: map[string]value.Value{}, parent: parent}
 }
@@ -78,6 +92,54 @@ func (e *Env) root() *Env {
 // see NewGlobalEnv), regardless of how deep in nested scopes e is.
 func (e *Env) Namespace() *ns.Namespace {
 	return e.root().ns
+}
+
+// SetSourceConfig registers the hook source_config()/reset_config() call
+// — process-wide like the namespace. nil (the default, e.g. bare
+// eval-package tests that never call cmd/9sh's bootstrap) means neither
+// builtin is available.
+func (e *Env) SetSourceConfig(fn SourceConfigFunc) {
+	e.root().sourceConfig = fn
+}
+
+// SourceConfig returns the hook set by SetSourceConfig, or nil.
+func (e *Env) SourceConfig() SourceConfigFunc {
+	return e.root().sourceConfig
+}
+
+// HistoryAccess bundles the three operations history()/
+// history_delete(index)/history_clear() (kyu/eval/history.go) need
+// against whatever's keeping REPL recall history — only replui's
+// kyuReplWidget today. A hook for the same import-direction reason as
+// SourceConfigFunc: kyu/eval can't import replui, since replui already
+// imports kyu/eval. Registered set-before/clear-after each evaluate()
+// call, the same pattern SetFullscreenHandler/SetExternalOutputSink
+// already use (see kyurepl.go's evaluate()) — safe because evaluate()
+// calls never overlap.
+//
+// List returns every entry, oldest first, matching how Up/Down/Ctrl-R
+// walk it. Delete removes the entry at a List()-reported index,
+// reporting whether one existed there (unset()'s own convention).
+// Clear removes every entry.
+type HistoryAccess struct {
+	List   func() []string
+	Delete func(index int) bool
+	Clear  func()
+}
+
+// SetHistoryAccess registers the hook history()/history_delete/
+// history_clear call — process-wide like the namespace. nil (the
+// default, and the state outside any evaluate() call, or in any entry
+// point that isn't the TUI at all — the plain -repl/script modes have
+// no recall history to begin with) means none of the three are
+// available.
+func (e *Env) SetHistoryAccess(a *HistoryAccess) {
+	e.root().historyAccess = a
+}
+
+// HistoryAccess returns the hook set by SetHistoryAccess, or nil.
+func (e *Env) HistoryAccess() *HistoryAccess {
+	return e.root().historyAccess
 }
 
 // SetProxyRecorder configures the hook evalBackground/runExternalViaJob

@@ -137,6 +137,77 @@ func TestHelpShowsContentOnScreenViaF1(t *testing.T) {
 // doesn't wait for a transient "[exited]" frame the way it used to;
 // onDoneCalled and the prompt's return are the only durable signals
 // once the cycle settles, however many Dispatch calls it took.
+// dispatchAll runs the tui.Cmds HandleInput returns synchronously,
+// mirroring the loop cmd/9sh's real run loop uses (see
+// TestHelpShowsContentOnScreenViaF1).
+func dispatchAll(app *tui.App, cmds []tui.Cmd) {
+	for _, cmd := range cmds {
+		if cmd != nil {
+			app.Dispatch(cmd())
+		}
+	}
+}
+
+// typeLineAndSubmit drives the real HandleInput path (not
+// kyuReplWidget.HandleEvent directly) to submit src as a top-level kyu
+// expression — used below to get something into the transcript/history
+// before exercising the fullscreen round trip.
+func typeLineAndSubmit(app *tui.App, src string) {
+	for _, r := range src {
+		dispatchAll(app, app.HandleInput(input.KeyEvent{Rune: r}))
+	}
+	dispatchAll(app, app.HandleInput(input.KeyEvent{Key: input.KeyEnter}))
+}
+
+// TestFullscreenRoundTripPreservesTranscriptAndHistory is the
+// regression test for a real, previously-shipped bug: Model.View used
+// to build kyuReplNode from a fresh &kyuReplWidget{} every call, so
+// once a fullscreen attachment (kyuReplNode's tree slot going missing
+// for the whole time vim/9ed/... owns the screen) got disposed by tui's
+// reconciler (see kyuReplNode's own doc comment), control coming back
+// minted a brand-new widget with an empty transcript and empty history
+// — as if 9sh had just started, even though the session hadn't
+// restarted at all. Model now owns the one long-lived kyuReplWidget
+// instance itself (Model.replWidget), so this must survive the round
+// trip.
+func TestFullscreenRoundTripPreservesTranscriptAndHistory(t *testing.T) {
+	skipUnlessOnPath(t, "true")
+	m := New(eval.NewGlobalEnv(nil))
+	app := tui.NewApp(m, 40, 10)
+	defer app.Close()
+
+	typeLineAndSubmit(app, "40 + 2")
+	forceRenders(app, 1)
+	if buf := app.Buffer().String(); !strings.Contains(buf, "42") {
+		t.Fatalf("setup: expected 42 in the transcript before fullscreen:\n%s", buf)
+	}
+
+	var onDoneCalled bool
+	app.Dispatch(startFullscreenMsg{attach: &fullscreenAttach{
+		cmd:    exec.Command("true"),
+		onDone: func(error) { onDoneCalled = true },
+	}})
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !onDoneCalled {
+		app.Dispatch(struct{}{})
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !onDoneCalled {
+		t.Fatalf("onDone was never called after the fullscreen program exited:\n%s", app.Buffer().String())
+	}
+
+	forceRenders(app, 1)
+	if buf := app.Buffer().String(); !strings.Contains(buf, "42") {
+		t.Fatalf("transcript lost after returning from a fullscreen program:\n%s", buf)
+	}
+
+	dispatchAll(app, app.HandleInput(input.KeyEvent{Key: input.KeyUp}))
+	forceRenders(app, 1)
+	if buf := app.Buffer().String(); !strings.Contains(buf, "40 + 2") {
+		t.Fatalf("input history lost after returning from a fullscreen program (Up didn't recall it):\n%s", buf)
+	}
+}
+
 func TestFullscreenAttachRendersTerminalAndRestoresOnExit(t *testing.T) {
 	skipUnlessOnPath(t, "true")
 	m := New(eval.NewGlobalEnv(nil))

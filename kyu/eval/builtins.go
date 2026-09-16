@@ -24,6 +24,7 @@ import (
 var builtins = map[string]BuiltinFn{
 	"where":         biWhere,
 	"select":        biSelect,
+	"get_field":     biGetField,
 	"sort_by":       biSortBy,
 	"group_by":      biGroupBy,
 	"each":          biEach,
@@ -276,6 +277,38 @@ func biSelect(args []value.Value) (value.Value, error) {
 		out[i] = projected
 	}
 	return value.NewList(out), nil
+}
+
+// biGetField implements `get_field(name, record)`: the dynamic
+// counterpart to `.field` (ast.FieldAccess, a literal identifier known
+// at parse time) — same semantics as evalFieldAccess (a live-backed
+// field, e.g. one of ps()'s job records, is re-read fresh via
+// Record.Get; a missing field is a hard Go error, matching `.field`'s
+// own behavior exactly, not an ErrorVal, so the two forms differ only
+// in how the name is supplied), for when the field name isn't known
+// until runtime (a String built from a List, a script argument, ...).
+// record is the last argument, not the first, so a record can be piped
+// in the same way every other data-pipeline builtin's subject is
+// (`myrecord | get_field("name")`); composes with each for "a list of
+// property names, give me a list of values":
+// `["name", "size"] | each { |p| get_field(p, myrecord) }`.
+func biGetField(args []value.Value) (value.Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("get_field: expected 2 arguments (a field name, a record), got %d", len(args))
+	}
+	name, ok := args[0].(value.String)
+	if !ok {
+		return nil, fmt.Errorf("get_field: expected a string field name, got %s", args[0].Kind())
+	}
+	rec, ok := args[1].(*value.Record)
+	if !ok {
+		return nil, fmt.Errorf("get_field: expected a record, got %s", args[1].Kind())
+	}
+	v, ok := rec.Get(string(name))
+	if !ok {
+		return nil, fmt.Errorf("get_field: record has no field %q", string(name))
+	}
+	return v, nil
 }
 
 // keyFn resolves a sort_by/group_by key argument (a field-name String or a

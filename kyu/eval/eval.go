@@ -108,6 +108,40 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("mv", &Builtin{Name: "mv", Fn: func(args []value.Value) (value.Value, error) {
 		return biMv(env, args)
 	}})
+	// mkdir/rmdir need the calling Env's namespace — same closure-capture
+	// shape as rm/mv above. See mkdir.go's biMkdir, rmdir.go's biRmdir doc
+	// comments.
+	env.Define("mkdir", &Builtin{Name: "mkdir", Fn: func(args []value.Value) (value.Value, error) {
+		return biMkdir(env, args)
+	}})
+	env.Define("rmdir", &Builtin{Name: "rmdir", Fn: func(args []value.Value) (value.Value, error) {
+		return biRmdir(env, args)
+	}})
+	// source_config/reset_config need the calling Env itself (to re-run
+	// the startup-config hook, and for reset_config, to walk/mutate its
+	// scope chain and namespace) — same closure-capture shape as
+	// vars/unset above. See source.go's biSourceConfig, biResetConfig doc
+	// comments.
+	env.Define("source_config", &Builtin{Name: "source_config", Fn: func(args []value.Value) (value.Value, error) {
+		return biSourceConfig(env, args)
+	}})
+	env.Define("reset_config", &Builtin{Name: "reset_config", Fn: func(args []value.Value) (value.Value, error) {
+		return biResetConfig(env, args)
+	}})
+	// history/history_delete/history_clear need the calling Env itself
+	// (to reach whatever registered an Env.HistoryAccess hook) — same
+	// closure-capture shape as source_config/reset_config above. See
+	// history.go's biHistory, biHistoryDelete, biHistoryClear doc
+	// comments.
+	env.Define("history", &Builtin{Name: "history", Fn: func(args []value.Value) (value.Value, error) {
+		return biHistory(env, args)
+	}})
+	env.Define("history_delete", &Builtin{Name: "history_delete", Fn: func(args []value.Value) (value.Value, error) {
+		return biHistoryDelete(env, args)
+	}})
+	env.Define("history_clear", &Builtin{Name: "history_clear", Fn: func(args []value.Value) (value.Value, error) {
+		return biHistoryClear(env, args)
+	}})
 	// ps needs the calling Env's namespace — same closure-capture shape
 	// as glob/checkout above. See ps.go's biPs doc comment.
 	env.Define("ps", &Builtin{Name: "ps", Fn: func(args []value.Value) (value.Value, error) {

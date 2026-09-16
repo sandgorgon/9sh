@@ -8,6 +8,60 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `mkdir(path)` namespace builtin — creates `path`, creating any
+  missing intermediate directories along the way (`mkdir -p`
+  semantics); a no-op if `path` already exists as a directory.
+- `rmdir(path)`/`rmdir(path, recursive)` namespace builtins — remove an
+  empty namespace directory, or, with `recursive` true, a directory and
+  everything beneath it.
+- `cp(src, dst)` now allows a directory `src`: `dst` is created fresh
+  as a full recursive copy of the tree (`dst` must not already exist).
+- `mv(src, dst)` now allows a directory `src` for a same-parent rename
+  (a metadata-only `WStat`, same as a file) and for a cross-directory
+  move (a recursive copy via the same primitive `cp`'s directory mode
+  uses, followed by a recursive remove of `src`).
+- `source_config()`/`reset_config()` — re-run `config.ky`/`common.ky`/
+  `hosts/<hostname>.ky` at runtime, the same sequence 9sh's own
+  bootstrap runs once at startup. `source_config()` is additive (a
+  plain `bind`/`:=` already overwrites its own target); `reset_config()`
+  first clears user variables and non-core namespace binds so a removed
+  dotfile line actually goes away.
+- `history()`/`history_delete(index)`/`history_clear()` — list, remove
+  one entry from, or wipe the TUI's REPL recall history (Up/Down,
+  Ctrl+R) from kyu itself; TUI-only.
+- `history_mode := "unique"` (default `"all"`, seeded in a fresh
+  `config.ky`) — when set, submitting a line removes any earlier
+  occurrence of an identical one first, so history never holds two
+  copies of the same command.
+- `get_field(name, record)` — reads a record field by a runtime String
+  name, the dynamic counterpart to `.field`'s literal-identifier-only
+  syntax. Pipeable (`record | get_field("name")`); composes with `each`
+  for "a list of property names, give me a list of values":
+  `["a", "b"] | each { |p| get_field(p, record) }`.
+
+### Fixed
+
+- `ns.nsFile.Remove`'s error message on an unbound namespace bind point
+  said "no unbind yet" — stale since `unbind DST` shipped; now points
+  at it.
+- The TUI's transcript and input history were silently wiped every time
+  a fullscreen program (`vim`, `9ed`, ...) exited. `Model.View` built
+  the kyu-repl widget fresh from `&kyuReplWidget{}` on every call; the
+  reconciler discards a Component's retained widget the moment its Node
+  is absent from a whole frame, which is exactly what happens for as
+  long as a fullscreen attachment owns the screen — so control coming
+  back minted a brand-new, empty widget. `Model` now owns the one
+  long-lived `kyuReplWidget` instance itself.
+
+### Changed
+
+- Bumped `tui` to v0.9.0 (from v0.8.0) — v0.8.1's `Theme.Info`/`Accent`
+  color-collision fix and v0.9.0's `TextArea`/`TextInput`
+  `OnSelectionChange` callback; no breaking API changes, nothing in
+  9sh's own use of the library affected.
+
 ## [0.4.28] - 2026-09-11
 
 ### Fixed

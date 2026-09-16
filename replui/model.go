@@ -34,7 +34,16 @@ import (
 // Model is replui's tui.Model — see the package doc comment for why
 // this exists instead of a bare kyuReplNode.
 type Model struct {
-	env *eval.Env
+	// replWidget is the one long-lived kyuReplWidget instance for this
+	// session's lifetime, constructed once in New and handed to
+	// kyuReplNode on every View() call — see kyuReplNode's own doc
+	// comment for why this can't just be built lazily inside it: tui's
+	// reconciler discards a Component's retained Widget the moment its
+	// Node is absent from an entire frame, which happens for as long as
+	// a fullscreen %cmd is attached (see fullscreen below), so anything
+	// that must survive that has to be owned here, at the Model level,
+	// not inside the widget the reconciler is free to throw away.
+	replWidget *kyuReplWidget
 
 	// theme is only for the help overlay's own border/text contrast
 	// (widget.Modal's ModalOptions.Theme) — kyuReplWidget's own colors
@@ -76,7 +85,10 @@ type Model struct {
 // namespace, job history) is identical whether reached through here,
 // -repl, or a script.
 func New(env *eval.Env) Model {
-	return Model{env: env, theme: style.Default(style.DetectAppearance(os.Getenv))}
+	return Model{
+		replWidget: &kyuReplWidget{env: env},
+		theme:      style.Default(style.DetectAppearance(os.Getenv)),
+	}
 }
 
 func (m Model) Init() tui.Cmd { return nil }
@@ -176,7 +188,7 @@ func (m Model) View() tui.Node {
 		}).Key("fullscreen-term")
 	}
 	return tui.Box(layout.Vertical,
-		tui.Child(layout.Fill(1), kyuReplNode(m.env)),
+		tui.Child(layout.Fill(1), kyuReplNode(m.replWidget)),
 		// Length(0): a widget.Modal's own assigned Rect is never used
 		// (real drawing happens via PaintOverlay, a separate full-buffer
 		// pass — see Modal's own doc comment), so this deliberately

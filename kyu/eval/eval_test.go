@@ -492,6 +492,46 @@ t | select("a")`
 	}
 }
 
+func TestGetFieldReadsByRuntimeName(t *testing.T) {
+	src := `r := {a: 1, b: "two"}
+get_field("b", r)`
+	if v := run(t, src); v != value.String("two") {
+		t.Errorf("got %#v, want String(\"two\")", v)
+	}
+}
+
+func TestGetFieldPipesRecordAsSubject(t *testing.T) {
+	src := `r := {a: 1, b: "two"}
+r | get_field("a")`
+	if v := run(t, src); v != value.Int(1) {
+		t.Errorf("got %#v, want Int(1)", v)
+	}
+}
+
+func TestGetFieldMissingFieldIsHardError(t *testing.T) {
+	src := `r := {a: 1}
+get_field("nope", r)`
+	if err := runErr(t, src); err == nil {
+		t.Fatal("expected a hard error for a missing field, got none")
+	}
+}
+
+func TestGetFieldNonRecordIsHardError(t *testing.T) {
+	if err := runErr(t, `get_field("a", 1)`); err == nil {
+		t.Fatal("expected a hard error for a non-record subject, got none")
+	}
+}
+
+func TestGetFieldComposesWithEachForPropertyList(t *testing.T) {
+	src := `r := {name: "foo.txt", size: 42}
+["name", "size"] | each { |p| get_field(p, r) }`
+	v := run(t, src)
+	lst := v.(*value.List)
+	if len(lst.Elems) != 2 || lst.Elems[0] != value.String("foo.txt") || lst.Elems[1] != value.Int(42) {
+		t.Errorf("got %#v, want [\"foo.txt\", 42]", lst.Elems)
+	}
+}
+
 func TestSortByFieldName(t *testing.T) {
 	src := `t := [{n: 3}, {n: 1}, {n: 2}]
 t | sort_by("n")`

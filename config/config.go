@@ -43,8 +43,19 @@ import (
 // prefix-free calling + namespace-path handling) — 9ed genuinely needs
 // both, since it's a terminal-owning TUI editor that's also
 // namespace-aware; 9vcs is an ordinary CLI, so it only needs this one.
+//
+// history_mode (see kyu/eval's Env.HistoryAccess, replui/kyurepl.go's
+// historyUnique) controls how the TUI's REPL recall history (Up/Down,
+// Ctrl-R) grows: "all" keeps every submission, duplicates included;
+// "unique" removes any earlier occurrence of an identical line before
+// appending it, so history never holds two copies of the same command.
+// Seeded explicitly (rather than left to code's own "unset means all"
+// default) so it shows up in a fresh config.ky as something to flip,
+// the same discoverability reasoning fullscreen_programs/
+// native_programs already get.
 const defaultConfig = `fullscreen_programs := ["vim", "vi", "nvim", "emacs", "top", "htop", "less", "man", "ssh", "nano", "mutt", "9ed"]
 native_programs := ["9ed", "9vcs"]
+history_mode := "all"
 `
 
 // Dir returns this install's settings directory, ~/.config/9/config —

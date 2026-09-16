@@ -28,15 +28,19 @@ func dontTouchStat() p9.Stat {
 // directory, this is a real rename: one WStat with a new Name, the same
 // primitive server.File.WStat already exposes on every backend a
 // namespace can bind (see dontTouchStat's doc comment) — no content ever
-// moves. When they don't share a parent (moving across namespace
-// directories, possibly across a bind boundary onto a different real
-// backend entirely), WStat's Name field can't reach across directories,
-// so this falls back to a copy-then-remove, the same read/write shape
-// biCp already uses, finished by removing src the way biRm does.
+// moves, so this works for a directory src exactly as well as a file
+// (WStat doesn't care what the Qid says). When they don't share a parent
+// (moving across namespace directories, possibly across a bind boundary
+// onto a different real backend entirely), WStat's Name field can't
+// reach across directories, so this falls back to a copy-then-remove.
+// For a file src this is the same read/write shape biCp already uses,
+// finished by removing src the way biRm does; for a directory src it's
+// copyDirTree (tree.go) — the same recursive-copy primitive biCp's own
+// directory mode uses — finished by removeTree on src instead of a
+// plain Remove.
 //
-// v1 scope, deliberately narrow like cp/rm's own: src must be a regular
-// file, not a directory. Any failure is an ordinary ErrorVal, not a hard
-// error, matching cp/rm/stat/glob's convention.
+// Any failure is an ordinary ErrorVal, not a hard error, matching
+// cp/rm/stat/glob's convention.
 func biMv(env *Env, args []value.Value) (value.Value, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("mv: expected 2 arguments (source path, destination path), got %d", len(args))
@@ -75,15 +79,33 @@ func biMv(env *Env, args []value.Value) (value.Value, error) {
 	if err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: %v", src, err)}, nil
 	}
-	if srcSt.Qid.IsDir() {
-		return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: is a directory (directory move not yet supported)", src)}, nil
-	}
 
 	if samePath(srcParts[:len(srcParts)-1], dstParts[:len(dstParts)-1]) {
 		st := dontTouchStat()
 		st.Name = dstParts[len(dstParts)-1]
 		if err := srcFile.WStat(ctx, st); err != nil {
 			return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: %v", dst, err)}, nil
+		}
+		return value.Null{}, nil
+	}
+
+	if srcSt.Qid.IsDir() {
+		if _, err := walkAll(ctx, root, dstParts); err == nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: already exists (directory move needs a fresh destination)", dst)}, nil
+		}
+		dstParent, err := walkAll(ctx, root, dstParts[:len(dstParts)-1])
+		if err != nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: %v", dst, err)}, nil
+		}
+		if err := copyDirTree(ctx, srcFile, dstParent, dstParts[len(dstParts)-1]); err != nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: %v", dst, err)}, nil
+		}
+		srcFile2, err := walkAll(ctx, root, srcParts)
+		if err != nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("mv: copied to %s but couldn't re-open %s to remove it: %v", dst, src, err)}, nil
+		}
+		if err := removeTree(ctx, srcFile2); err != nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("mv: copied to %s but couldn't remove %s: %v", dst, src, err)}, nil
 		}
 		return value.Null{}, nil
 	}

@@ -13,11 +13,10 @@ import (
 // namespace can bind (ns/file.go, remote/client_fs.go, remote/auth_fs.go,
 // job/fs.go) for exactly this, just never exposed to kyu directly before.
 //
-// v1 scope, deliberately narrow like cp's own: path must be a regular
-// file, not a directory (recursive namespace directory removal needs
-// namespace-directory-walk-and-remove semantics nothing in this codebase
-// has yet). Any failure is an ordinary ErrorVal, not a hard error,
-// matching cp/stat/glob's convention.
+// path must be a regular file, not a directory -- use rmdir (empty
+// directories, or rmdir(path, true) for a recursive delete) for that.
+// Any failure is an ordinary ErrorVal, not a hard error, matching
+// cp/stat/glob's convention.
 func biRm(env *Env, args []value.Value) (value.Value, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("rm: expected 1 argument (a path), got %d", len(args))
@@ -49,7 +48,7 @@ func biRm(env *Env, args []value.Value) (value.Value, error) {
 		return value.ErrorVal{Msg: fmt.Sprintf("rm: %s: %v", p, err)}, nil
 	}
 	if st.Qid.IsDir() {
-		return value.ErrorVal{Msg: fmt.Sprintf("rm: %s: is a directory (directory removal not yet supported)", p)}, nil
+		return value.ErrorVal{Msg: fmt.Sprintf("rm: %s: is a directory (use rmdir instead)", p)}, nil
 	}
 	if err := f.Remove(ctx); err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("rm: %s: %v", p, err)}, nil

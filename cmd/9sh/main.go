@@ -251,16 +251,25 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 			})
 		})
 	}
-	// config.Load runs before dotfiles.Load: config.ky's defaults (e.g.
-	// fullscreen_programs) should already be in scope by the time
-	// common.ky/hosts/<hostname>.ky run, so they can extend rather than
-	// having to redeclare them whole
-	// (fullscreen_programs := fullscreen_programs + ["mytool"]).
-	config.Load(env)
-	// Loaded last, once /jobs, /local, -listen, session history, and
-	// /config are all already wired up: common.ky/hosts/<hostname>.ky may
-	// reasonably want to bind, dial, or background jobs of their own.
-	dotfiles.Load(env)
+	// sourceStartupConfig is registered on env before its first run below
+	// so source_config()/reset_config() (kyu/eval/source.go) call this
+	// exact same sequence -- one place that knows what "the startup
+	// configs" are, not a duplicated copy of it.
+	sourceStartupConfig := func(e *eval.Env) {
+		// config.Load runs before dotfiles.Load: config.ky's defaults
+		// (e.g. fullscreen_programs) should already be in scope by the
+		// time common.ky/hosts/<hostname>.ky run, so they can extend
+		// rather than having to redeclare them whole
+		// (fullscreen_programs := fullscreen_programs + ["mytool"]).
+		config.Load(e)
+		// Loaded last, once /jobs, /local, -listen, session history, and
+		// /config are all already wired up: common.ky/hosts/<hostname>.ky
+		// may reasonably want to bind, dial, or background jobs of their
+		// own.
+		dotfiles.Load(e)
+	}
+	env.SetSourceConfig(sourceStartupConfig)
+	sourceStartupConfig(env)
 	return env, recorder, sessionDir, envScratchDir
 }
 

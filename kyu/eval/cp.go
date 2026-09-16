@@ -24,15 +24,19 @@ import (
 // reach a namespace-only endpoint (/jobs, /env) at all without staging
 // through checkout() first.
 //
-// v1 scope, deliberately narrow like checkout's own write-back: src
-// must be a regular file, not a directory (recursive tree copy would
-// need namespace directory creation, which nothing in this codebase
-// does yet — see resolveOrCreate's own "doesn't create new
-// subdirectories" doc comment), and dst may not itself be an existing
-// directory (name the destination file explicitly). Both surface as an
-// ordinary ErrorVal, not a hard error, matching stat/glob/ls's own
-// convention for "the path you gave doesn't fit what this builtin
-// does" rather than a malformed-call error.
+// src may also be a directory: dst is then created fresh (via
+// copyDirTree, tree.go) as a full recursive copy of src's tree, same
+// shared primitive mv's cross-directory directory move uses. dst must
+// not already exist in that case — no merge-into-an-existing-directory
+// semantics yet, name a fresh destination, mirroring mkdir's own
+// "already exists and isn't a directory" refusal.
+//
+// For a regular-file src, dst may not itself be an existing directory
+// (name the destination file explicitly) — unchanged from before
+// directory src support existed. Any failure is an ordinary ErrorVal,
+// not a hard error, matching stat/glob/ls's own convention for "the
+// path you gave doesn't fit what this builtin does" rather than a
+// malformed-call error.
 func biCp(env *Env, args []value.Value) (value.Value, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("cp: expected 2 arguments (source path, destination path), got %d", len(args))
@@ -63,8 +67,23 @@ func biCp(env *Env, args []value.Value) (value.Value, error) {
 	if err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", src, err)}, nil
 	}
+	dstParts := splitPath(string(dst))
+	if len(dstParts) == 0 {
+		return value.ErrorVal{Msg: "cp: destination cannot be the namespace root"}, nil
+	}
+
 	if srcSt.Qid.IsDir() {
-		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: is a directory (directory copy not yet supported)", src)}, nil
+		if _, err := walkAll(ctx, root, dstParts); err == nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: already exists (directory copy needs a fresh destination)", dst)}, nil
+		}
+		dstParent, err := walkAll(ctx, root, dstParts[:len(dstParts)-1])
+		if err != nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", dst, err)}, nil
+		}
+		if err := copyDirTree(ctx, srcFile, dstParent, dstParts[len(dstParts)-1]); err != nil {
+			return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", dst, err)}, nil
+		}
+		return value.Null{}, nil
 	}
 	if err := srcFile.Open(ctx, p9.OREAD); err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", src, err)}, nil
@@ -75,10 +94,6 @@ func biCp(env *Env, args []value.Value) (value.Value, error) {
 		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", src, err)}, nil
 	}
 
-	dstParts := splitPath(string(dst))
-	if len(dstParts) == 0 {
-		return value.ErrorVal{Msg: "cp: destination cannot be the namespace root"}, nil
-	}
 	dstFile, err := resolveOrCreate(ctx, root, dstParts)
 	if err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", dst, err)}, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	p9 "github.com/sandgorgon/9p"
@@ -231,5 +232,84 @@ func TestBindPathErrorsOnUnresolvableSource(t *testing.T) {
 	ctx := context.Background()
 	if err := ns.BindPath(ctx, []string{"/does/not/exist"}, "/dst", Replace); err == nil {
 		t.Fatal("BindPath from an unresolvable source should error")
+	}
+}
+
+// deadFS is a server.FileSystem whose root can't be listed, standing in for
+// a bound remote whose connection has gone away.
+type deadFS struct{ err error }
+
+func (d *deadFS) Attach(ctx context.Context, uname, aname string) (server.File, error) {
+	return &deadRoot{memRoot: memRoot{m: &memFS{}}, err: d.err}, nil
+}
+
+type deadRoot struct {
+	memRoot
+	err error
+}
+
+func (r *deadRoot) Read(ctx context.Context, offset int64, p []byte) (int, error) {
+	return 0, r.err
+}
+
+func listNames(t *testing.T, ctx context.Context, f server.File) []string {
+	t.Helper()
+	entries, err := ReadDirEntries(ctx, f)
+	if err != nil {
+		t.Fatalf("ReadDirEntries: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	return names
+}
+
+// A bind whose only layer can't be listed is an error, not an empty
+// directory, and the error names the layer by its bind spec.
+func TestListErrorsWhenEveryLayerFails(t *testing.T) {
+	ns := New()
+	ctx := context.Background()
+	dead := errors.New("connection reset")
+	if err := ns.BindFSSpec(&deadFS{err: dead}, "", "/n/host", Replace, `dial("host:1")`); err != nil {
+		t.Fatal(err)
+	}
+	root, _ := ns.Attach(ctx, "u", "")
+	dir := mustWalk(t, ctx, root, "n", "host")
+	_, err := ReadDirEntries(ctx, dir)
+	if err == nil {
+		t.Fatal("listing a bind whose only layer is dead returned no error (looks like an empty directory)")
+	}
+	if !errors.Is(err, dead) {
+		t.Errorf("error %q should wrap the layer's own error", err)
+	}
+	if !strings.Contains(err.Error(), `dial("host:1")`) {
+		t.Errorf("error %q should name the failed layer's spec", err)
+	}
+}
+
+// One dead member of a union must not hide the healthy ones.
+func TestListSkipsDeadLayerInAUnion(t *testing.T) {
+	ns := New()
+	ctx := context.Background()
+	ns.BindFS(&memFS{name: "alive", content: "1"}, "", "/u", Replace)
+	ns.BindFS(&deadFS{err: errors.New("boom")}, "", "/u", After)
+	root, _ := ns.Attach(ctx, "u", "")
+	dir := mustWalk(t, ctx, root, "u")
+	if got := listNames(t, ctx, dir); len(got) != 1 || got[0] != "alive" {
+		t.Fatalf("listing = %v, want [alive]", got)
+	}
+}
+
+// A node with tree children still lists them when its only layer is dead.
+func TestListKeepsTreeChildrenWhenLayerFails(t *testing.T) {
+	ns := New()
+	ctx := context.Background()
+	ns.BindFS(&deadFS{err: errors.New("boom")}, "", "/u", Replace)
+	ns.BindFS(&memFS{name: "x", content: "1"}, "", "/u/child", Replace)
+	root, _ := ns.Attach(ctx, "u", "")
+	dir := mustWalk(t, ctx, root, "u")
+	if got := listNames(t, ctx, dir); len(got) != 1 || got[0] != "child" {
+		t.Fatalf("listing = %v, want [child]", got)
 	}
 }

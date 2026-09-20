@@ -8,6 +8,18 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Changed
+
+- Listing a bind point whose every layer fails now returns an error
+  instead of an empty directory, so an unreachable bind (a dropped
+  remote, a server-side failure) is no longer indistinguishable from an
+  empty one. The error names each failed layer by its bind spec, e.g.
+  `dial("host:1"): read: connection reset`. A dead layer in a union
+  still doesn't hide the healthy ones, and a bind point with explicit
+  child nodes still lists them. `mv` of a directory out of an
+  unreachable bind now fails before creating its destination (it used to
+  leave an empty one behind); `rmdir` and `mv` never removed the source.
+
 ### Fixed
 
 - Listing a directory of a dialed server bound into the namespace

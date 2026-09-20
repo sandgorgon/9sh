@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	p9 "github.com/sandgorgon/9p"
 	"github.com/sandgorgon/9p/server"
 )
 
@@ -84,6 +85,25 @@ func (l *layer) root(ctx context.Context) (server.File, error) {
 	}
 	l.resolved = f
 	return f, nil
+}
+
+// list reads this layer's root directory, wrapping any failure with the
+// layer's bind spec (or a generic label for a Go-bootstrap bind, which has
+// none) so an error from a union says which member it came from.
+func (l *layer) list(ctx context.Context) ([]p9.Stat, error) {
+	label := l.spec
+	if label == "" {
+		label = "unnamed bind"
+	}
+	root, err := l.root(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", label, err)
+	}
+	entries, err := ReadDirEntries(ctx, root)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", label, err)
+	}
+	return entries, nil
 }
 
 // node is one point in the namespace's own explicit tree — built up by

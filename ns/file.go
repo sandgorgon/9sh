@@ -163,6 +163,14 @@ func (f *nsFile) Read(ctx context.Context, offset int64, p []byte) (int, error) 
 // bound layer's own directory listing, in layer order — a tree child
 // shadows a layer entry of the same name, matching Walk's own
 // tree-before-layers precedence.
+//
+// A layer that fails to attach or list is skipped, so one dead member of
+// a union doesn't make the rest unlistable. But if every layer failed and
+// there are no tree children to show either, the listing errors instead
+// of coming back empty: an unreachable bind is otherwise indistinguishable
+// from an empty directory (and Walk already reports its last layer error
+// when every layer fails). The error names each failed layer by its bind
+// spec.
 func (f *nsFile) listLocalDir(ctx context.Context) ([]p9.Stat, error) {
 	f.n.mu.RLock()
 	children := make(map[string]*node, len(f.n.children))
@@ -187,13 +195,11 @@ func (f *nsFile) listLocalDir(ctx context.Context) ([]p9.Stat, error) {
 		seen[name] = true
 	}
 
+	var layerErrs []error
 	for _, l := range layers {
-		root, err := l.root(ctx)
+		layerEntries, err := l.list(ctx)
 		if err != nil {
-			continue // a layer that fails to attach is skipped in a listing, not fatal to the whole read
-		}
-		layerEntries, err := ReadDirEntries(ctx, root)
-		if err != nil {
+			layerErrs = append(layerErrs, err)
 			continue
 		}
 		for _, e := range layerEntries {
@@ -203,6 +209,9 @@ func (f *nsFile) listLocalDir(ctx context.Context) ([]p9.Stat, error) {
 			seen[e.Name] = true
 			entries = append(entries, e)
 		}
+	}
+	if len(layerErrs) > 0 && len(layerErrs) == len(layers) && len(children) == 0 {
+		return nil, errors.Join(layerErrs...)
 	}
 	return entries, nil
 }

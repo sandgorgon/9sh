@@ -107,6 +107,9 @@ func FormatBinds(binds []Bind) string {
 //
 //	/ns/binds       replayable kyu, one `bind` per layer (see FormatBinds)
 //	/ns/binds.json  the same layers as a JSON array of Bind, for tools
+//	/ns/log         every bind/unbind as replayable kyu, with the
+//	                original dispositions and times (see FormatLog)
+//	/ns/log.json    the same as {"dropped": N, "entries": [LogEntry]}
 //
 // Plan 9's /proc/$pid/ns, split in two the way /jobs' status is JSON:
 // the text is for people and `source`, the JSON is what binds() reads.
@@ -124,8 +127,14 @@ func (fs *BindsFS) Attach(ctx context.Context, uname, aname string) (server.File
 
 var (
 	qidBindsRoot = hashPath("/ns")
-	bindsFiles   = map[string]uint64{"binds": hashPath("/ns/binds"), "binds.json": hashPath("/ns/binds.json")}
-	bindsOrder   = []string{"binds", "binds.json"}
+	bindsOrder   = []string{"binds", "binds.json", "log", "log.json"}
+	bindsFiles   = func() map[string]uint64 {
+		m := map[string]uint64{}
+		for _, name := range bindsOrder {
+			m[name] = hashPath("/ns/" + name)
+		}
+		return m
+	}()
 )
 
 type bindsRoot struct{ fs *BindsFS }
@@ -175,6 +184,20 @@ type bindsFile struct {
 func (f *bindsFile) Qid() p9.Qid { return p9.Qid{Type: p9.QTFILE, Path: bindsFiles[f.name]} }
 
 func (f *bindsFile) content() []byte {
+	switch f.name {
+	case "log", "log.json":
+		entries, dropped := f.fs.ns.Log()
+		if f.name == "log" {
+			return []byte(FormatLog(entries, dropped))
+		}
+		if entries == nil {
+			entries = []LogEntry{}
+		}
+		return jsonLine(struct {
+			Dropped uint64     `json:"dropped"`
+			Entries []LogEntry `json:"entries"`
+		}{dropped, entries})
+	}
 	binds := f.fs.ns.Binds()
 	if f.name == "binds" {
 		return []byte(FormatBinds(binds))
@@ -182,7 +205,11 @@ func (f *bindsFile) content() []byte {
 	if binds == nil {
 		binds = []Bind{}
 	}
-	b, _ := json.Marshal(binds) // Bind is plain strings; can't fail
+	return jsonLine(binds)
+}
+
+func jsonLine(v any) []byte {
+	b, _ := json.Marshal(v) // plain strings and ints; can't fail
 	return append(b, '\n')
 }
 

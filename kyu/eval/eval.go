@@ -152,6 +152,10 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("source", &Builtin{Name: "source", Fn: func(args []value.Value) (value.Value, error) {
 		return biSource(env, args)
 	}})
+	// bind_log reads /ns/log.json through the namespace — see bindlog.go.
+	env.Define("bind_log", &Builtin{Name: "bind_log", Fn: func(args []value.Value) (value.Value, error) {
+		return biBindLog(env, args)
+	}})
 	// which_bind needs the calling Env's namespace — see whichbind.go.
 	env.Define("which_bind", &Builtin{Name: "which_bind", Fn: func(args []value.Value) (value.Value, error) {
 		return biWhichBind(env, args)

@@ -17,6 +17,11 @@ once a first tagged release is cut.
   kyu (bootstrap binds with no kyu spelling appear as comments);
   `binds()` is the `Table`-of-`Record`s view, like `ps()` over `/jobs`.
   Previously nothing recorded a bind's parameters after it ran.
+- `bind_log()` builtin and `/ns/log`, `/ns/log.json` — an append-only
+  history of every successful bind and unbind with its original
+  disposition and time (`binds()` reports canonical dispositions and
+  drops unbound paths). `/ns/log` is replayable kyu. Capped at the
+  newest 1000 entries.
 - `which_bind(path)` builtin (and `ns.Namespace.Resolve`) — reports the
   bind point, union layer and in-layer path that serve a given path,
   mirroring what a real walk would do. Local namespace only.

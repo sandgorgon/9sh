@@ -153,3 +153,56 @@ func TestWhichBindReportsServingLayer(t *testing.T) {
 		t.Error("which_bind() with no args should be an error")
 	}
 }
+
+func TestBindLogAndReplayKeepsOriginalDisposition(t *testing.T) {
+	dir := t.TempDir()
+	env := sourceEnv(t, dir)
+	runEnv(t, `bind dir("`+dir+`"), /std`, env)
+	runEnv(t, `bind /src, /std, before`, env) // the disposition binds() can't recover
+	runEnv(t, `bind /src + /std, /both`, env)
+	runEnv(t, `unbind /both`, env)
+
+	lst := runEnv(t, `bind_log()`, env).(*value.List)
+	var ops []string
+	for _, el := range lst.Elems {
+		r := el.(*value.Record)
+		op, _ := r.Get("op")
+		dst, _ := r.Get("dst")
+		disp, _ := r.Get("disp")
+		if op.String() == "unbind" && disp != (value.Null{}) {
+			t.Errorf("unbind disp = %#v, want null", disp)
+		}
+		ops = append(ops, op.String()+" "+dst.String()+" "+disp.String())
+	}
+	got := strings.Join(ops, "|")
+	for _, want := range []string{"bind /std replace", "bind /std before", "bind /both replace", "unbind /both null"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("bind_log() missing %q in %q", want, got)
+		}
+	}
+
+	// Replaying the log into a fresh namespace reproduces the same layers,
+	// bootstrap comments and the trailing timestamps notwithstanding.
+	writeKy(t, dir, "log.ky", string(runEnv(t, `cat(/ns/log)`, env).(value.String)))
+	env2 := sourceEnv(t, dir)
+	runEnv(t, `source(/src/log.ky)`, env2)
+	layers := func(e *Env) string {
+		var out []string
+		for _, el := range runEnv(t, `binds(/std)`, e).(*value.List).Elems {
+			r := el.(*value.Record)
+			src, _ := r.Get("src")
+			disp, _ := r.Get("disp")
+			out = append(out, src.String()+"|"+disp.String())
+		}
+		return strings.Join(out, ",")
+	}
+	if a, b := layers(env), layers(env2); a != b || !strings.HasPrefix(a, "/src|replace,") {
+		t.Fatalf("replayed /std = %q, original = %q", b, a)
+	}
+}
+
+func TestBindLogRejectsArguments(t *testing.T) {
+	if _, err := biBindLog(bindsEnv(t), []value.Value{value.Int(1)}); err == nil {
+		t.Fatal("bind_log(1) should be an error")
+	}
+}

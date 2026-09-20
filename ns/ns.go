@@ -23,6 +23,17 @@ import (
 
 type Disposition int
 
+func (d Disposition) String() string {
+	switch d {
+	case Before:
+		return "before"
+	case After:
+		return "after"
+	default:
+		return "replace"
+	}
+}
+
 const (
 	Replace Disposition = iota
 	Before
@@ -86,6 +97,7 @@ type node struct {
 type Namespace struct {
 	root *node
 	seq  atomic.Uint64
+	log  bindLog
 }
 
 func New() *Namespace {
@@ -140,7 +152,11 @@ func (ns *Namespace) BindFS(fs server.FileSystem, subpath string, dst string, di
 func (ns *Namespace) BindFSSpec(fs server.FileSystem, subpath string, dst string, disp Disposition, spec string) error {
 	n := ns.ensureNode(dst)
 	l := &layer{fs: fs, subpath: splitPath(subpath), spec: spec, seq: ns.seq.Add(1)}
-	return n.addLayers([]*layer{l}, disp)
+	if err := n.addLayers([]*layer{l}, disp); err != nil {
+		return err
+	}
+	ns.log.record("bind", dst, spec, disp)
+	return nil
 }
 
 // BindPath grafts the namespace node(s) currently reachable at srcPaths
@@ -164,7 +180,11 @@ func (ns *Namespace) BindPath(ctx context.Context, srcPaths []string, dst string
 		layers[i] = &layer{resolved: f, spec: sp, seq: ns.seq.Add(1)}
 	}
 	n := ns.ensureNode(dst)
-	return n.addLayers(layers, disp)
+	if err := n.addLayers(layers, disp); err != nil {
+		return err
+	}
+	ns.log.record("bind", dst, strings.Join(srcPaths, " + "), disp)
+	return nil
 }
 
 // Unbind clears everything bound at path — kyu's `unbind`, the inverse
@@ -185,6 +205,7 @@ func (ns *Namespace) Unbind(path string) error {
 		return fmt.Errorf("ns: unbind: nothing bound at %s", path)
 	}
 	n.layers = nil
+	ns.log.record("unbind", path, "", Replace)
 	return nil
 }
 

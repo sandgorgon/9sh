@@ -227,6 +227,16 @@ control flow, env/kyu vars, remote namespaces, file ops).
   recoverable once a later bind has spliced around it. Reads go
   through the namespace, so a peer's `/n/host/ns/binds` shows its binds
   too.
+- `bind_log()` returns every successful `bind` and `unbind` so far,
+  oldest first, as a `Table` of `Record`s (`seq`, `time`, `op`, `dst`,
+  `src`, `disp`) — what was actually typed, which is the one thing
+  `binds()` can't give you: the original `before`/`after`, and every
+  `unbind` (a path you unbound simply vanishes from `binds()`).
+  `cat(/ns/log)` is the same history as replayable kyu, one statement
+  per entry with its time as a trailing comment, so `source(/ns/log)`
+  re-runs it with each disposition intact; `/ns/log.json` is the JSON.
+  Failed operations aren't logged (they changed nothing). The log keeps
+  the newest 1000 entries, and says how many older ones it dropped.
 - `which_bind(path)` says what serves a path: a `Record` with `kind`
   (`layer` — inside a bound filesystem; `bindpoint` — exactly a bind
   point, e.g. a union directory; `tree` — a purely synthetic directory
@@ -429,7 +439,8 @@ one bootstrap, in this order, before any of your own code runs:
    defaults (`fullscreen_programs`, `native_programs`) the first time
    only; an existing file is never overwritten.
 6. `/ns` is bound — a read-only view of this namespace's own binds
-   (`/ns/binds`, `/ns/binds.json`); see `binds()`.
+   (`/ns/binds`, `/ns/binds.json`, `/ns/log`, `/ns/log.json`); see
+   `binds()` and `bind_log()`.
 7. `/session` is bound — best-effort (needs `9vcs` on `PATH` and a home
    directory); the directory is still bound even when the recorder
    itself couldn't start, so past history stays readable as plain

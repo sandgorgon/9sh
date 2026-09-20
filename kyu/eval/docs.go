@@ -30,8 +30,8 @@ func Docs() []BuiltinDoc {
 
 var builtinDocs = []BuiltinDoc{
 	// Namespace
-	{"bind", "bind SRC, DST[, before|after|replace]",
-		"Grafts SRC onto the namespace at DST — a Path, a namespace-union expression (a + b), or a MountHandle from dial()/dir(). A statement, not a function; comma-separated, not space-separated."},
+	{"bind", "bind SRC, DST[, before|after|replace][, ro]",
+		"Grafts SRC onto the namespace at DST — a Path, a namespace-union expression (a + b), or a MountHandle from dial()/dir(). Optional trailing words: a disposition (before/after/replace) and/or ro, which makes writes through this bind fail (the same tree bound elsewhere stays writable). A statement, not a function; comma-separated, not space-separated."},
 	{"unbind", "unbind DST",
 		"Clears whatever's bound at DST. Unbinding somewhere nothing is bound is an error, unlike unsetenv's forgiving convention."},
 	{"glob", `glob(pattern)`,

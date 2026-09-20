@@ -17,6 +17,11 @@ once a first tagged release is cut.
   kyu (bootstrap binds with no kyu spelling appear as comments);
   `binds()` is the `Table`-of-`Record`s view, like `ps()` over `/jobs`.
   Previously nothing recorded a bind's parameters after it ran.
+- `bind SRC, DST[, disposition][, ro]` — the `ro` flag makes a bind
+  read-only: writes, creates, removes and renames through it fail, while
+  the same tree bound elsewhere (or reached by its original path) stays
+  writable. Reported as a `ro` field by `binds()`/`bind_log()`/
+  `which_bind()` and preserved in `/ns/binds` and `/ns/log`.
 - `match`/`capture`/`replace_re` regex builtins (Go RE2), `range`,
   `zip`, and `keys`/`values` for records.
 - `write(path, str)` / `append(path, str)` namespace builtins — write a

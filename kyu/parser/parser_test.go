@@ -579,3 +579,38 @@ func TestGroupedExprEndingInCall(t *testing.T) {
 		parseOK(t, src)
 	}
 }
+
+func TestBindStmtReadOnlyFlag(t *testing.T) {
+	cases := []struct {
+		src  string
+		disp string
+		ro   bool
+	}{
+		{`bind /a, /b`, "replace", false},
+		{`bind /a, /b, ro`, "replace", true},
+		{`bind /a, /b, after, ro`, "after", true},
+		{`bind /a, /b, ro, before`, "before", true},
+		{`bind /a, /b, before`, "before", false},
+	}
+	for _, c := range cases {
+		bs := parseOK(t, c.src).Stmts[0].(*ast.BindStmt)
+		if bs.Disposition != c.disp || bs.ReadOnly != c.ro {
+			t.Errorf("%s: got (%s, ro=%v), want (%s, ro=%v)", c.src, bs.Disposition, bs.ReadOnly, c.disp, c.ro)
+		}
+	}
+}
+
+func TestBindStmtRejectsBadTrailingWords(t *testing.T) {
+	for _, src := range []string{
+		`bind /a, /b, ro, ro`,
+		`bind /a, /b, before, after`,
+		`bind /a, /b, rw`,
+		`bind /a, /b, 5`,
+	} {
+		p := New(src)
+		p.ParseProgram()
+		if len(p.Errors()) == 0 {
+			t.Errorf("%s: expected a parse error", src)
+		}
+	}
+}

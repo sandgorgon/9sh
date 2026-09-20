@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	p9 "github.com/sandgorgon/9p"
 )
 
 func TestBindsRecordsSpecAndCanonicalDisposition(t *testing.T) {
@@ -278,5 +280,71 @@ func TestBindsFSLogFiles(t *testing.T) {
 	}
 	if doc.Dropped != 0 || len(doc.Entries) != 3 || doc.Entries[2].Op != "unbind" {
 		t.Fatalf("log.json = %#v", doc)
+	}
+}
+
+func TestReadOnlyBindRefusesWritesButOriginalStaysWritable(t *testing.T) {
+	n := New()
+	ctx := context.Background()
+	n.BindFS(&memFS{name: "f", content: "data"}, "", "/rw", Replace)
+	if err := n.BindPathOpts(ctx, []string{"/rw"}, "/ro", Replace, BindOpts{ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	root, _ := n.Attach(ctx, "u", "")
+
+	f := mustWalk(t, ctx, root, "ro", "f")
+	if err := f.Open(ctx, p9.OREAD); err != nil {
+		t.Fatalf("read open through ro bind: %v", err)
+	}
+	if got := readAll(t, ctx, f); got != "data" {
+		t.Fatalf("read through ro = %q", got)
+	}
+	for name, mode := range map[string]p9.Mode{"write": p9.OWRITE, "rdwr": p9.ORDWR, "trunc": p9.OREAD | p9.OTRUNC} {
+		if err := mustWalk(t, ctx, root, "ro", "f").Open(ctx, mode); err == nil {
+			t.Errorf("open %s through ro bind should fail", name)
+		}
+	}
+	if _, err := mustWalk(t, ctx, root, "ro", "f").Write(ctx, 0, []byte("x")); err == nil {
+		t.Error("write through ro bind should fail")
+	}
+	if err := mustWalk(t, ctx, root, "ro", "f").Remove(ctx); err == nil {
+		t.Error("remove through ro bind should fail")
+	}
+	if err := mustWalk(t, ctx, root, "ro", "f").WStat(ctx, p9.Stat{Name: "g"}); err == nil {
+		t.Error("wstat through ro bind should fail")
+	}
+	if _, err := mustWalk(t, ctx, root, "ro").Create(ctx, "new", 0644, p9.OWRITE); err == nil {
+		t.Error("create through ro bind should fail")
+	}
+	if st, _ := mustWalk(t, ctx, root, "ro", "f").Stat(ctx); st.Mode&0222 != 0 {
+		t.Errorf("ro Stat mode = %o, write bits should be masked", st.Mode)
+	}
+
+	// The same file through the non-ro bind is untouched by any of that.
+	if err := mustWalk(t, ctx, root, "rw", "f").Open(ctx, p9.OWRITE); err != nil {
+		t.Errorf("open for write through the rw bind: %v", err)
+	}
+}
+
+func TestReadOnlyShowsInBindsLogAndResolve(t *testing.T) {
+	n := New()
+	ctx := context.Background()
+	n.BindFS(&memFS{name: "f"}, "", "/rw", Replace)
+	n.BindPathOpts(ctx, []string{"/rw"}, "/ro", Replace, BindOpts{ReadOnly: true})
+	n.BindFSOpts(&memFS{name: "g"}, "", "/ro2", After, BindOpts{Spec: `dir("/x")`, ReadOnly: true})
+
+	if got, want := FormatBinds(n.Binds()), "# bind <builtin>, /rw\nbind /rw, /ro, ro\nbind dir(\"/x\"), /ro2, ro\n"; got != want {
+		t.Errorf("FormatBinds =\n%s\nwant\n%s", got, want)
+	}
+	entries, dropped := n.Log()
+	if got := FormatLog(entries, dropped); !strings.Contains(got, "bind dir(\"/x\"), /ro2, after, ro  #") {
+		t.Errorf("log lacks disposition+ro: %s", got)
+	}
+	res, err := n.Resolve(ctx, "/ro/f")
+	if err != nil || !res.RO {
+		t.Errorf("Resolve(/ro/f) = %#v, %v; want RO", res, err)
+	}
+	if res, _ := n.Resolve(ctx, "/rw/f"); res.RO {
+		t.Error("Resolve(/rw/f) should not be RO")
 	}
 }

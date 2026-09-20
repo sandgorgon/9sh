@@ -68,9 +68,21 @@ Prefer to learn by running real programs instead of reading prose? See
 feature area each (namespace basics, jobs, data pipelines, strings,
 control flow, env/kyu vars, remote namespaces, file ops).
 
-- `bind SRC, DST[, before|after|replace]` grafts something onto the
+- `bind SRC, DST[, before|after|replace][, ro]` grafts something onto the
   namespace — a local directory, a job-control tree, a dialed remote
-  peer's whole namespace, all the same mechanism.
+  peer's whole namespace, all the same mechanism. The trailing words
+  can come in either order, each at most once. `ro` makes the bind
+  read-only: opening for write, creating, removing, renaming and
+  writing all fail through it (`ls`/`stat` also drop the write bits),
+  so `bind /n/peer, /peer-view, ro` is a safe window onto a peer. It's
+  a property of *that bind*, not of the tree: the same directory bound
+  elsewhere without `ro`, or reached by its original path, stays
+  writable, and an `ro` view reflects changes made that way. With
+  `before`/`after` in a union, a create goes to the first layer, so a
+  read-only first layer refuses creates even if a later layer would
+  accept them. `binds()`, `bind_log()` and `which_bind()` report it as a
+  `ro` field, and `/ns/binds` and `/ns/log` spell it back out so a
+  replay keeps it.
 - `%cmd` calls out to an ordinary Linux binary; a `%cmd ... &` job is a
   live record — `j.status`, `j.ctl = "stop"`, `j | wait` all read/write
   through to real namespace files, not a snapshot.

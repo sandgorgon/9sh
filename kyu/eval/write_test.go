@@ -79,11 +79,17 @@ func TestWriteReachesJobCtl(t *testing.T) {
 	if v := runEnv(t, `write(/jobs/`+id.String()+`/ctl, "kill")`, env); v != (value.Null{}) {
 		t.Fatalf("write to ctl = %#v", v)
 	}
-	// The kill lands asynchronously; wait for a terminal state rather than
-	// asserting on the instant after the write.
+	// The kill lands asynchronously, and a killed job may leave /jobs
+	// entirely before we look again, so "no jobs listed" is as much proof
+	// the 30s sleep was stopped as a non-running state is. Wait for
+	// either rather than asserting on the instant after the write.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		state, _ := runEnv(t, `ps()`, env).(*value.List).Elems[0].(*value.Record).Get("state")
+		left := runEnv(t, `ps()`, env).(*value.List).Elems
+		if len(left) == 0 {
+			return
+		}
+		state, _ := left[0].(*value.Record).Get("state")
 		if state.String() != "running" {
 			return
 		}

@@ -225,6 +225,15 @@ control flow, env/kyu vars, remote namespaces, file ops).
   recoverable once a later bind has spliced around it. Reads go
   through the namespace, so a peer's `/n/host/ns/binds` shows its binds
   too.
+- `source(path)` runs a kyu file from the namespace against the session,
+  exactly as if its text were typed at the prompt (defines and binds
+  land in the session, not a local scope) — `source(/ns/binds)`
+  replays this namespace's binds. A file that doesn't parse is an
+  `ErrorVal` and runs nothing; a runtime error aborts, naming the path;
+  a file that sources itself is cut off at 32 levels. It runs arbitrary
+  kyu (`%cmd` included) with your full authority, so sourcing a peer's
+  file (`source(/n/host/ns/binds)`) trusts that peer with your session —
+  `cat()` it first, the way you'd read a downloaded shell script.
 - A script's own arguments are visible as `args` (a `List` of `String`)
   — `9sh script.kyu foo bar` sees `args == ["foo", "bar"]`.
 - `%cmd1 && %cmd2` / `%cmd1 || %cmd2` chain by real exit status, like a

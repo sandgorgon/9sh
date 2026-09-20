@@ -147,6 +147,11 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("ps", &Builtin{Name: "ps", Fn: func(args []value.Value) (value.Value, error) {
 		return biPs(env, args)
 	}})
+	// source runs a namespace file against this (global) Env — see
+	// sourcefile.go's biSource.
+	env.Define("source", &Builtin{Name: "source", Fn: func(args []value.Value) (value.Value, error) {
+		return biSource(env, args)
+	}})
 	// binds needs the calling Env's namespace, same as ps — see binds.go.
 	env.Define("binds", &Builtin{Name: "binds", Fn: func(args []value.Value) (value.Value, error) {
 		return biBinds(env, args)

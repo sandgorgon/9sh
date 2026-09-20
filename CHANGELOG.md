@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.4.30] - 2026-09-20
+
 ### Added
 
 - `binds()` namespace builtin and a read-only `/ns` filesystem

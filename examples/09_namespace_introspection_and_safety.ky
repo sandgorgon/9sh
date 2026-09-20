@@ -1,0 +1,85 @@
+# What a bind was made with, and how to make one safely. Nothing here
+# records or hides anything by magic: every builtin below reads the
+# namespace's own state (the read-only /ns files behind binds()/
+# bind_log(), or the bind tree itself for which_bind()).
+#
+# Self-contained, like 08: bind /local (the launch directory) and
+# dir("/tmp") for scratch space, and remove every file it creates.
+bind /local, /work
+bind dir("/tmp"), /scratch
+
+# write/append are cat's write-side counterparts: create-or-replace
+# and add-to-the-end, through the same namespace as everything else.
+write(/scratch/9sh-example-note.txt, "hello")
+append(/scratch/9sh-example-note.txt, " world")
+note := cat(/scratch/9sh-example-note.txt)
+
+# `, ro` makes a bind read-only: opening for write, creating, removing
+# and renaming all fail through /view -- a safe window onto /scratch --
+# while /scratch itself (and anything reached by its original path)
+# stays writable. A failure is an ordinary ErrorVal, so `!` is true.
+bind /scratch, /view, ro
+blocked := !write(/view/9sh-example-note.txt, "nope")
+still_hello := cat(/view/9sh-example-note.txt)
+
+# binds() is every layer bound right now (dst, src, disp, ro); binds(path)
+# keeps only that path and what's beneath it, by whole path segment.
+# disp is the canonical *replay* disposition (replace for a path's
+# first layer, after for the rest), not necessarily the one you typed.
+view_layer := binds(/view) | first
+view_src := view_layer.src
+view_ro := view_layer.ro
+
+# which_bind(path) answers what `ls` can't inside a union: which bind
+# point and which layer serves a path, and the path within that layer.
+served_by := which_bind(/view/9sh-example-note.txt)
+served_layer := served_by.layer
+served_inner := served_by.inner
+
+# bind_log() keeps what was actually typed -- every successful bind and
+# unbind, oldest first -- including things binds() can't show you, like
+# a path you've since unbound. (/ns/log is the same history as
+# replayable kyu, and it's also saved under /session/binds/ when
+# session history is available.)
+unbind /view
+log_tail := bind_log() | last
+last_op := log_tail.op
+last_dst := log_tail.dst
+
+# in_ns runs a block against a private copy of the namespace: binds
+# and unbinds inside don't leak out, and the original is restored
+# however the block ends. Here /scratch is rebound to something else
+# inside the block only.
+inside_src := in_ns {
+    bind /work, /scratch
+    inner_layer := binds(/scratch) | first
+    inner_layer.src
+}
+outside_src := (binds(/scratch) | first).src
+still_there := stat(/scratch/9sh-example-note.txt).size
+
+# source(path) runs a kyu file from the namespace against the session
+# -- e.g. source(/ns/binds) replays a namespace. It runs arbitrary
+# kyu with your full authority, so cat() a peer's file before sourcing
+# it. Here it's a file we just wrote ourselves.
+write(/scratch/9sh-example-src.ky, "sourced_value := 6 * 7")
+source(/scratch/9sh-example-src.ky)
+
+rm(/scratch/9sh-example-note.txt)
+rm(/scratch/9sh-example-src.ky)
+
+format(
+    "note = \"{}\"; write through the ro bind blocked: {} (file still \"{}\"); /view came from {} (ro: {}); served by layer {} at {}; bind_log's last entry: {} {}; in_ns saw /scratch from {} while outside it's still {}; source() defined sourced_value = {}",
+    note,
+    blocked,
+    still_hello,
+    view_src,
+    view_ro,
+    served_layer,
+    served_inner,
+    last_op,
+    last_dst,
+    inside_src,
+    outside_src,
+    sourced_value,
+)

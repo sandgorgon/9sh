@@ -64,9 +64,10 @@ something this binary hosts itself (see "Design" below for why).
 ```
 
 Prefer to learn by running real programs instead of reading prose? See
-[`examples/`](examples/) — eight small, verified `.ky` scripts, one
+[`examples/`](examples/) — ten small, verified `.ky` scripts, one
 feature area each (namespace basics, jobs, data pipelines, strings,
-control flow, env/kyu vars, remote namespaces, file ops).
+control flow, env/kyu vars, remote namespaces, file ops, namespace
+introspection and safety, regex and collections).
 
 - `bind SRC, DST[, before|after|replace][, ro]` grafts something onto the
   namespace — a local directory, a job-control tree, a dialed remote

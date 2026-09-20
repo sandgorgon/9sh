@@ -10,7 +10,7 @@ import (
 
 // protectedNamespaceRoots is the set of top-level namespace entries
 // reset_config() leaves untouched: 9sh's own process bootstrap (/jobs,
-// /local, /env, /config, /session — see README's "Startup sequence"),
+// /local, /env, /config, /session, /ns — see README's "Startup sequence"),
 // not something "the startup configs" (config.ky, common.ky,
 // hosts/<hostname>.ky) are considered to own. Rebuilding these from
 // scratch would need state (the job manager, the real launch directory,
@@ -19,7 +19,7 @@ import (
 // holds live job records. See biResetConfig's doc comment for the
 // residual limitation this leaves.
 var protectedNamespaceRoots = map[string]bool{
-	"jobs": true, "local": true, "env": true, "config": true, "session": true,
+	"jobs": true, "local": true, "env": true, "config": true, "session": true, "ns": true,
 }
 
 // protectedVarNames is process-provided state that happens to live in
@@ -69,12 +69,12 @@ func biSourceConfig(env *Env, args []value.Value) (value.Value, error) {
 // is removed (the same builtin-vs-user-variable filter vars()/unset()
 // already use, plus protectedVarNames for process-provided state that
 // isn't a dotfile's), and every top-level namespace entry outside
-// jobs/local/env/config/session is unbound — a dotfile-created
+// jobs/local/env/config/session/ns is unbound — a dotfile-created
 // /n/<host> mount from dial()+bind, or any other bespoke bind a
 // previous source_config()/reset_config() left behind, goes away before
 // config.ky/common.ky/hosts/<hostname>.ky run again from a clean slate.
 //
-// Residual limitation: if a dotfile binds onto one of the five
+// Residual limitation: if a dotfile binds onto one of the six
 // protected roots themselves with an explicit before/after (rather than
 // plain bind's default replace), that extra layer survives a reset —
 // removing it would mean unbinding the root entirely, which this

@@ -16,6 +16,7 @@ import (
 	"hash/fnv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/sandgorgon/9p/server"
 )
@@ -34,11 +35,20 @@ const (
 // which grafts a File already reachable elsewhere in the namespace —
 // captured at bind time, per Plan-9 semantics: a later bind elsewhere
 // doesn't retroactively change this one).
+//
+// spec and seq are introspection-only (see Binds): spec is the kyu source
+// expression that produced this layer ("/local", `dial("h:1")`), or ""
+// for a Go-bootstrap bind with no kyu spelling; seq is the order layers
+// were added in across the whole namespace, so a replayed listing can
+// respect bind-time dependencies (a bind sourced from an earlier one).
+// Neither affects resolution.
 type layer struct {
 	mu       sync.Mutex
 	fs       server.FileSystem
 	subpath  []string
 	resolved server.File
+	spec     string
+	seq      uint64
 }
 
 func (l *layer) root(ctx context.Context) (server.File, error) {
@@ -75,6 +85,7 @@ type node struct {
 // Namespace is a bind tree. The zero value is not usable; use New.
 type Namespace struct {
 	root *node
+	seq  atomic.Uint64
 }
 
 func New() *Namespace {
@@ -120,8 +131,15 @@ func (ns *Namespace) ensureNode(path string) *node {
 // before grafting, so a single fs can be bootstrap-bound at more than
 // one point rooted at different subtrees.
 func (ns *Namespace) BindFS(fs server.FileSystem, subpath string, dst string, disp Disposition) error {
+	return ns.BindFSSpec(fs, subpath, dst, disp, "")
+}
+
+// BindFSSpec is BindFS plus the kyu source expression that produced fs
+// (e.g. `dial("host:1")`), recorded for Binds. An empty spec marks a
+// bind with no kyu spelling, like the /jobs bootstrap.
+func (ns *Namespace) BindFSSpec(fs server.FileSystem, subpath string, dst string, disp Disposition, spec string) error {
 	n := ns.ensureNode(dst)
-	l := &layer{fs: fs, subpath: splitPath(subpath)}
+	l := &layer{fs: fs, subpath: splitPath(subpath), spec: spec, seq: ns.seq.Add(1)}
 	return n.addLayers([]*layer{l}, disp)
 }
 
@@ -143,7 +161,7 @@ func (ns *Namespace) BindPath(ctx context.Context, srcPaths []string, dst string
 		if err != nil {
 			return fmt.Errorf("ns: bind: %s: %w", sp, err)
 		}
-		layers[i] = &layer{resolved: f}
+		layers[i] = &layer{resolved: f, spec: sp, seq: ns.seq.Add(1)}
 	}
 	n := ns.ensureNode(dst)
 	return n.addLayers(layers, disp)

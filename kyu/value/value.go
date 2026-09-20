@@ -143,6 +143,10 @@ func (u NSUnion) String() string {
 type MountHandle struct {
 	Addr string
 	FS   any
+	// Spec is the kyu expression that built this handle (`dial("a")`,
+	// `dir("/p")`), so bind can record where a graft came from — see
+	// ns.Namespace.BindFSSpec. Empty for a handle built outside kyu.
+	Spec string
 }
 
 func (MountHandle) Kind() string     { return "mount" }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -790,5 +791,67 @@ func TestListenUnixServesOnlyASubtree(t *testing.T) {
 	w.Close()
 	if _, err := root.Create(ctx, "new.txt", 0644, p9.OWRITE); err == nil {
 		t.Error("create through a read-only served subtree succeeded")
+	}
+}
+
+// TestBoundRemoteDirectoryListsThroughNamespace is the regression test for
+// a bound remote directory listing as empty: nsFile.listLocalDir reads a
+// bound layer's root via ns.ReadDirEntries, which never calls Open, and
+// the layer error was then swallowed -- so ls("/n/x/*") came back [] for a
+// Unix-socket-dialed server (9ed) even though the server had entries.
+func TestBoundRemoteDirectoryListsThroughNamespace(t *testing.T) {
+	fs := memfs.New()
+	if err := writeMemFile(fs, "tag", []byte("x")); err != nil {
+		t.Fatalf("seeding memfs: %v", err)
+	}
+	if err := writeMemFile(fs, "goto", []byte("y")); err != nil {
+		t.Fatalf("seeding memfs: %v", err)
+	}
+
+	sockPath := filepath.Join(t.TempDir(), "list.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l, err := ListenUnix(ctx, sockPath, fs)
+	if err != nil {
+		t.Fatalf("ListenUnix: %v", err)
+	}
+	defer l.Close()
+	conn, err := Dial(ctx, sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	namespace := ns.New()
+	if err := namespace.BindFS(conn.FS(), "", "/i/9ed", ns.Replace); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	root, err := namespace.Attach(ctx, "9sh", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	dir, err := root.Walk(ctx, "i")
+	if err != nil {
+		t.Fatalf("walk i: %v", err)
+	}
+	dir, err = dir.Walk(ctx, "9ed")
+	if err != nil {
+		t.Fatalf("walk 9ed: %v", err)
+	}
+	// Listed twice: the second read reuses the layer's cached, already
+	// lazily-opened root.
+	for range 2 {
+		entries, err := ns.ReadDirEntries(ctx, dir)
+		if err != nil {
+			t.Fatalf("ReadDirEntries: %v", err)
+		}
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name)
+		}
+		sort.Strings(names)
+		if got := strings.Join(names, ","); got != "goto,tag" {
+			t.Fatalf("listing = %q, want goto,tag", got)
+		}
 	}
 }

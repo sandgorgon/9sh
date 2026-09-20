@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 
 	p9 "github.com/sandgorgon/9p"
 	"github.com/sandgorgon/9p/client"
@@ -57,6 +58,7 @@ type clientFile struct {
 	path []string    // relative to the attach root; nil = root itself
 	st   p9.Stat
 
+	mu   sync.Mutex   // guards open, for Read's lazy directory open
 	open *client.File // non-nil once Open/Create has succeeded; always wraps fid itself, never a second independent fid — see Close
 }
 
@@ -102,6 +104,11 @@ func (f *clientFile) walkTo(ctx context.Context, path []string) (server.File, er
 // and re-walking the path from the attach root — f.open ends up wrapping
 // the exact same fid f.fid already names, not a second one; see Close.
 func (f *clientFile) Open(ctx context.Context, mode p9.Mode) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.open != nil && f.st.Qid.IsDir() && mode&3 == p9.OREAD {
+		return nil // already opened OREAD by Read's lazy directory open; a second Topen on the same fid would fail
+	}
 	of, err := f.fid.OpenFileContext(ctx, mode)
 	if err != nil {
 		return err
@@ -148,13 +155,40 @@ func (f *clientFile) Create(ctx context.Context, name string, perm, mode p9.Mode
 // Seek(SeekStart) never does a wire round trip, so this costs nothing extra
 // for the common sequential-read case.
 func (f *clientFile) Read(ctx context.Context, offset int64, p []byte) (int, error) {
-	if f.open == nil {
-		return 0, fmt.Errorf("remote: read: not open")
-	}
-	if _, err := f.open.Seek(offset, io.SeekStart); err != nil {
+	of, err := f.readable(ctx)
+	if err != nil {
 		return 0, err
 	}
-	return f.open.Read(p)
+	if _, err := of.Seek(offset, io.SeekStart); err != nil {
+		return 0, err
+	}
+	return of.Read(p)
+}
+
+// readable returns f's open handle, opening a directory OREAD on first
+// use. ns.ReadDirEntries (and so every namespace listing — a bound
+// layer's root is read that way by nsFile.listLocalDir) reads a
+// directory without ever calling Open, which is fine for the in-process
+// backends but leaves a remote fid unopened: Tread on it fails, and
+// listLocalDir skips a layer whose listing errors, so a bound remote
+// directory silently listed as empty. Only directories are opened
+// lazily; a regular file must still be Opened explicitly, since its
+// open mode (read vs. write vs. truncate) isn't something Read can guess.
+func (f *clientFile) readable(ctx context.Context) (*client.File, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.open != nil {
+		return f.open, nil
+	}
+	if !f.st.Qid.IsDir() {
+		return nil, fmt.Errorf("remote: read: not open")
+	}
+	of, err := f.fid.OpenFileContext(ctx, p9.OREAD)
+	if err != nil {
+		return nil, err
+	}
+	f.open = of
+	return of, nil
 }
 
 func (f *clientFile) Write(ctx context.Context, offset int64, p []byte) (int, error) {

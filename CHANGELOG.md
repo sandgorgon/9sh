@@ -8,6 +8,16 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Fixed
+
+- Listing a directory of a dialed server bound into the namespace
+  returned an empty list instead of its entries: `ls("/i/9ed/*")` on a
+  bound 9ed Unix socket gave `[]`. Namespace listings read a directory
+  without opening it, which the in-process filesystems accept but a
+  remote fid does not (`remote: read: not open`), and the failed layer
+  was then skipped silently. A remote directory is now opened read-only
+  on its first read.
+
 ## [0.5.0] - 2026-09-20
 
 ### Added

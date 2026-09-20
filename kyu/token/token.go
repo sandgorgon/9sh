@@ -60,6 +60,7 @@ const (
 	BREAK
 	CONTINUE
 	UNBIND
+	IN_NS
 )
 
 var keywords = map[string]Kind{
@@ -70,6 +71,7 @@ var keywords = map[string]Kind{
 	"else":     ELSE,
 	"bind":     BIND,
 	"unbind":   UNBIND,
+	"in_ns":    IN_NS,
 	"while":    WHILE,
 	"break":    BREAK,
 	"continue": CONTINUE,
@@ -192,6 +194,8 @@ func (k Kind) String() string {
 		return "continue"
 	case UNBIND:
 		return "unbind"
+	case IN_NS:
+		return "in_ns"
 	default:
 		return "UNKNOWN"
 	}

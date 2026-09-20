@@ -16,7 +16,8 @@ import (
 // ns.Resolution); dst (the bind point); src (the serving layer's source
 // expression, null for a bootstrap bind or a non-layer path); layer
 // (0-based union position, null when none); layers (how many layers dst
-// has); ro (whether the serving layer refuses writes); inner (the path
+// has); ro (whether the serving layer refuses writes — for a bindpoint,
+// its first layer, where a create would go); inner (the path
 // within the layer, null unless kind is "layer").
 // A path that doesn't resolve is an ordinary in-stream ErrorVal.
 //

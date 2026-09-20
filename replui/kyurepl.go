@@ -241,7 +241,7 @@ func (w *kyuReplWidget) Paint(p *cell.Painter) {
 func tokenStyle(k token.Kind) (cell.Style, bool) {
 	switch k {
 	case token.IF, token.ELSE, token.WHILE, token.BREAK, token.CONTINUE,
-		token.BIND, token.UNBIND, token.TRUE, token.FALSE, token.NULL:
+		token.BIND, token.UNBIND, token.IN_NS, token.TRUE, token.FALSE, token.NULL:
 		return keywordStyle, true
 	case token.STRING:
 		return stringStyle, true
@@ -1086,7 +1086,7 @@ func textLines(text string, style cell.Style) []replLine {
 // this short and this rarely changing doesn't justify a new exported
 // API just for tab completion to reach it.
 var kyuKeywords = []string{
-	"if", "else", "while", "break", "continue", "bind", "unbind",
+	"if", "else", "while", "break", "continue", "bind", "unbind", "in_ns",
 	"true", "false", "null",
 }
 

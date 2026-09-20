@@ -83,6 +83,21 @@ control flow, env/kyu vars, remote namespaces, file ops).
   accept them. `binds()`, `bind_log()` and `which_bind()` report it as a
   `ro` field, and `/ns/binds` and `/ns/log` spell it back out so a
   replay keeps it.
+- `in_ns { ... }` runs a block against a private copy of the namespace
+  (Plan 9's `rfork`): binds and unbinds inside don't leak out,
+  everything already bound is visible inside, and the original comes
+  back however the block ends — normally, on an error, or through a
+  `break`. Try a risky rebind with no cleanup to write:
+  `in_ns { bind dir("/tmp/scratch"), /work; %make }`. What's copied is
+  the bind *tree*, not content: a bind is a view, so a write through a
+  shared directory still reaches the real directory, and `/ns/binds`
+  and `/ns/log` inside the block describe the block's namespace (the
+  log starts from the outer history). A `bind /a, /b` made earlier
+  follows the copy's `/a`, not the original's. A `%cmd ... &` job
+  started inside keeps running after the block and shows up in `ps()`;
+  a network `-listen` peer keeps seeing the original namespace, never
+  the block's. Variables defined inside are block-scoped, like `if`, and
+  the block's value is its last value.
 - `%cmd` calls out to an ordinary Linux binary; a `%cmd ... &` job is a
   live record — `j.status`, `j.ctl = "stop"`, `j | wait` all read/write
   through to real namespace files, not a snapshot.

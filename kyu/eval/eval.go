@@ -18,7 +18,7 @@ import (
 // tests — that don't need either.
 func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env := NewEnv(nil)
-	env.ns = namespace
+	env.ns.Store(namespace)
 	for name, fn := range builtins {
 		env.Define(name, &Builtin{Name: name, Fn: fn})
 	}
@@ -27,7 +27,7 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	// here rather than widening every other builtin's signature for
 	// this one case. See checkout.go's biCheckout doc comment.
 	env.Define("checkout", &Builtin{Name: "checkout", Fn: func(args []value.Value) (value.Value, error) {
-		return biCheckout(namespace, args)
+		return biCheckout(env.Namespace(), args)
 	}})
 	// cd needs the calling Env itself (to call SetCwd) — same
 	// closure-capture shape as checkout above. See cd.go's biCd doc
@@ -294,6 +294,8 @@ func evalExpr(e ast.Expr, env *Env) (value.Value, error) {
 		return nil, continueSignal{}
 	case *ast.AtHost:
 		return evalAtHost(x, env)
+	case *ast.InNS:
+		return evalInNS(x, env)
 	case *ast.Background:
 		return evalBackground(x, env)
 	default:

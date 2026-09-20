@@ -347,4 +347,10 @@ func TestReadOnlyShowsInBindsLogAndResolve(t *testing.T) {
 	if res, _ := n.Resolve(ctx, "/rw/f"); res.RO {
 		t.Error("Resolve(/rw/f) should not be RO")
 	}
+	if res, _ := n.Resolve(ctx, "/ro"); !res.RO {
+		t.Error("Resolve(/ro) — the read-only bind point itself — should be RO")
+	}
+	if res, _ := n.Resolve(ctx, "/rw"); res.RO {
+		t.Error("Resolve(/rw) should not be RO")
+	}
 }

@@ -2,6 +2,7 @@ package eval
 
 import (
 	"os/exec"
+	"sync/atomic"
 	"time"
 
 	"github.com/sandgorgon/9sh/kyu/value"
@@ -16,18 +17,18 @@ import (
 type Env struct {
 	vars               map[string]value.Value
 	parent             *Env
-	ns                 *ns.Namespace
-	jobRoot            []string               // nil = inherit from parent; see JobRoot
-	proxyRecorder      ProxyRecorderFunc      // process-wide, like ns; see ProxyRecorder
-	passthroughBlocked string                 // process-wide, like ns; see SetPassthroughBlocked
-	cwd                string                 // process-wide, like ns; see SetCwd
-	interruptHandler   func()                 // process-wide, like ns; see SetInterruptHandler
-	lastExitCode       *int                   // process-wide, like ns; see SetLastExitCode
-	fullscreenHandler  FullscreenHandlerFunc  // process-wide, like ns; see SetFullscreenHandler
-	externalOutputSink ExternalOutputSinkFunc // process-wide, like ns; see SetExternalOutputSink
-	sourceConfig       SourceConfigFunc       // process-wide, like ns; see SetSourceConfig
-	historyAccess      *HistoryAccess         // process-wide, like ns; see SetHistoryAccess
-	sourceDepth        int                    // process-wide, like ns; see biSource's maxSourceDepth
+	ns                 atomic.Pointer[ns.Namespace] // swapped for the duration of an in_ns block; see SwapNamespace
+	jobRoot            []string                     // nil = inherit from parent; see JobRoot
+	proxyRecorder      ProxyRecorderFunc            // process-wide, like ns; see ProxyRecorder
+	passthroughBlocked string                       // process-wide, like ns; see SetPassthroughBlocked
+	cwd                string                       // process-wide, like ns; see SetCwd
+	interruptHandler   func()                       // process-wide, like ns; see SetInterruptHandler
+	lastExitCode       *int                         // process-wide, like ns; see SetLastExitCode
+	fullscreenHandler  FullscreenHandlerFunc        // process-wide, like ns; see SetFullscreenHandler
+	externalOutputSink ExternalOutputSinkFunc       // process-wide, like ns; see SetExternalOutputSink
+	sourceConfig       SourceConfigFunc             // process-wide, like ns; see SetSourceConfig
+	historyAccess      *HistoryAccess               // process-wide, like ns; see SetHistoryAccess
+	sourceDepth        int                          // process-wide, like ns; see biSource's maxSourceDepth
 }
 
 // ExternalOutputSinkFunc receives a foreground %cmd's captured stderr
@@ -92,7 +93,17 @@ func (e *Env) root() *Env {
 // Namespace returns the process's namespace (nil if none was configured —
 // see NewGlobalEnv), regardless of how deep in nested scopes e is.
 func (e *Env) Namespace() *ns.Namespace {
-	return e.root().ns
+	return e.root().ns.Load()
+}
+
+// SwapNamespace makes n the process's namespace and returns the one it
+// replaced — process-wide like Namespace(), so every scope (and every
+// builtin closure registered by NewGlobalEnv) sees the change at once.
+// evalInNS pairs it with a deferred swap back; the atomic is only for
+// readers on other goroutines (a job's completion callback, the TUI),
+// since evaluation itself is single-threaded.
+func (e *Env) SwapNamespace(n *ns.Namespace) *ns.Namespace {
+	return e.root().ns.Swap(n)
 }
 
 // SetSourceConfig registers the hook source_config()/reset_config() call

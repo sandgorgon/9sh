@@ -222,6 +222,20 @@ type AtHost struct {
 func (*AtHost) exprNode() {}
 func (*AtHost) node()     {}
 
+// InNS is `in_ns { ... }` — runs the block against a private copy of the
+// namespace: binds and unbinds inside it don't leak out, and everything
+// already bound is visible inside. A keyword rather than a function
+// because, like bind, it changes which namespace the calling process's
+// evaluation sees (see evalInNS). Its value is the block's last value,
+// like `if`.
+type InNS struct {
+	Tok  token.Token // 'in_ns'
+	Body []Stmt
+}
+
+func (*InNS) exprNode() {}
+func (*InNS) node()     {}
+
 func (*Ident) exprNode()        {}
 func (*IntLit) exprNode()       {}
 func (*FloatLit) exprNode()     {}

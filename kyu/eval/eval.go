@@ -152,6 +152,10 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("source", &Builtin{Name: "source", Fn: func(args []value.Value) (value.Value, error) {
 		return biSource(env, args)
 	}})
+	// which_bind needs the calling Env's namespace — see whichbind.go.
+	env.Define("which_bind", &Builtin{Name: "which_bind", Fn: func(args []value.Value) (value.Value, error) {
+		return biWhichBind(env, args)
+	}})
 	// binds needs the calling Env's namespace, same as ps — see binds.go.
 	env.Define("binds", &Builtin{Name: "binds", Fn: func(args []value.Value) (value.Value, error) {
 		return biBinds(env, args)

@@ -227,6 +227,12 @@ control flow, env/kyu vars, remote namespaces, file ops).
   recoverable once a later bind has spliced around it. Reads go
   through the namespace, so a peer's `/n/host/ns/binds` shows its binds
   too.
+- `write(path, str)` replaces a namespace file's content with a
+  `String`, creating it (in an existing directory) if needed;
+  `append(path, str)` adds to the end. `cat`'s write-side counterpart,
+  through the same namespace as everything else — a real file, a remote
+  `/n/host` path, `/env`, a job's `ctl` (`write(/jobs/3/ctl, "kill")`,
+  the path form of `j.ctl = "kill"`). A failure is an `ErrorVal`.
 - `bind_log()` returns every successful `bind` and `unbind` so far,
   oldest first, as a `Table` of `Record`s (`seq`, `time`, `op`, `dst`,
   `src`, `disp`) — what was actually typed, which is the one thing

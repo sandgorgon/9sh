@@ -17,6 +17,9 @@ once a first tagged release is cut.
   kyu (bootstrap binds with no kyu spelling appear as comments);
   `binds()` is the `Table`-of-`Record`s view, like `ps()` over `/jobs`.
   Previously nothing recorded a bind's parameters after it ran.
+- `write(path, str)` / `append(path, str)` namespace builtins — write a
+  string to a namespace file (creating it if needed), the counterpart to
+  `cat`.
 - `bind_log()` builtin and `/ns/log`, `/ns/log.json` — an append-only
   history of every successful bind and unbind with its original
   disposition and time (`binds()` reports canonical dispositions and
@@ -35,6 +38,9 @@ once a first tagged release is cut.
 
 ### Fixed
 
+- `config.ky` is now parsed with the same native-program lookup as
+  dotfiles and `source()`, so a native program bareword behaves the same
+  in every file the shell loads.
 - `mv(dir, existing_dir)` within one parent directory silently replaced
   an *empty* destination directory (the underlying `rename(2)` allows
   it) instead of refusing, unlike the cross-directory form. It now

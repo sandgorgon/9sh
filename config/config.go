@@ -121,7 +121,13 @@ func Load(env *eval.Env) {
 		}
 		return
 	}
-	p := parser.New(string(src))
+	// Same native-program lookup dotfiles.Load and source() use, so a
+	// native program bareword parses the same in config.ky as anywhere
+	// else. Any native_programs the file itself defines only take effect
+	// for what runs after it, as in dotfiles.
+	p := parser.New(string(src), parser.WithNativeProgramLookup(func(name string) bool {
+		return eval.IsNativeProgram(env, name)
+	}))
 	prog := p.ParseProgram()
 	if errs := p.Errors(); len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "9sh: %s:\n", path)

@@ -97,6 +97,12 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("cat", &Builtin{Name: "cat", Fn: func(args []value.Value) (value.Value, error) {
 		return biCat(env, args)
 	}})
+	env.Define("write", &Builtin{Name: "write", Fn: func(args []value.Value) (value.Value, error) {
+		return biWrite(env, args)
+	}})
+	env.Define("append", &Builtin{Name: "append", Fn: func(args []value.Value) (value.Value, error) {
+		return biAppend(env, args)
+	}})
 	env.Define("cp", &Builtin{Name: "cp", Fn: func(args []value.Value) (value.Value, error) {
 		return biCp(env, args)
 	}})

@@ -78,6 +78,7 @@ const (
 	maxThreshold   = 5 * time.Minute
 	pollInterval   = 10 * time.Second
 	historyDirName = "history"
+	bindsDirName   = "binds"
 	nrlDateLayout  = "2006-01-02"
 )
 
@@ -184,11 +185,55 @@ func (r *Recorder) RecordProxy(pj ProxyJob) {
 }
 
 func (r *Recorder) append(rec Record) error {
-	b, err := json.Marshal(rec)
+	return r.appendLine(historyDirName, rec.TSEnd, rec)
+}
+
+// BindRecord is one namespace bind or unbind — what the shell's own
+// namespace looked like it was being built into, kept beside (not
+// inside) the job history so a reader of history/ never has to tell the
+// two shapes apart. Time is the operation's own; Host and PID say which
+// shell (two shells on one machine share the repo). Every field is
+// always present, so rows share one shape and select/where over a day's
+// file never trips on a missing key.
+type BindRecord struct {
+	TS   time.Time `json:"ts"`
+	Host string    `json:"host"`
+	PID  int       `json:"pid"`
+	Seq  uint64    `json:"seq"` // position in that shell's own bind log
+	Op   string    `json:"op"`  // "bind" or "unbind"
+	Dst  string    `json:"dst"`
+	Src  string    `json:"src"`  // "" for an unbind
+	Disp string    `json:"disp"` // "" for an unbind
+	RO   bool      `json:"ro"`
+}
+
+// RecordBind appends br under binds/, day-sharded like history/, and
+// checkpointed with it. TS, Host and PID are filled in if left zero.
+// Cheap enough to call synchronously from the namespace's OnBind hook:
+// binds are rare and hand-typed.
+func (r *Recorder) RecordBind(br BindRecord) {
+	if br.TS.IsZero() {
+		br.TS = time.Now()
+	}
+	if br.Host == "" {
+		br.Host = r.host
+	}
+	if br.PID == 0 {
+		br.PID = os.Getpid()
+	}
+	if err := r.appendLine(bindsDirName, br.TS, br); err != nil {
+		fmt.Fprintln(os.Stderr, "9sh: session: appending bind history:", err)
+	}
+}
+
+// appendLine writes v as one JSON line to <dir>/<sub>/<day of ts>.nrl and
+// marks the repo dirty for the next checkpoint.
+func (r *Recorder) appendLine(sub string, ts time.Time, v any) error {
+	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(r.dir, historyDirName, dayShard(rec.TSEnd))
+	path := filepath.Join(r.dir, sub, dayShard(ts))
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}

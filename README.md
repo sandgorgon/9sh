@@ -283,6 +283,18 @@ control flow, env/kyu vars, remote namespaces, file ops).
   re-runs it with each disposition intact; `/ns/log.json` is the JSON.
   Failed operations aren't logged (they changed nothing). The log keeps
   the newest 1000 entries, and says how many older ones it dropped.
+  The in-memory log dies with the shell, so when session history is
+  available every bind and unbind is also appended to
+  `~/.config/9/session/binds/<day>.nrl` (one JSON object per line: `ts`,
+  `host`, `pid`, `seq`, `op`, `dst`, `src`, `disp`, `ro`) and
+  checkpointed into 9vcs with the job history — reachable as
+  `/session/binds/…` like any other file, so "what was my namespace last
+  Tuesday" is
+  `cat("/session/binds/2026-09-15.nrl") | trim | split("\n") | each { |l| l | from_json }`.
+  It starts after the shell's own bootstrap binds (identical every run)
+  and includes what the startup configs bind; an `in_ns` block's private
+  binds are deliberately not recorded. It is kept apart from `history/`
+  so job-history readers never meet a bind record.
 - `which_bind(path)` says what serves a path: a `Record` with `kind`
   (`layer` — inside a bound filesystem; `bindpoint` — exactly a bind
   point, e.g. a union directory; `tree` — a purely synthetic directory

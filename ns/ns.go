@@ -226,11 +226,14 @@ func (ns *Namespace) Unbind(path string) error {
 		return fmt.Errorf("ns: unbind: nothing bound at %s", path)
 	}
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	if len(n.layers) == 0 {
+		n.mu.Unlock()
 		return fmt.Errorf("ns: unbind: nothing bound at %s", path)
 	}
 	n.layers = nil
+	n.mu.Unlock()
+	// Logged (and any OnBind hook run) after the node lock is released: a
+	// hook may do file I/O and shouldn't hold up walks through this node.
 	ns.log.record("unbind", path, "", Replace, false)
 	return nil
 }

@@ -68,3 +68,47 @@ func readRecordsFile(path string) ([]Record, error) {
 	}
 	return recs, nil
 }
+
+// ReadBinds reads up to limit of the most recent namespace bind/unbind
+// records from dir, newest first — ReadRecent's counterpart for binds/.
+// A dir with none yet is an empty result, not an error.
+func ReadBinds(dir string, limit int) ([]BindRecord, error) {
+	binds := filepath.Join(dir, bindsDirName)
+	entries, err := os.ReadDir(binds)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() > entries[j].Name() })
+
+	var out []BindRecord
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".nrl") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(binds, e.Name()))
+		if err != nil {
+			return out, err
+		}
+		var recs []BindRecord
+		for line := range strings.SplitSeq(strings.TrimRight(string(b), "\n"), "\n") {
+			if line == "" {
+				continue
+			}
+			var br BindRecord
+			if err := json.Unmarshal([]byte(line), &br); err != nil {
+				return out, fmt.Errorf("%s: %w", e.Name(), err)
+			}
+			recs = append(recs, br)
+		}
+		for i := len(recs) - 1; i >= 0; i-- {
+			out = append(out, recs[i])
+			if len(out) >= limit {
+				return out, nil
+			}
+		}
+	}
+	return out, nil
+}

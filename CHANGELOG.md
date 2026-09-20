@@ -17,6 +17,12 @@ once a first tagged release is cut.
   kyu (bootstrap binds with no kyu spelling appear as comments);
   `binds()` is the `Table`-of-`Record`s view, like `ps()` over `/jobs`.
   Previously nothing recorded a bind's parameters after it ran.
+- Bind history is persisted: with session history available, every bind
+  and unbind is appended to `~/.config/9/session/binds/<day>.nrl` (and
+  checkpointed into 9vcs with the job history), so it survives the shell
+  and is browsable at `/session/binds/`. Startup-config binds are
+  included; bootstrap binds and `in_ns` blocks are not. New
+  `session.ReadBinds` and `ns.Namespace.OnBind` (the hook that feeds it).
 - `in_ns { ... }` — runs a block against a private copy of the namespace
   (`ns.Namespace.Clone`); binds and unbinds inside don't leak out, and
   the original is restored on any exit, including an error or `break`.

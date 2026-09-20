@@ -226,3 +226,94 @@ func (f *bindsFile) Read(ctx context.Context, offset int64, p []byte) (int, erro
 	}
 	return copy(p, data[offset:]), nil
 }
+
+// Resolution reports how one path resolves through the bind tree — which
+// bind point and which layer of it would serve a Walk to that path.
+type Resolution struct {
+	Path string
+	// Kind is "layer" when the path lands inside a bound filesystem,
+	// "bindpoint" when it is exactly a bind point that has layers (a
+	// union directory), or "tree" when it is a purely synthetic
+	// directory of the bind tree (like /n when only /n/host is bound).
+	Kind string
+	// Dst is the bind point where resolution left the explicit tree
+	// (Kind "layer"), or the path itself (the other kinds).
+	Dst string
+	// Src is the serving layer's source expression, "" for a bootstrap
+	// bind or when there is no layer. Layer is its 0-based position in
+	// Dst's union order, -1 when there is none. Layers is how many
+	// layers Dst has.
+	Src    string
+	Layer  int
+	Layers int
+	// Inner is the path within the serving layer ("/" is its root); ""
+	// unless Kind is "layer".
+	Inner string
+}
+
+// Resolve answers "what serves this path", by walking exactly the way
+// nsFile.Walk does: explicit tree children win over layers, and at the
+// first node with no such child the layers are tried in union order —
+// the first one whose Walk of the next name succeeds serves the rest of
+// the path, with no fallback to a later layer if a deeper element is
+// missing there. Reporting the same answer a real Walk would give is
+// the point, so this deliberately does not try to be smarter (a union
+// directory's *listing* merges layers; a Walk into it does not).
+func (ns *Namespace) Resolve(ctx context.Context, path string) (Resolution, error) {
+	parts := splitPath(path)
+	res := Resolution{Path: "/" + strings.Join(parts, "/"), Layer: -1}
+	n := ns.root
+	cur := ""
+	for i, name := range parts {
+		if name == ".." {
+			return res, errors.New("ns: '..' is not supported at a namespace bind point")
+		}
+		n.mu.RLock()
+		child, hasChild := n.children[name]
+		layers := n.layers
+		n.mu.RUnlock()
+		if hasChild {
+			n = child
+			cur += "/" + name
+			continue
+		}
+		dst := cur
+		if dst == "" {
+			dst = "/"
+		}
+		var lastErr error
+		for li, l := range layers {
+			root, err := l.root(ctx)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			f, err := root.Walk(ctx, name)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			for _, p := range parts[i+1:] {
+				if f, err = f.Walk(ctx, p); err != nil {
+					return res, fmt.Errorf("ns: %s: %w", res.Path, err)
+				}
+			}
+			res.Kind, res.Dst, res.Src = "layer", dst, l.spec
+			res.Layer, res.Layers = li, len(layers)
+			res.Inner = "/" + strings.Join(parts[i:], "/")
+			return res, nil
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("ns: %s: no such file", name)
+		}
+		return res, fmt.Errorf("ns: %s: %w", res.Path, lastErr)
+	}
+	n.mu.RLock()
+	res.Layers = len(n.layers)
+	n.mu.RUnlock()
+	res.Kind, res.Dst = "tree", res.Path
+	if res.Layers > 0 {
+		res.Kind = "bindpoint"
+	}
+	return res, nil
+}

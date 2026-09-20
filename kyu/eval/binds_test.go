@@ -1,6 +1,8 @@
 package eval
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -102,5 +104,52 @@ func TestBindsWithoutNSMountIsErrorValue(t *testing.T) {
 	v := runEnv(t, `binds()`, env)
 	if _, ok := v.(value.ErrorVal); !ok {
 		t.Fatalf("want ErrorVal when /ns isn't bound, got %#v", v)
+	}
+}
+
+func TestWhichBindReportsServingLayer(t *testing.T) {
+	d1, d2 := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(d1, "x"), 0755)
+	os.WriteFile(filepath.Join(d1, "x", "y.txt"), []byte("1"), 0644)
+	os.WriteFile(filepath.Join(d2, "z.txt"), []byte("2"), 0644)
+	env := bindsEnv(t)
+	runEnv(t, `bind dir("`+d1+`"), /u`, env)
+	runEnv(t, `bind dir("`+d2+`"), /u, after`, env)
+
+	field := func(src, name string) value.Value {
+		t.Helper()
+		r, ok := runEnv(t, src, env).(*value.Record)
+		if !ok {
+			t.Fatalf("%s: want Record", src)
+		}
+		v, _ := r.Get(name)
+		return v
+	}
+	if got := field(`which_bind(/u/x/y.txt)`, "layer"); got != value.Int(0) {
+		t.Errorf("layer = %v, want 0", got)
+	}
+	if got := field(`which_bind(/u/x/y.txt)`, "inner"); got != value.Path("/x/y.txt") {
+		t.Errorf("inner = %v, want /x/y.txt", got)
+	}
+	if got := field(`which_bind(/u/x/y.txt)`, "src"); got != value.String(`dir("`+d1+`")`) {
+		t.Errorf("src = %v", got)
+	}
+	if got := field(`which_bind(/u/z.txt)`, "layer"); got != value.Int(1) {
+		t.Errorf("z.txt layer = %v, want 1", got)
+	}
+	if got := field(`which_bind(/u)`, "kind"); got != value.String("bindpoint") {
+		t.Errorf("/u kind = %v", got)
+	}
+	if got := field(`which_bind(/u)`, "layers"); got != value.Int(2) {
+		t.Errorf("/u layers = %v", got)
+	}
+	if got := field(`which_bind(/ns)`, "src"); got != (value.Null{}) {
+		t.Errorf("bootstrap layer src = %#v, want null", got)
+	}
+	if _, ok := runEnv(t, `which_bind(/u/missing)`, env).(value.ErrorVal); !ok {
+		t.Error("missing path should be an ErrorVal")
+	}
+	if _, err := biWhichBind(env, nil); err == nil {
+		t.Error("which_bind() with no args should be an error")
 	}
 }

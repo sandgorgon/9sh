@@ -131,3 +131,58 @@ func TestBindsFSSnapshotAtOpenAndReadOnly(t *testing.T) {
 		t.Fatal("walking a missing name in /ns should fail")
 	}
 }
+
+func TestResolveUnionLayersTreeAndBindPoint(t *testing.T) {
+	n := New()
+	ctx := context.Background()
+	n.BindFSSpec(&memFS{name: "a", content: "A"}, "", "/u", Replace, `dir("/one")`)
+	n.BindFSSpec(&memFS{name: "b", content: "B"}, "", "/u", After, `dir("/two")`)
+	n.BindFS(&memFS{name: "c"}, "", "/n/h", Replace)
+
+	cases := []struct {
+		path string
+		want Resolution
+	}{
+		{"/u/a", Resolution{Path: "/u/a", Kind: "layer", Dst: "/u", Src: `dir("/one")`, Layer: 0, Layers: 2, Inner: "/a"}},
+		{"/u/b", Resolution{Path: "/u/b", Kind: "layer", Dst: "/u", Src: `dir("/two")`, Layer: 1, Layers: 2, Inner: "/b"}},
+		{"/u", Resolution{Path: "/u", Kind: "bindpoint", Dst: "/u", Layer: -1, Layers: 2}},
+		{"/n", Resolution{Path: "/n", Kind: "tree", Dst: "/n", Layer: -1}},
+		{"/n/h/c", Resolution{Path: "/n/h/c", Kind: "layer", Dst: "/n/h", Layer: 0, Layers: 1, Inner: "/c"}},
+		{"/", Resolution{Path: "/", Kind: "tree", Dst: "/", Layer: -1}},
+	}
+	for _, c := range cases {
+		got, err := n.Resolve(ctx, c.path)
+		if err != nil {
+			t.Errorf("Resolve(%s): %v", c.path, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("Resolve(%s) =\n%#v\nwant\n%#v", c.path, got, c.want)
+		}
+	}
+
+	for _, missing := range []string{"/u/nope", "/nothing", "/u/a/deeper"} {
+		if _, err := n.Resolve(ctx, missing); err == nil {
+			t.Errorf("Resolve(%s) should fail", missing)
+		}
+	}
+}
+
+// Resolve must agree with what a real Walk does, including that it picks
+// a layer by the first path element only.
+func TestResolveAgreesWithWalk(t *testing.T) {
+	n := New()
+	ctx := context.Background()
+	n.BindFS(&memFS{name: "same", content: "first"}, "", "/u", Replace)
+	n.BindFS(&memFS{name: "same", content: "second"}, "", "/u", After)
+	root, _ := n.Attach(ctx, "u", "")
+	f := mustWalk(t, ctx, root, "u", "same")
+	f.Open(ctx, 0)
+	if got := readAll(t, ctx, f); got != "first" {
+		t.Fatalf("walk served %q, test premise broken", got)
+	}
+	res, err := n.Resolve(ctx, "/u/same")
+	if err != nil || res.Layer != 0 {
+		t.Fatalf("Resolve = %#v, %v; want layer 0 (the one Walk served)", res, err)
+	}
+}

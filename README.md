@@ -227,6 +227,18 @@ control flow, env/kyu vars, remote namespaces, file ops).
   recoverable once a later bind has spliced around it. Reads go
   through the namespace, so a peer's `/n/host/ns/binds` shows its binds
   too.
+- `which_bind(path)` says what serves a path: a `Record` with `kind`
+  (`layer` — inside a bound filesystem; `bindpoint` — exactly a bind
+  point, e.g. a union directory; `tree` — a purely synthetic directory
+  like `/n` when only `/n/host` is bound), `dst` (the bind point),
+  `src` (the serving layer's source expression), `layer` (0-based union
+  position), `layers` (how many `dst` has), and `inner` (the path within
+  the layer). It's what `ls` can't tell you inside a union, where a
+  listing merges layers and hides which one a name came from. It
+  reports exactly what a real walk would do — first layer whose walk of
+  the next name succeeds serves the rest, with no fallback to a later
+  layer — and, unlike `binds()`, answers only for the local namespace.
+  An unresolvable path is an `ErrorVal`.
 - `source(path)` runs a kyu file from the namespace against the session,
   exactly as if its text were typed at the prompt (defines and binds
   land in the session, not a local scope) — `source(/ns/binds)`

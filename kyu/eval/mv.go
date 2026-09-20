@@ -81,6 +81,16 @@ func biMv(env *Env, args []value.Value) (value.Value, error) {
 	}
 
 	if samePath(srcParts[:len(srcParts)-1], dstParts[:len(dstParts)-1]) {
+		// A directory rename must not land on an existing entry: the
+		// underlying rename(2) silently replaces an *empty* directory
+		// (only a non-empty one fails), so without this check
+		// mv(/d/a, /d/b) would destroy an empty b with no error — while
+		// the cross-directory path below refuses the same case.
+		if srcSt.Qid.IsDir() {
+			if _, err := walkAll(ctx, root, dstParts); err == nil {
+				return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: already exists (directory move needs a fresh destination)", dst)}, nil
+			}
+		}
 		st := dontTouchStat()
 		st.Name = dstParts[len(dstParts)-1]
 		if err := srcFile.WStat(ctx, st); err != nil {

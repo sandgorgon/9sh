@@ -23,6 +23,13 @@ once a first tagged release is cut.
 - `/ns` joins `/jobs`/`/local`/`/env`/`/config`/`/session` as a
   bootstrap root `reset_config()` leaves in place.
 
+### Fixed
+
+- `mv(dir, existing_dir)` within one parent directory silently replaced
+  an *empty* destination directory (the underlying `rename(2)` allows
+  it) instead of refusing, unlike the cross-directory form. It now
+  returns the same "already exists" `ErrorVal` in both cases.
+
 ## [0.4.29] - 2026-09-15
 
 ### Added

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
+	"github.com/sandgorgon/9p/server"
 	"github.com/sandgorgon/tui/term"
 	"github.com/sandgorgon/tui/tui"
 
@@ -60,6 +61,10 @@ func run() int {
 		"serve this shell's own namespace over mutual TLS on addr (host:port), so another 9sh can bind it at /n/<host> and run @host{} blocks against it — see package remote")
 	listenUnixPath := flag.String("listen-unix", "",
 		"serve this shell's own namespace over a Unix socket at path, restricted to this process's own UID — no TLS/9auth involved, for same-machine consumers (another local 9sh, or any 9P-aware app) — see remote.ListenUnix")
+	listenRoot := flag.String("listen-root", "/",
+		"with -listen, serve only this namespace path (as the peer's \"/\") instead of the whole namespace, which includes /env and /jobs; -listen-unix is unaffected, since local tools reach the whole namespace through it")
+	listenRO := flag.Bool("listen-ro", false,
+		"with -listen, refuse every write from a peer: they can read what -listen-root exposes but never change it")
 	showVersion := flag.Bool("version", false, "print the 9sh version and exit")
 	flag.Parse()
 
@@ -74,7 +79,15 @@ func run() int {
 	// capability's heading), so it's unused here now; bootstrap's own
 	// signature is otherwise untouched (session history recording via
 	// recorder is unrelated to reading it back for display).
-	env, recorder, _, envScratchDir := bootstrap(*listenAddr, *listenUnixPath)
+	if *listenAddr == "" && (*listenRoot != "/" || *listenRO) {
+		fmt.Fprintln(os.Stderr, "9sh: -listen-root/-listen-ro only apply to -listen")
+		return 2
+	}
+	if !strings.HasPrefix(*listenRoot, "/") {
+		fmt.Fprintf(os.Stderr, "9sh: -listen-root: %q is not an absolute namespace path\n", *listenRoot)
+		return 2
+	}
+	env, recorder, _, envScratchDir := bootstrap(*listenAddr, *listenUnixPath, listenOpts{root: *listenRoot, readOnly: *listenRO})
 	if recorder != nil {
 		defer recorder.Close()
 	}
@@ -123,7 +136,14 @@ func run() int {
 // reads it back — package replui has no session-history view, unlike
 // the old pane package's session-viewer pane; see 9mux's own README for
 // where that capability is headed).
-func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder, string, string) {
+// listenOpts narrows what the -listen (network) listener serves; its zero
+// value serves the whole namespace read-write, as -listen always did.
+type listenOpts struct {
+	root     string // namespace path served as the peer's "/"; "" or "/" = everything
+	readOnly bool
+}
+
+func bootstrap(listenAddr, listenUnixPath string, lo listenOpts) (*eval.Env, *session.Recorder, string, string) {
 	namespace := ns.New()
 	mgr := job.NewManager()
 	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
@@ -146,7 +166,11 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 		// Serving is fire-and-forget for the shell's own lifetime — no
 		// separate shutdown hook needed, since the process exiting tears
 		// down the listener along with everything else.
-		if _, err := remote.Listen(context.Background(), listenAddr, namespace); err != nil {
+		var served server.FileSystem = namespace
+		if (lo.root != "" && lo.root != "/") || lo.readOnly {
+			served = namespace.Subtree(lo.root, lo.readOnly)
+		}
+		if _, err := remote.Listen(context.Background(), listenAddr, served); err != nil {
 			fmt.Fprintln(os.Stderr, "9sh: -listen:", err)
 			os.Exit(1)
 		}

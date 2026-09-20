@@ -8,6 +8,18 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `binds()` namespace builtin and a read-only `/ns` filesystem
+  (`/ns/binds`, `/ns/binds.json`) that report every layer bound in the
+  namespace — destination, source expression (`/local`, `dial("h:1")`,
+  `dir("/x")`), and canonical disposition. `/ns/binds` is replayable
+  kyu (bootstrap binds with no kyu spelling appear as comments);
+  `binds()` is the `Table`-of-`Record`s view, like `ps()` over `/jobs`.
+  Previously nothing recorded a bind's parameters after it ran.
+- `/ns` joins `/jobs`/`/local`/`/env`/`/config`/`/session` as a
+  bootstrap root `reset_config()` leaves in place.
+
 ## [0.4.29] - 2026-09-15
 
 ### Added

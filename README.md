@@ -212,6 +212,19 @@ control flow, env/kyu vars, remote namespaces, file ops).
   `detached`, `cwd`, `started_at`, `finished_at`) — the structured,
   no-checkout-needed view of `/jobs`' own `status` files, e.g.
   `ps() | where { |j| j.state == "running" }`.
+- `binds()` returns every layer bound in the namespace as a `Table` of
+  `Record`s (`dst`, `src`, `disp`), in bind order — the structured view
+  of `/ns/binds`, the way `ps()` is of `/jobs`. `cat("/ns/binds")` is
+  the same list as replayable kyu (a bind with no kyu spelling, like
+  the `/jobs` bootstrap, is a `#` comment), so it can be read, diffed,
+  or `source`d; `/ns/binds.json` is the JSON for tools. `src` is the
+  expression that produced the layer (`/local`, `dial("h:2049")`,
+  `dir("/u/x")`), null for bootstrap binds. `disp` is the canonical
+  replay disposition — `replace` for a path's first layer, `after` for
+  the rest — not the one originally passed to `bind`, which isn't
+  recoverable once a later bind has spliced around it. Reads go
+  through the namespace, so a peer's `/n/host/ns/binds` shows its binds
+  too.
 - A script's own arguments are visible as `args` (a `List` of `String`)
   — `9sh script.kyu foo bar` sees `args == ["foo", "bar"]`.
 - `%cmd1 && %cmd2` / `%cmd1 || %cmd2` chain by real exit status, like a
@@ -392,21 +405,23 @@ one bootstrap, in this order, before any of your own code runs:
 5. `/config` is bound — `~/.config/9/config/config.ky` is seeded with
    defaults (`fullscreen_programs`, `native_programs`) the first time
    only; an existing file is never overwritten.
-6. `/session` is bound — best-effort (needs `9vcs` on `PATH` and a home
+6. `/ns` is bound — a read-only view of this namespace's own binds
+   (`/ns/binds`, `/ns/binds.json`); see `binds()`.
+7. `/session` is bound — best-effort (needs `9vcs` on `PATH` and a home
    directory); the directory is still bound even when the recorder
    itself couldn't start, so past history stays readable as plain
    files either way.
-7. The shared kyu `Env` is created, with everything above already
+8. The shared kyu `Env` is created, with everything above already
    live in the namespace.
-8. **`config.ky` runs** (`~/.config/9/config/config.ky`) — settings
+9. **`config.ky` runs** (`~/.config/9/config/config.ky`) — settings
    like `fullscreen_programs`/`native_programs`.
-9. **Dotfiles run**: `~/.config/9/ns/common.ky`, then
+10. **Dotfiles run**: `~/.config/9/ns/common.ky`, then
    `~/.config/9/ns/hosts/<hostname>.ky`, against that same `Env`.
 
 Two things fall out of running in exactly this order:
 
-- **Settings are in scope before dotfiles run.** `config.ky` (step 8)
-  runs before dotfiles (step 9) specifically so a dotfile can *extend*
+- **Settings are in scope before dotfiles run.** `config.ky` (step 9)
+  runs before dotfiles (step 10) specifically so a dotfile can *extend*
   `fullscreen_programs`/`native_programs` (`native_programs :=
   native_programs + ["mytool"]`) instead of having to redeclare the
   whole list.
@@ -428,7 +443,7 @@ working `hosts/<hostname>.ky` from still loading. Only `-listen`/
 `-listen-unix` failing to bind is fatal, since you explicitly asked to
 serve on that address.
 
-Steps 8-9 (`config.ky`, then `common.ky`/`hosts/<hostname>.ky`) are also
+Steps 9-10 (`config.ky`, then `common.ky`/`hosts/<hostname>.ky`) are also
 callable again at runtime, without restarting 9sh: `source_config()`
 re-runs them against the current session, additively — a plain `bind`
 already defaults to replacing whatever's at its destination, and a `:=`
@@ -436,7 +451,7 @@ redefinition is an ordinary overwrite, so this is exactly "pick up my
 dotfile edits" with no special-casing. `reset_config()` is its
 fresh-start sibling: it first clears every `:=`-defined variable and
 unbinds every namespace entry outside `/jobs`/`/local`/`/env`/`/config`/
-`/session` (those five are 9sh's own process bootstrap, not something
+`/session`/`/ns` (those six are 9sh's own process bootstrap, not something
 the startup configs own, so a reset leaves them alone), then does
 exactly what `source_config()` does — so a bind rule or variable you've
 since removed from a dotfile actually disappears, instead of surviving

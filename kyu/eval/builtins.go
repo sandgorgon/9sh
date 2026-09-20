@@ -111,7 +111,7 @@ func biDial(args []value.Value) (value.Value, error) {
 	if err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("dial: %v", err)}, nil
 	}
-	return value.MountHandle{Addr: string(addr), FS: conn.FS()}, nil
+	return value.MountHandle{Addr: string(addr), FS: conn.FS(), Spec: fmt.Sprintf("dial(%s)", strconv.Quote(string(addr)))}, nil
 }
 
 // biDir wraps an arbitrary host directory into a MountHandle, the local
@@ -141,7 +141,7 @@ func biDir(args []value.Value) (value.Value, error) {
 	if err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("dir: %v", err)}, nil
 	}
-	return value.MountHandle{Addr: string(path), FS: fs}, nil
+	return value.MountHandle{Addr: string(path), FS: fs, Spec: fmt.Sprintf("dir(%s)", strconv.Quote(string(path)))}, nil
 }
 
 // biPath converts a String to a Path — the explicit escape hatch for

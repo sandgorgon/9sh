@@ -213,6 +213,14 @@ func bootstrap(listenAddr, listenUnixPath string) (*eval.Env, *session.Recorder,
 		}
 	}
 
+	// /ns describes this namespace's own binds (binds, binds.json) — see
+	// ns.BindsFS. It reads the live namespace on every open, so where it
+	// sits in this sequence doesn't affect what it reports.
+	if err := namespace.BindFS(ns.NewBindsFS(namespace), "", "/ns", ns.Replace); err != nil {
+		fmt.Fprintln(os.Stderr, "9sh: bootstrapping /ns:", err)
+		os.Exit(1)
+	}
+
 	recorder, sessionDir := bootstrapSession(mgr)
 	// /session exposes session history the same dirfs-over-a-real-
 	// directory way /local, /env, and /config do — sessionDir is "" only

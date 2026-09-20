@@ -1061,3 +1061,53 @@ func TestKyuReplCtrlDMidInputIsNoop(t *testing.T) {
 		t.Fatalf("input = %q, want unchanged (abc)", w.input)
 	}
 }
+
+// TestKyuReplQuestionMarkOpensHelpOnlyAtAnEmptyPrompt: `?` is the way in
+// for terminals that keep F1 for themselves (xfce4-terminal never
+// forwards it). It may only claim the key where nothing else could mean
+// it — anywhere else `?` is ordinary text, notably the postfix
+// error-check operator in `f()?`.
+func TestKyuReplQuestionMarkOpensHelpOnlyAtAnEmptyPrompt(t *testing.T) {
+	q := input.KeyEvent{Rune: '?'}
+
+	w := newTestReplWidget(t)
+	cmd := w.HandleEvent(q)
+	if cmd == nil {
+		t.Fatal("expected a Cmd from ? at an empty prompt")
+	}
+	if _, ok := cmd().(toggleHelpMsg); !ok {
+		t.Fatalf("Cmd produced %T, want toggleHelpMsg", cmd())
+	}
+	if w.input != "" {
+		t.Errorf("opening help must not type a '?' into the prompt, input = %q", w.input)
+	}
+
+	// After text: an ordinary character, no help.
+	w = newTestReplWidget(t)
+	w.HandleEvent(input.KeyEvent{Rune: 'f'})
+	if cmd := w.HandleEvent(q); cmd != nil {
+		t.Errorf("? after text must not open help, got Cmd %T", cmd())
+	}
+	if w.input != "f?" {
+		t.Errorf("input = %q, want %q (the ? is the error-check operator)", w.input, "f?")
+	}
+
+	// Mid multi-line continuation the input is non-empty (it holds the
+	// earlier lines), so it is text there too.
+	w = newTestReplWidget(t)
+	for _, r := range "f(" {
+		w.HandleEvent(input.KeyEvent{Rune: r})
+	}
+	w.HandleEvent(input.KeyEvent{Key: input.KeyEnter})
+	if cmd := w.HandleEvent(q); cmd != nil {
+		t.Errorf("? inside an open continuation must not open help, got Cmd %T", cmd())
+	}
+
+	// A modified '?' (Ctrl/Alt) is some other binding, never help.
+	for _, mod := range []input.Mod{input.ModCtrl, input.ModAlt} {
+		w = newTestReplWidget(t)
+		if cmd := w.HandleEvent(input.KeyEvent{Rune: '?', Mod: mod}); cmd != nil {
+			t.Errorf("modified ? (mod %v) must not open help, got Cmd %T", mod, cmd())
+		}
+	}
+}

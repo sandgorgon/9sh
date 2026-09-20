@@ -559,7 +559,7 @@ design: for a real multi-pane terminal (9sh alongside a shell, or
 several 9sh sessions side by side), see
 [`9mux`](https://github.com/sandgorgon/9mux) instead, a separate
 project this binary doesn't host itself. The same keybinding reference
-below is built into 9sh: press `F1` any time.
+below is built into 9sh: press `F1` (or `?` at an empty prompt) any time.
 
 | Key | Does |
 |---|---|
@@ -577,8 +577,19 @@ below is built into 9sh: press `F1` any time.
 | Ctrl+C | Copy the whole transcript |
 | Alt+C | Copy only what's currently visible on screen |
 | paste | Inserts at the cursor |
-| `F1` | Toggle the built-in help screen |
+| `F1`, or `?` at an empty prompt | Toggle the built-in help screen (`?`, `q` or `Esc` also close it) |
 | Ctrl+D (at an empty prompt) | Quit 9sh — bash/zsh's own "EOF at an empty prompt exits" convention |
+
+Some terminals keep `F1` for themselves and never forward it to the
+program inside — xfce4-terminal (the XFCE default) binds it to its own
+Help menu, and other emulators can too. That's why `?` at an empty
+prompt also opens help: it's an ordinary character, so no terminal
+intercepts it, and it can't clash with anything you're typing — no kyu
+statement starts with `?` (it's the postfix error-check operator, as in
+`f()?`), and anywhere else on the line, or inside an open multi-line
+block, `?` just types a `?`. If you'd rather have `F1` itself, look for
+a Help/Contents shortcut in your terminal's own keyboard-shortcut
+preferences and clear it.
 
 Ctrl+C is "copy all," not the Ctrl+Shift+C you might expect from a
 desktop terminal: most terminal emulators (this one's own standing

@@ -233,3 +233,30 @@ func TestFullscreenAttachRendersTerminalAndRestoresOnExit(t *testing.T) {
 		t.Fatalf("expected the kyu-repl prompt back on screen after the fullscreen program exited:\n%s", buf)
 	}
 }
+
+// TestHelpOpensAndClosesWithQuestionMarkWithoutF1 drives the real input
+// path for a terminal that never forwards F1: `?` at the empty prompt
+// opens the help modal, and `?` again — now handled by the modal's own
+// body, which claims focus while open — closes it.
+func TestHelpOpensAndClosesWithQuestionMarkWithoutF1(t *testing.T) {
+	m := New(eval.NewGlobalEnv(nil))
+	app := tui.NewApp(m, 80, 24)
+	defer app.Close()
+	press := func(ev input.KeyEvent) {
+		for _, cmd := range app.HandleInput(ev) {
+			if cmd != nil {
+				app.Dispatch(cmd())
+			}
+		}
+		forceRenders(app, 1)
+	}
+
+	press(input.KeyEvent{Rune: '?'})
+	if buf := app.Buffer().String(); !strings.Contains(buf, "9sh — help") {
+		t.Fatalf("expected help on screen after ?:\n%s", buf)
+	}
+	press(input.KeyEvent{Rune: '?'})
+	if buf := app.Buffer().String(); strings.Contains(buf, "9sh — help") {
+		t.Fatalf("expected help closed after a second ?:\n%s", buf)
+	}
+}

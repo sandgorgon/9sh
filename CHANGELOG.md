@@ -8,6 +8,16 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `?` at an empty prompt opens the help screen, as a second way in for
+  terminals that keep `F1` for themselves (xfce4-terminal binds it to
+  its own Help menu and never forwards it). It only claims the key at a
+  truly empty prompt — after any text, or inside an open multi-line
+  block, `?` still types a `?`, so the postfix error-check operator
+  (`f()?`) is unaffected. `F1` works as before; the help screen already
+  closed on `?`.
+
 ## [0.4.30] - 2026-09-20
 
 ### Added

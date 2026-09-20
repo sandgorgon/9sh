@@ -17,6 +17,12 @@ once a first tagged release is cut.
   kyu (bootstrap binds with no kyu spelling appear as comments);
   `binds()` is the `Table`-of-`Record`s view, like `ps()` over `/jobs`.
   Previously nothing recorded a bind's parameters after it ran.
+- `in_ns { ... }` — runs a block against a private copy of the namespace
+  (`ns.Namespace.Clone`); binds and unbinds inside don't leak out, and
+  the original is restored on any exit, including an error or `break`.
+  `/ns/binds` and `/ns/log` inside describe the copy. `checkout` now
+  reads the current namespace instead of the one captured at startup,
+  so it follows the swap.
 - `-listen-root PATH` and `-listen-ro` flags — narrow what the `-listen`
   (network) listener serves: only `PATH`, as the peer's `/` (with `..`
   unable to climb out of it), and/or read-only. Previously an

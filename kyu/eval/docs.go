@@ -178,6 +178,7 @@ var builtinDocs = []BuiltinDoc{
 	{"%cmd", "%cmd arg1 arg2 ...", "Calls an ordinary external/legacy binary. Routes through /jobs when a namespace is attached, so it shows up in session history like any job. A Path argument that only resolves in the namespace, not on the real filesystem, errors with a hint to use checkout instead of reaching the binary as a meaningless literal string. If the command's name is listed in the fullscreen_programs kyu variable (see /config/config.ky), it instead gets the real screen and keyboard directly — no job, no capture — with any namespace-only Path argument transparently checked out and written back instead of erroring; can't be backgrounded with &."},
 	{"native_programs", "cmdname arg1 arg2 ...  (no % needed)", `A third call form, for external programs that are themselves namespace-aware (e.g. 9ed, 9vcs) rather than legacy Bytes-only binaries: any name listed in the native_programs kyu variable (see /config/config.ky) can be called bareword, no % sigil, same argument shape %cmd takes. A Path argument is passed through as its literal path text, untouched — no checkout, no scratch copy — trusting the program to resolve it itself (dial 9sh's namespace socket, Walk an absolute path or one rooted at /local, fall back to a real OS path only if the namespace doesn't claim it). Extend it like fullscreen_programs: native_programs := native_programs + ["mytool"].`},
 	{"&", "%cmd ... &", `Backgrounds a %cmd as a live job record: j.status, j.ctl = "stop", j | wait. Refused for a fullscreen program (see %cmd) -- nothing to hand the real screen to if it isn't in the foreground.`},
+	{"in_ns", "in_ns { ... }", "Runs the block against a private copy of the namespace — binds and unbinds inside it don't leak out, and everything already bound is visible inside (Plan 9's rfork). The original is restored however the block ends. A bind is a view, so writes through a shared directory still reach it; a background job started inside keeps the job it was given. The block's last value is its value."},
 	{"@host", "@host { ... }", "Re-roots job creation at a dial()'d remote peer's own /jobs for the block — 'proxy jobs,' no separate remote-job protocol."},
 }
 
@@ -205,7 +206,7 @@ var namespaceAppNames = map[string]bool{
 	"history": true, "history_delete": true, "history_clear": true,
 	"dial": true, "dir": true, "getenv": true, "setenv": true, "unsetenv": true,
 	"vars": true, "unset": true, "ps": true, "binds": true, "bind_log": true, "which_bind": true, "source": true, "wait": true,
-	"%cmd": true, "&": true, "@host": true,
+	"%cmd": true, "&": true, "@host": true, "in_ns": true,
 }
 
 // Category classifies d as "language" (no namespace/OS involvement) or

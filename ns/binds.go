@@ -119,6 +119,10 @@ type BindsFS struct {
 
 func NewBindsFS(ns *Namespace) *BindsFS { return &BindsFS{ns: ns} }
 
+// cloneFor implements namespaceBound: a cloned namespace's /ns reports
+// the clone, not the namespace it was copied from.
+func (fs *BindsFS) cloneFor(ns *Namespace) server.FileSystem { return NewBindsFS(ns) }
+
 func (fs *BindsFS) Attach(ctx context.Context, uname, aname string) (server.File, error) {
 	return &bindsRoot{fs: fs}, nil
 }
@@ -274,7 +278,8 @@ type Resolution struct {
 	// Inner is the path within the serving layer ("/" is its root); ""
 	// unless Kind is "layer".
 	Inner string
-	// RO is whether the serving layer is read-only (Kind "layer" only).
+	// RO is whether the serving layer is read-only; for a "bindpoint",
+	// whether its first layer is (the one a create would go to).
 	RO bool
 }
 
@@ -337,6 +342,11 @@ func (ns *Namespace) Resolve(ctx context.Context, path string) (Resolution, erro
 	}
 	n.mu.RLock()
 	res.Layers = len(n.layers)
+	if res.Layers > 0 {
+		// No single serving layer here; a create at a bind point goes to
+		// the first, so that is the one whose read-only flag matters.
+		res.RO = n.layers[0].ro
+	}
 	n.mu.RUnlock()
 	res.Kind, res.Dst = "tree", res.Path
 	if res.Layers > 0 {

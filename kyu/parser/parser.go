@@ -374,6 +374,8 @@ func (p *Parser) parsePrefix() ast.Expr {
 		return &ast.ContinueExpr{Tok: p.cur}
 	case token.AT:
 		return p.parseAtHost()
+	case token.IN_NS:
+		return p.parseInNS()
 	default:
 		p.errorf("unexpected token %s(%q)", p.cur.Kind, p.cur.Literal)
 		return nil
@@ -726,6 +728,20 @@ func (p *Parser) parseAtHost() ast.Expr {
 		return nil
 	}
 	return &ast.AtHost{Tok: tok, Host: host, Body: body}
+}
+
+// parseInNS parses `in_ns { ... }`.
+func (p *Parser) parseInNS() ast.Expr {
+	tok := p.cur // 'in_ns'
+	if !p.expectPeekOrCur(token.LBRACE) {
+		return nil
+	}
+	p.next() // consume '{'
+	body := p.parseBlock()
+	if !p.expectPeekOrCur(token.RBRACE) {
+		return nil
+	}
+	return &ast.InNS{Tok: tok, Body: body}
 }
 
 func (p *Parser) parseInfix(left ast.Expr) ast.Expr {

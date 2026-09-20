@@ -106,6 +106,8 @@ var builtinDocs = []BuiltinDoc{
 		"Blocks until a backgrounded job (from %cmd &) reaches a terminal state, then returns it."},
 	{"ps", "ps()",
 		"Every job at /jobs as a Table of Records (id, kind, state, argv, pid, exit_code, signal, error, detached, cwd, started_at, finished_at) — the structured, no-checkout-needed view of /jobs' own status files."},
+	{"source", "source(path)",
+		"Runs a kyu file from the namespace against the session, as if typed at the prompt — e.g. source(/ns/binds) replays this namespace's binds. A parse error is an ErrorVal and runs nothing; a runtime error aborts. Runs arbitrary kyu with your full authority, so cat() a peer's file before sourcing it."},
 	{"binds", "binds()",
 		"Every layer bound in the namespace as a Table of Records (dst, src, disp), in bind order — the structured view of /ns/binds, whose text is replayable kyu. src is null for a bootstrap bind with no kyu spelling; disp is the canonical replay disposition (replace for a path's first layer, after for the rest), not the one originally given."},
 	{"error", `error(msg)`,
@@ -187,7 +189,7 @@ var namespaceAppNames = map[string]bool{
 	"mkdir": true, "rmdir": true, "source_config": true, "reset_config": true,
 	"history": true, "history_delete": true, "history_clear": true,
 	"dial": true, "dir": true, "getenv": true, "setenv": true, "unsetenv": true,
-	"vars": true, "unset": true, "ps": true, "binds": true, "wait": true,
+	"vars": true, "unset": true, "ps": true, "binds": true, "source": true, "wait": true,
 	"%cmd": true, "&": true, "@host": true,
 }
 

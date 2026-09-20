@@ -27,6 +27,7 @@ type Env struct {
 	externalOutputSink ExternalOutputSinkFunc // process-wide, like ns; see SetExternalOutputSink
 	sourceConfig       SourceConfigFunc       // process-wide, like ns; see SetSourceConfig
 	historyAccess      *HistoryAccess         // process-wide, like ns; see SetHistoryAccess
+	sourceDepth        int                    // process-wide, like ns; see biSource's maxSourceDepth
 }
 
 // ExternalOutputSinkFunc receives a foreground %cmd's captured stderr

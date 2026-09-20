@@ -189,7 +189,7 @@ func (p *Parser) parseValueExpr() ast.Expr {
 	return &ast.Background{Tok: p.cur, Call: ext}
 }
 
-// parseBindStmt parses `bind SRC, DST[, before|after|replace]`. SRC and
+// parseBindStmt parses `bind SRC, DST[, before|after|replace][, ro]`. SRC and
 // DST are comma-separated, not bare-whitespace-juxtaposed as the design
 // doc first sketched: the lexer decides '/' vs division from only the
 // preceding token, and a DST path starting with '/' right after SRC ends
@@ -213,17 +213,31 @@ func (p *Parser) parseBindStmt() ast.Stmt {
 	if dst == nil {
 		return nil
 	}
-	disp := "replace"
-	if p.peek.Kind == token.COMMA {
-		p.next() // cur: dst's last token -> ','
-		p.next() // consume ',' -> disposition ident
-		if p.cur.Kind != token.IDENT || !isDispositionWord(p.cur.Literal) {
-			p.errorf("expected a disposition (before/after/replace), got %s(%q)", p.cur.Kind, p.cur.Literal)
+	// Trailing comma-separated words, in any order, each at most once: a
+	// disposition and/or the `ro` flag.
+	disp, sawDisp, ro := "replace", false, false
+	for p.peek.Kind == token.COMMA {
+		p.next() // cur: previous token -> ','
+		p.next() // consume ',' -> the word
+		switch {
+		case p.cur.Kind == token.IDENT && isDispositionWord(p.cur.Literal):
+			if sawDisp {
+				p.errorf("bind: more than one disposition (%q after %q)", p.cur.Literal, disp)
+				return nil
+			}
+			disp, sawDisp = p.cur.Literal, true
+		case p.cur.Kind == token.IDENT && p.cur.Literal == "ro":
+			if ro {
+				p.errorf("bind: 'ro' given twice")
+				return nil
+			}
+			ro = true
+		default:
+			p.errorf("expected a disposition (before/after/replace) or ro, got %s(%q)", p.cur.Kind, p.cur.Literal)
 			return nil
 		}
-		disp = p.cur.Literal
 	}
-	return &ast.BindStmt{Tok: tok, Src: src, Dst: dst, Disposition: disp}
+	return &ast.BindStmt{Tok: tok, Src: src, Dst: dst, Disposition: disp, ReadOnly: ro}
 }
 
 // parseUnbindStmt parses `unbind DST` — a single expression, unlike

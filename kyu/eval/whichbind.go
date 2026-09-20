@@ -16,7 +16,8 @@ import (
 // ns.Resolution); dst (the bind point); src (the serving layer's source
 // expression, null for a bootstrap bind or a non-layer path); layer
 // (0-based union position, null when none); layers (how many layers dst
-// has); inner (the path within the layer, null unless kind is "layer").
+// has); ro (whether the serving layer refuses writes); inner (the path
+// within the layer, null unless kind is "layer").
 // A path that doesn't resolve is an ordinary in-stream ErrorVal.
 //
 // Unlike ps()/binds() this asks the Namespace value directly rather than
@@ -54,6 +55,7 @@ func biWhichBind(env *Env, args []value.Value) (value.Value, error) {
 		r.Set("layer", value.Null{})
 	}
 	r.Set("layers", value.Int(res.Layers))
+	r.Set("ro", value.Bool(res.RO))
 	if res.Kind == "layer" {
 		r.Set("inner", value.Path(res.Inner))
 	} else {

@@ -26,6 +26,7 @@ type LogEntry struct {
 	// Go-bootstrap bind with no kyu spelling.
 	Src  string `json:"src"`
 	Disp string `json:"disp"` // as passed to bind; "" for an unbind
+	RO   bool   `json:"ro"`   // bound with the ro flag
 }
 
 type bindLog struct {
@@ -35,7 +36,7 @@ type bindLog struct {
 	now     func() time.Time // nil = time.Now; tests replace it
 }
 
-func (l *bindLog) record(op, dst, src string, disp Disposition) {
+func (l *bindLog) record(op, dst, src string, disp Disposition, ro bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now
@@ -48,6 +49,7 @@ func (l *bindLog) record(op, dst, src string, disp Disposition) {
 		Op:   op,
 		Dst:  "/" + strings.Join(splitPath(dst), "/"),
 		Src:  src,
+		RO:   ro,
 	}
 	if op == "bind" {
 		e.Disp = disp.String()
@@ -83,17 +85,24 @@ func FormatLog(entries []LogEntry, dropped uint64) string {
 		case e.Op == "unbind":
 			fmt.Fprintf(&b, "unbind %s", e.Dst)
 		case e.Src == "":
-			fmt.Fprintf(&b, "# bind <builtin>, %s", e.Dst)
-			if e.Disp != "replace" {
-				b.WriteString(", " + e.Disp)
-			}
+			fmt.Fprintf(&b, "# bind <builtin>, %s%s", e.Dst, bindSuffix(e.Disp, e.RO))
 		default:
-			fmt.Fprintf(&b, "bind %s, %s", e.Src, e.Dst)
-			if e.Disp != "replace" {
-				b.WriteString(", " + e.Disp)
-			}
+			fmt.Fprintf(&b, "bind %s, %s%s", e.Src, e.Dst, bindSuffix(e.Disp, e.RO))
 		}
 		fmt.Fprintf(&b, "  # %s\n", e.Time)
 	}
 	return b.String()
+}
+
+// bindSuffix is the optional ", after" / ", ro" tail of a bind statement:
+// replace is the default disposition and is never spelled out.
+func bindSuffix(disp string, ro bool) string {
+	var s string
+	if disp != "" && disp != "replace" {
+		s += ", " + disp
+	}
+	if ro {
+		s += ", ro"
+	}
+	return s
 }

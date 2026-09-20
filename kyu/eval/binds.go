@@ -73,6 +73,7 @@ func biBinds(env *Env, args []value.Value) (value.Value, error) {
 			r.Set("src", value.String(x.Src))
 		}
 		r.Set("disp", value.String(x.Disp))
+		r.Set("ro", value.Bool(x.RO))
 		out = append(out, r)
 	}
 	return value.NewList(out), nil

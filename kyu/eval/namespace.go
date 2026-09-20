@@ -52,7 +52,7 @@ func evalBindStmt(st *ast.BindStmt, env *Env) (value.Value, error) {
 		if !ok {
 			return nil, fmt.Errorf("bind: mount handle for %s has no usable filesystem", mh.Addr)
 		}
-		if err := namespace.BindFSSpec(fs, "", string(dstPath), disp, mh.Spec); err != nil {
+		if err := namespace.BindFSOpts(fs, "", string(dstPath), disp, ns.BindOpts{Spec: mh.Spec, ReadOnly: st.ReadOnly}); err != nil {
 			return nil, err
 		}
 		return value.Null{}, nil
@@ -62,7 +62,7 @@ func evalBindStmt(st *ast.BindStmt, env *Env) (value.Value, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bind: source: %w", err)
 	}
-	if err := namespace.BindPath(context.Background(), srcPaths, string(dstPath), disp); err != nil {
+	if err := namespace.BindPathOpts(context.Background(), srcPaths, string(dstPath), disp, ns.BindOpts{ReadOnly: st.ReadOnly}); err != nil {
 		return nil, err
 	}
 	return value.Null{}, nil

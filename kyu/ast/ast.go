@@ -295,7 +295,7 @@ type AssignStmt struct {
 	Val    Expr
 }
 
-// BindStmt is `bind SRC, DST[, before|after|replace]` — a namespace verb,
+// BindStmt is `bind SRC, DST[, before|after|replace][, ro]` — a namespace verb,
 // a real keyword (not an ordinary function) per kyu's design: it mutates
 // the calling process's own namespace. Disposition defaults to "replace"
 // when omitted. Src may be a namespace-union expression (`a + b`),
@@ -305,6 +305,7 @@ type BindStmt struct {
 	Src         Expr
 	Dst         Expr
 	Disposition string // "before" | "after" | "replace"
+	ReadOnly    bool   // the trailing `ro` flag: refuse writes through this bind
 }
 
 // UnbindStmt is `unbind DST` — the inverse of bind, clearing whatever's

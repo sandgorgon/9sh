@@ -57,6 +57,7 @@ func biBindLog(env *Env, args []value.Value) (value.Value, error) {
 		r.Set("dst", value.Path(e.Dst))
 		r.Set("src", nullIfEmpty(e.Src))
 		r.Set("disp", nullIfEmpty(e.Disp))
+		r.Set("ro", value.Bool(e.RO))
 		out[i] = r
 	}
 	return value.NewList(out), nil

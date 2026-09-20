@@ -60,6 +60,7 @@ type layer struct {
 	resolved server.File
 	spec     string
 	seq      uint64
+	ro       bool // writes through this layer are refused; see roFile
 }
 
 func (l *layer) root(ctx context.Context) (server.File, error) {
@@ -77,6 +78,9 @@ func (l *layer) root(ctx context.Context) (server.File, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if l.ro {
+		f = roFile{f}
 	}
 	l.resolved = f
 	return f, nil
@@ -150,12 +154,25 @@ func (ns *Namespace) BindFS(fs server.FileSystem, subpath string, dst string, di
 // (e.g. `dial("host:1")`), recorded for Binds. An empty spec marks a
 // bind with no kyu spelling, like the /jobs bootstrap.
 func (ns *Namespace) BindFSSpec(fs server.FileSystem, subpath string, dst string, disp Disposition, spec string) error {
+	return ns.BindFSOpts(fs, subpath, dst, disp, BindOpts{Spec: spec})
+}
+
+// BindOpts are the optional parts of a bind: Spec is the kyu source
+// expression recorded for Binds (see BindFSSpec), ReadOnly makes every
+// layer the bind adds refuse writes (see roFile).
+type BindOpts struct {
+	Spec     string
+	ReadOnly bool
+}
+
+// BindFSOpts is BindFSSpec with the full option set.
+func (ns *Namespace) BindFSOpts(fs server.FileSystem, subpath string, dst string, disp Disposition, o BindOpts) error {
 	n := ns.ensureNode(dst)
-	l := &layer{fs: fs, subpath: splitPath(subpath), spec: spec, seq: ns.seq.Add(1)}
+	l := &layer{fs: fs, subpath: splitPath(subpath), spec: o.Spec, seq: ns.seq.Add(1), ro: o.ReadOnly}
 	if err := n.addLayers([]*layer{l}, disp); err != nil {
 		return err
 	}
-	ns.log.record("bind", dst, spec, disp)
+	ns.log.record("bind", dst, o.Spec, disp, o.ReadOnly)
 	return nil
 }
 
@@ -164,6 +181,12 @@ func (ns *Namespace) BindFSSpec(fs server.FileSystem, subpath string, dst string
 // this is kyu's `bind`, including the multi-source case from a
 // namespace-union expression (`bind (a + b) /dst`).
 func (ns *Namespace) BindPath(ctx context.Context, srcPaths []string, dst string, disp Disposition) error {
+	return ns.BindPathOpts(ctx, srcPaths, dst, disp, BindOpts{})
+}
+
+// BindPathOpts is BindPath with options; o.Spec is ignored (a path
+// bind's spec is always its source paths).
+func (ns *Namespace) BindPathOpts(ctx context.Context, srcPaths []string, dst string, disp Disposition, o BindOpts) error {
 	if len(srcPaths) == 0 {
 		return errors.New("ns: bind: no source path given")
 	}
@@ -177,13 +200,16 @@ func (ns *Namespace) BindPath(ctx context.Context, srcPaths []string, dst string
 		if err != nil {
 			return fmt.Errorf("ns: bind: %s: %w", sp, err)
 		}
-		layers[i] = &layer{resolved: f, spec: sp, seq: ns.seq.Add(1)}
+		if o.ReadOnly {
+			f = roFile{f}
+		}
+		layers[i] = &layer{resolved: f, spec: sp, seq: ns.seq.Add(1), ro: o.ReadOnly}
 	}
 	n := ns.ensureNode(dst)
 	if err := n.addLayers(layers, disp); err != nil {
 		return err
 	}
-	ns.log.record("bind", dst, strings.Join(srcPaths, " + "), disp)
+	ns.log.record("bind", dst, strings.Join(srcPaths, " + "), disp, o.ReadOnly)
 	return nil
 }
 
@@ -205,7 +231,7 @@ func (ns *Namespace) Unbind(path string) error {
 		return fmt.Errorf("ns: unbind: nothing bound at %s", path)
 	}
 	n.layers = nil
-	ns.log.record("unbind", path, "", Replace)
+	ns.log.record("unbind", path, "", Replace, false)
 	return nil
 }
 

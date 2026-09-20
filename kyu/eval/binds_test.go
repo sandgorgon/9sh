@@ -206,3 +206,60 @@ func TestBindLogRejectsArguments(t *testing.T) {
 		t.Fatal("bind_log(1) should be an error")
 	}
 }
+
+func TestReadOnlyBindEndToEnd(t *testing.T) {
+	env, dir := globEnv(t)
+	if err := env.Namespace().BindFS(ns.NewBindsFS(env.Namespace()), "", "/ns", ns.Replace); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(dir+"/f.txt", []byte("keep"), 0644)
+	os.Mkdir(dir+"/sub", 0755)
+	runEnv(t, `bind /testdir, /view, ro`, env)
+
+	if got := runEnv(t, `cat(/view/f.txt)`, env); got != value.String("keep") {
+		t.Fatalf("cat through ro = %#v", got)
+	}
+	for _, src := range []string{
+		`write(/view/f.txt, "changed")`,
+		`append(/view/f.txt, "more")`,
+		`write(/view/new.txt, "x")`,
+		`rm(/view/f.txt)`,
+		`mv(/view/f.txt, /view/g.txt)`,
+		`mkdir(/view/made)`,
+		`rmdir(/view/sub)`,
+		`cp(/testdir/f.txt, /view/copy.txt)`,
+	} {
+		if _, ok := runEnv(t, src, env).(value.ErrorVal); !ok {
+			t.Errorf("%s through a read-only bind should be an ErrorVal", src)
+		}
+	}
+	if got := readReal(t, dir+"/f.txt"); got != "keep" {
+		t.Errorf("file changed through ro bind: %q", got)
+	}
+	if _, err := os.Stat(dir + "/g.txt"); err == nil {
+		t.Error("mv through ro bind moved the file")
+	}
+	// Writes via the original path still work.
+	runEnv(t, `write(/testdir/f.txt, "ok")`, env)
+	if got := runEnv(t, `cat(/view/f.txt)`, env); got != value.String("ok") {
+		t.Errorf("ro view should reflect writes made through the original, got %#v", got)
+	}
+
+	rec := func(src, field string) value.Value {
+		r := runEnv(t, src, env)
+		if l, ok := r.(*value.List); ok {
+			r = l.Elems[len(l.Elems)-1]
+		}
+		v, _ := r.(*value.Record).Get(field)
+		return v
+	}
+	if rec(`binds(/view)`, "ro") != value.Bool(true) || rec(`binds(/testdir)`, "ro") != value.Bool(false) {
+		t.Error("binds() ro field wrong")
+	}
+	if rec(`bind_log()`, "ro") != value.Bool(true) {
+		t.Error("bind_log() last entry should be ro")
+	}
+	if rec(`which_bind(/view/f.txt)`, "ro") != value.Bool(true) {
+		t.Error("which_bind ro field wrong")
+	}
+}

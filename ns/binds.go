@@ -26,6 +26,8 @@ type Bind struct {
 	// layer was originally bound with — that isn't recoverable once a
 	// later bind has spliced around it, and doesn't matter for state.
 	Disp string `json:"disp"`
+	// RO is whether the layer refuses writes (bound with the ro flag).
+	RO bool `json:"ro"`
 }
 
 // Binds reports every layer currently bound anywhere in the namespace,
@@ -77,7 +79,7 @@ func (ns *Namespace) Binds() []Bind {
 			if i == 0 {
 				disp = "replace"
 			}
-			out = append(out, Bind{Dst: p.dst, Src: l.spec, Disp: disp})
+			out = append(out, Bind{Dst: p.dst, Src: l.spec, Disp: disp, RO: l.ro})
 		}
 	}
 	return out
@@ -93,11 +95,7 @@ func FormatBinds(binds []Bind) string {
 		if src == "" {
 			src, comment = "<builtin>", "# "
 		}
-		fmt.Fprintf(&b, "%sbind %s, %s", comment, src, x.Dst)
-		if x.Disp != "replace" {
-			b.WriteString(", " + x.Disp)
-		}
-		b.WriteByte('\n')
+		fmt.Fprintf(&b, "%sbind %s, %s%s\n", comment, src, x.Dst, bindSuffix(x.Disp, x.RO))
 	}
 	return b.String()
 }
@@ -276,6 +274,8 @@ type Resolution struct {
 	// Inner is the path within the serving layer ("/" is its root); ""
 	// unless Kind is "layer".
 	Inner string
+	// RO is whether the serving layer is read-only (Kind "layer" only).
+	RO bool
 }
 
 // Resolve answers "what serves this path", by walking exactly the way
@@ -325,7 +325,7 @@ func (ns *Namespace) Resolve(ctx context.Context, path string) (Resolution, erro
 					return res, fmt.Errorf("ns: %s: %w", res.Path, err)
 				}
 			}
-			res.Kind, res.Dst, res.Src = "layer", dst, l.spec
+			res.Kind, res.Dst, res.Src, res.RO = "layer", dst, l.spec, l.ro
 			res.Layer, res.Layers = li, len(layers)
 			res.Inner = "/" + strings.Join(parts[i:], "/")
 			return res, nil

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -289,4 +290,99 @@ func TestRecorderIntegratesWithRealJobManager(t *testing.T) {
 	}
 
 	r.Close()
+}
+
+func TestRecordBindWritesItsOwnShardNotHistory(t *testing.T) {
+	skipUnless9vcs(t)
+	dir := t.TempDir()
+	r, err := New(dir, "myhost")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer r.Close()
+
+	now := time.Now()
+	r.RecordBind(BindRecord{TS: now, Seq: 1, Op: "bind", Dst: "/work", Src: `dir("/x")`, Disp: "after", RO: true})
+	r.RecordBind(BindRecord{TS: now, Seq: 2, Op: "unbind", Dst: "/work"})
+
+	data, err := os.ReadFile(filepath.Join(dir, bindsDirName, dayShard(now)))
+	if err != nil {
+		t.Fatalf("reading binds shard: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("binds shard has %d lines, want 2:\n%s", len(lines), data)
+	}
+	var first BindRecord
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Op != "bind" || first.Dst != "/work" || first.Src != `dir("/x")` || first.Disp != "after" || !first.RO {
+		t.Errorf("record = %#v", first)
+	}
+	if first.Host != "myhost" || first.PID != os.Getpid() {
+		t.Errorf("host/pid not filled in: %#v", first)
+	}
+	// The job history must stay a job history: nothing landed in history/.
+	if _, err := os.Stat(filepath.Join(dir, historyDirName)); err == nil {
+		t.Error("RecordBind wrote into history/")
+	}
+	if recs, err := ReadRecent(dir, 10); err != nil || len(recs) != 0 {
+		t.Errorf("ReadRecent = %v, %v; want no job records", recs, err)
+	}
+}
+
+func TestBindRecordsAreCheckpointedWithTheRepo(t *testing.T) {
+	skipUnless9vcs(t)
+	dir := t.TempDir()
+	r, err := New(dir, "myhost")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r.RecordBind(BindRecord{Op: "bind", Dst: "/work", Src: "/local"})
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	out := vcsLog(t, dir)
+	if !strings.Contains(out, "checkpoint ") || !strings.Contains(out, bindsDirName+"/") {
+		t.Fatalf("expected a checkpoint patch touching binds/, log:\n%s", out)
+	}
+}
+
+func TestReadBindsNewestFirstAcrossShardsWithLimit(t *testing.T) {
+	dir := t.TempDir()
+	write := func(day string, recs ...BindRecord) {
+		t.Helper()
+		p := filepath.Join(dir, bindsDirName)
+		os.MkdirAll(p, 0755)
+		var b strings.Builder
+		for _, r := range recs {
+			j, _ := json.Marshal(r)
+			b.Write(j)
+			b.WriteByte('\n')
+		}
+		if err := os.WriteFile(filepath.Join(p, day+".nrl"), []byte(b.String()), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("2026-09-18", BindRecord{Seq: 1, Op: "bind", Dst: "/a"})
+	write("2026-09-19", BindRecord{Seq: 1, Op: "bind", Dst: "/b"}, BindRecord{Seq: 2, Op: "unbind", Dst: "/b"})
+
+	all, err := ReadBinds(dir, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, r := range all {
+		order = append(order, r.Op+" "+r.Dst)
+	}
+	if want := []string{"unbind /b", "bind /b", "bind /a"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("ReadBinds = %v, want newest first %v", order, want)
+	}
+	if two, _ := ReadBinds(dir, 2); len(two) != 2 || two[1].Dst != "/b" {
+		t.Fatalf("limit 2 = %v", two)
+	}
+	if none, err := ReadBinds(t.TempDir(), 5); err != nil || len(none) != 0 {
+		t.Fatalf("empty dir = %v, %v; want empty, no error", none, err)
+	}
 }

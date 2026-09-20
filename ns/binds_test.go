@@ -354,3 +354,54 @@ func TestReadOnlyShowsInBindsLogAndResolve(t *testing.T) {
 		t.Error("Resolve(/rw) should not be RO")
 	}
 }
+
+func TestOnBindHookSeesSuccessfulOpsInOrder(t *testing.T) {
+	n := New()
+	ctx := context.Background()
+	var got []LogEntry
+	n.OnBind(func(e LogEntry) {
+		got = append(got, e)
+		n.Binds() // a hook may read the namespace: no lock may be held across it
+	})
+	n.BindFSSpec(&memFS{name: "a"}, "", "/w", Replace, `dir("/x")`)
+	n.BindPathOpts(ctx, []string{"/w"}, "/v", After, BindOpts{ReadOnly: true})
+	if err := n.BindPath(ctx, []string{"/missing"}, "/v", Replace); err == nil {
+		t.Fatal("bind of a missing source should fail")
+	}
+	n.Unbind("/w")
+	if err := n.Unbind("/never"); err == nil {
+		t.Fatal("unbind of nothing should fail")
+	}
+
+	var summary []string
+	for _, e := range got {
+		summary = append(summary, e.Op+" "+e.Dst)
+	}
+	if want := []string{"bind /w", "bind /v", "unbind /w"}; !reflect.DeepEqual(summary, want) {
+		t.Fatalf("hook saw %v, want %v (failed operations must not fire it)", summary, want)
+	}
+	if got[1].Disp != "after" || !got[1].RO || got[0].Seq != 1 || got[2].Seq != 3 {
+		t.Errorf("hook entries carry the wrong details: %#v", got)
+	}
+
+	n.OnBind(nil)
+	n.BindFS(&memFS{name: "b"}, "", "/z", Replace)
+	if len(got) != 3 {
+		t.Error("a cleared hook must not fire")
+	}
+}
+
+func TestCloneDoesNotInheritTheOnBindHook(t *testing.T) {
+	n := New()
+	fired := 0
+	n.OnBind(func(LogEntry) { fired++ })
+	c := n.Clone()
+	c.BindFS(&memFS{name: "a"}, "", "/private", Replace)
+	if fired != 0 {
+		t.Fatal("a bind in a cloned (in_ns) namespace reached the original's hook")
+	}
+	n.BindFS(&memFS{name: "a"}, "", "/real", Replace)
+	if fired != 1 {
+		t.Fatalf("the original's hook fired %d times, want 1", fired)
+	}
+}

@@ -269,6 +269,22 @@ func bootstrap(listenAddr, listenUnixPath string, lo listenOpts) (*eval.Env, *se
 			}
 		}
 	}
+	if recorder != nil {
+		// Persist every bind/unbind from here on. Registered after the last
+		// Go-level bootstrap bind (/session, above) on purpose: those are
+		// the same every run and not what a "what was my namespace"
+		// question is after; the startup configs and everything typed
+		// afterwards are.
+		namespace.OnBind(func(e ns.LogEntry) {
+			ts, err := time.Parse(time.RFC3339, e.Time)
+			if err != nil {
+				ts = time.Now()
+			}
+			recorder.RecordBind(session.BindRecord{
+				TS: ts, Seq: e.Seq, Op: e.Op, Dst: e.Dst, Src: e.Src, Disp: e.Disp, RO: e.RO,
+			})
+		})
+	}
 	env := eval.NewGlobalEnv(namespace)
 	if recorder != nil {
 		// The local-side half of @host{} session recording: the remote

@@ -34,9 +34,33 @@ type bindLog struct {
 	entries []LogEntry
 	dropped uint64
 	now     func() time.Time // nil = time.Now; tests replace it
+	hook    func(LogEntry)   // see OnBind
+}
+
+// OnBind registers fn to be called with every bind and unbind that
+// succeeds from now on, in order, after the namespace's own state has
+// changed and with none of its locks held (fn may block on I/O; it must
+// not, however, expect a bind made from inside it to be logged before
+// it returns). nil clears it. There is one hook: a later call replaces
+// an earlier one. It is what persists the log across shell sessions
+// (see package session); a Clone does not inherit it, since a private
+// in_ns namespace is deliberately not part of the session's record.
+func (ns *Namespace) OnBind(fn func(LogEntry)) {
+	ns.log.mu.Lock()
+	ns.log.hook = fn
+	ns.log.mu.Unlock()
 }
 
 func (l *bindLog) record(op, dst, src string, disp Disposition, ro bool) {
+	e, hook := l.add(op, dst, src, disp, ro)
+	if hook != nil {
+		hook(e)
+	}
+}
+
+// add appends the entry under the log's lock and returns it with the
+// hook to call once the lock is released.
+func (l *bindLog) add(op, dst, src string, disp Disposition, ro bool) (LogEntry, func(LogEntry)) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now
@@ -60,6 +84,7 @@ func (l *bindLog) record(op, dst, src string, disp Disposition, ro bool) {
 		l.entries = append([]LogEntry(nil), l.entries[drop:]...)
 		l.dropped += uint64(drop)
 	}
+	return e, l.hook
 }
 
 // Log returns every recorded bind and unbind, oldest first, and how many

@@ -109,6 +109,19 @@ control flow, env/kyu vars, remote namespaces, file ops).
   case this can't catch (see the Design section's "No FUSE").
   `setenv("PATH", ...)` genuinely changes which binary `%cmd`
   resolves, not just what a subprocess sees about its own environment.
+- Regex and collection builtins: `s | match(re)` (bool, matches
+  anywhere — anchor with `^`/`$`), `s | capture(re)` (the first match as
+  a `List` — whole match then each group, a group that didn't
+  participate is null — or null for no match), `s | replace_re(re,
+  repl)` (`$1`/`${name}` expand in `repl`; `replace` stays the literal
+  form). Patterns are Go RE2: linear-time, so a hostile pattern can't
+  hang the shell, with no backreferences or lookaround; a bad pattern
+  is an error. `range(stop)`/`range(start, stop[, step])` builds a
+  half-open `List` of `Int`s, `xs | zip(ys)` pairs by position
+  (stopping at the shorter), and `record | keys`/`record | values` list
+  a record's fields — `keys` never reads a value so it's safe on a live
+  job record, while `values` reads each field fresh like `record.field`
+  (a job's `wait` blocks), so prefer `keys` plus `get_field` there.
 - Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
   `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
   `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/

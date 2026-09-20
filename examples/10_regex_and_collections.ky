@@ -1,0 +1,60 @@
+# Regular expressions and a few collection helpers. Patterns are Go's
+# RE2: matching runs in linear time (a hostile pattern can't hang the
+# shell) at the cost of no backreferences or lookaround. A bad pattern
+# is a hard error, like any other malformed call. Inside a kyu string
+# write `\\d`, not `\d` -- the string itself consumes one backslash.
+
+release := "build-2026-09-20-linux"
+
+# match: does the pattern match anywhere? (anchor with ^ and $ for a
+# whole-string test.)
+is_release := release | match("^build-")
+is_windows := release | match("windows")
+
+# capture: the first match as a List -- the whole match, then each
+# parenthesized group -- or null when nothing matches. A group that
+# didn't take part in the match is null in its slot.
+parts := release | capture("(\\d+)-(\\d+)-(\\d+)")
+year := parts | skip(1) | first
+day := parts | last
+no_match := release | capture("zzz")
+
+# replace_re: every match replaced; $1 / ${name} in the replacement
+# expands to that group. replace() stays the literal, no-regex form.
+tidied := release | replace_re("-(\\d+)-(\\d+)-(\\d+)-", " $1/$2/$3 ")
+
+# Regexes compose with the rest of the pipeline like any other predicate.
+files := ["a1.txt", "notes.md", "b22.txt", "c.txt"]
+numbered_txt := files | where { |f| f | match("\\d+\\.txt$") } | count
+
+# range builds a half-open List of Ints (range(3) is [0, 1, 2]);
+# a third argument is the step, and a negative one counts down.
+squares := range(1, 6) | each { |n| n * n }
+countdown := range(3, 0, -1)
+
+# zip pairs by position, stopping at the shorter list.
+paired := ["a", "b", "c"] | zip(range(1, 3))
+
+# keys/values list a record's fields. keys never reads a value, so it
+# is safe even on a live job record; values reads each field fresh
+# (a job's blocking `wait` field would block), so prefer keys plus
+# get_field there.
+person := {name: "ada", role: "engineer", level: 3}
+field_names := person | keys
+field_values := person | values
+
+format(
+    "release? {} windows? {}; year {} day {} no_match {}; tidied \"{}\"; {} numbered .txt file(s); squares {} countdown {}; zip {}; keys {} values {}",
+    is_release,
+    is_windows,
+    year,
+    day,
+    no_match,
+    tidied,
+    numbered_txt,
+    squares,
+    countdown,
+    paired,
+    field_names,
+    field_values,
+)

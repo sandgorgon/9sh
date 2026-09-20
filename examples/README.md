@@ -1,6 +1,6 @@
 # Examples
 
-Eight runnable `.ky` scripts, one feature area each, verified against
+Ten runnable `.ky` scripts, one feature area each, verified against
 the real binary (not just written prose). Run any of them directly:
 
 ```
@@ -16,7 +16,9 @@ the real binary (not just written prose). Run any of them directly:
 | `05_control_flow_and_closures.ky` | `while`/`break`/`continue`, self-recursive closures, default parameters, `error()`/`?`, errors-as-values in a pipeline |
 | `06_env_and_kyu_vars.ky` | `getenv`/`setenv`/`unsetenv` (real `/env` files), `vars()`/`unset()` (plain kyu variables) |
 | `07_remote_and_local_namespaces.ky` | `dir()`, `join_path`/`path`, `dial()`'s graceful-failure behavior — plus a commented sketch of `dial`+`bind`+`@host{}` against a real peer |
-| `08_script_args_and_file_ops.ky` | a script's own `args`, `cp`/`mv`/`rm`/`find` | 
+| `08_script_args_and_file_ops.ky` | a script's own `args`, `cp`/`mv`/`rm`/`find` |
+| `09_namespace_introspection_and_safety.ky` | `write`/`append`, read-only binds (`bind ..., ro`), `binds()`, `which_bind()`, `bind_log()`, `in_ns { ... }`, `source()` |
+| `10_regex_and_collections.ky` | `match`/`capture`/`replace_re`, `range`, `zip`, `keys`/`values` |
 
 ## Important: script mode only prints the *last* expression
 
@@ -39,9 +41,13 @@ few statements at a time.
 - These are meant to be read, not just run — every non-obvious builtin
   has a one-line comment explaining *why* it works the way it does,
   matching README's own style.
-- `07` and `08` bind real host locations (`dir("/tmp")`, `/local`) so
-  they're fully self-contained and safe to run repeatedly — `08`
-  copies `LICENSE` into a scratch path under `/tmp`, renames it, then
-  removes it again, never touching anything in this repo.
+- `07`, `08` and `09` bind real host locations (`dir("/tmp")`,
+  `/local`) so they're fully self-contained and safe to run repeatedly
+  — `08` copies `LICENSE` into a scratch path under `/tmp`, renames it,
+  then removes it again, and `09` writes two small scratch files under
+  `/tmp` and removes both, never touching anything in this repo.
+- `09` shows `source()` running a file it just wrote itself. `source()`
+  runs arbitrary kyu with your full authority, so `cat()` a file from a
+  peer before sourcing it.
 - None of these need `9vcs`, a remote peer, or any config beyond a
   fresh install's defaults.

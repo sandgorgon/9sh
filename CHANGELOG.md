@@ -17,6 +17,12 @@ once a first tagged release is cut.
   kyu (bootstrap binds with no kyu spelling appear as comments);
   `binds()` is the `Table`-of-`Record`s view, like `ps()` over `/jobs`.
   Previously nothing recorded a bind's parameters after it ran.
+- `-listen-root PATH` and `-listen-ro` flags — narrow what the `-listen`
+  (network) listener serves: only `PATH`, as the peer's `/` (with `..`
+  unable to climb out of it), and/or read-only. Previously an
+  authorized peer saw the whole namespace, `/env` included.
+  `-listen-unix` is unchanged, since local jobs rely on it reaching
+  everything. Backed by a new `ns.Namespace.Subtree`.
 - `bind SRC, DST[, disposition][, ro]` — the `ro` flag makes a bind
   read-only: writes, creates, removes and renames through it fail, while
   the same tree bound elsewhere (or reached by its original path) stays

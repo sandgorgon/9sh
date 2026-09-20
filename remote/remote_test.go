@@ -13,8 +13,11 @@ import (
 
 	auth "github.com/sandgorgon/9auth"
 	p9 "github.com/sandgorgon/9p"
+	"github.com/sandgorgon/9p/examples/dirfs"
 	"github.com/sandgorgon/9p/examples/memfs"
 	"github.com/sandgorgon/9p/server"
+
+	"github.com/sandgorgon/9sh/ns"
 )
 
 // loadIdentity generates (and persists) a fresh 9auth identity under its
@@ -712,4 +715,80 @@ func readMemFile(fs server.FileSystem, name string) ([]byte, error) {
 	}
 	defer f.Close()
 	return readAll(ctx, f)
+}
+
+// TestListenUnixServesOnlyASubtree drives ns.Subtree through a real 9P
+// client/server round trip, not just direct File calls: a peer dialing a
+// `-listen-root /work -listen-ro` style listener sees /work as its whole
+// namespace, can't reach a sibling bind by name or by "..", and can't write.
+func TestListenUnixServesOnlyASubtree(t *testing.T) {
+	work, secret := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(work, "sub"), 0755)
+	os.WriteFile(filepath.Join(work, "top.txt"), []byte("top"), 0644)
+	os.WriteFile(filepath.Join(secret, "key.txt"), []byte("hunter2"), 0644)
+	namespace := ns.New()
+	for path, dir := range map[string]string{"/work": work, "/secret": secret} {
+		fs, err := dirfs.New(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := namespace.BindFS(fs, "", path, ns.Replace); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sockPath := filepath.Join(t.TempDir(), "sub.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l, err := ListenUnix(ctx, sockPath, namespace.Subtree("/work", true))
+	if err != nil {
+		t.Fatalf("ListenUnix: %v", err)
+	}
+	defer l.Close()
+	conn, err := Dial(ctx, sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+	root, err := conn.FS().Attach(ctx, "9sh", "")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	f, err := root.Walk(ctx, "top.txt")
+	if err != nil {
+		t.Fatalf("walk top.txt: %v", err)
+	}
+	if err := f.Open(ctx, p9.OREAD); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if got, _ := readAll(ctx, f); string(got) != "top" {
+		t.Fatalf("top.txt = %q", got)
+	}
+	f.Close()
+
+	for _, name := range []string{"secret", "work", ".."} {
+		up, err := root.Walk(ctx, name)
+		if err == nil && name != ".." {
+			t.Errorf("walk %q from the served root succeeded", name)
+		}
+		if err == nil && name == ".." {
+			// ".." is allowed (a root is its own parent) but must not lead out.
+			if _, err := up.Walk(ctx, "secret"); err == nil {
+				t.Error("'..' from the served root reached /secret")
+			}
+		}
+	}
+
+	w, err := root.Walk(ctx, "top.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Open(ctx, p9.OWRITE); err == nil {
+		t.Error("write open through a read-only served subtree succeeded")
+	}
+	w.Close()
+	if _, err := root.Create(ctx, "new.txt", 0644, p9.OWRITE); err == nil {
+		t.Error("create through a read-only served subtree succeeded")
+	}
 }

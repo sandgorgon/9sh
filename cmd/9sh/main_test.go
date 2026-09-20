@@ -64,7 +64,7 @@ func TestBootstrapExportsUnixSocketEnv(t *testing.T) {
 	t.Setenv("_9SH_UNIX_SOCK", "") // isolate from any ambient value
 	sockPath := filepath.Join(t.TempDir(), "9sh.sock")
 
-	bootstrap("", sockPath)
+	bootstrap("", sockPath, listenOpts{})
 
 	got := os.Getenv("_9SH_UNIX_SOCK")
 	if got != sockPath {
@@ -80,7 +80,7 @@ func TestBootstrapLeavesUnixSocketEnvUnsetWhenNotListening(t *testing.T) {
 	t.Setenv("_9SH_UNIX_SOCK", "")
 	os.Unsetenv("_9SH_UNIX_SOCK")
 
-	bootstrap("", "")
+	bootstrap("", "", listenOpts{})
 
 	if _, ok := os.LookupEnv("_9SH_UNIX_SOCK"); ok {
 		t.Fatal("expected _9SH_UNIX_SOCK to remain unset when -listen-unix wasn't passed")

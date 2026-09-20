@@ -459,7 +459,8 @@ one bootstrap, in this order, before any of your own code runs:
 2. `/local` is bound — `dirfs` over the real directory 9sh was launched
    from.
 3. `-listen`/`-listen-unix`, if either flag was passed, start serving
-   this namespace out. `-listen-unix` also exports
+   this namespace out (`-listen` optionally narrowed by `-listen-root`/
+   `-listen-ro`). `-listen-unix` also exports
    `$_9SH_UNIX_SOCK` into 9sh's own process environment, so every job
    it spawns inherits it with zero configuration.
 4. `/env` is bound — a one-time snapshot of `os.Environ()`, taken
@@ -610,6 +611,21 @@ unrecognized peer's fingerprint prompts once to trust-and-remember it
 (`~/.config/9/known-peers`) — a later mismatch is always a loud refusal,
 never a silent pass. Only fingerprints listed in
 `~/.config/9/authorized-peers` can attach at all.
+
+**Serving less than everything.** By default `-listen` exposes the
+whole namespace to an authorized peer — `/env` (your environment
+variables, secrets included), `/jobs`, and any remote mounts too.
+`-listen-root PATH` serves only that namespace path, as the peer's own
+`/`: `9sh -listen host:2049 -listen-root /work` shows a peer `/work`'s
+contents and nothing else, and `..` can't climb out of it. Add
+`-listen-ro` and the peer can read what's exposed but never change it
+(open-for-write, create, remove and rename all fail); `-listen-ro` on
+its own makes the whole namespace read-only. `PATH` is resolved when a
+peer connects, not at startup, so a directory a dotfile binds later is
+fine; one that isn't bound then is a refused attach, not a startup
+error. Both flags apply to `-listen` only: `-listen-unix` stays whole on
+purpose, since jobs reach it through `$_9SH_UNIX_SOCK` and tools like
+9ed need the full namespace, and its trust boundary is your own UID.
 
 Same-machine traffic (`dial` on a path, `-listen-unix`) skips all of
 that by design: a Unix socket's own file permissions are already the

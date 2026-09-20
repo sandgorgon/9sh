@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestBindsRecordsSpecAndCanonicalDisposition(t *testing.T) {
@@ -184,5 +186,97 @@ func TestResolveAgreesWithWalk(t *testing.T) {
 	res, err := n.Resolve(ctx, "/u/same")
 	if err != nil || res.Layer != 0 {
 		t.Fatalf("Resolve = %#v, %v; want layer 0 (the one Walk served)", res, err)
+	}
+}
+
+func TestLogKeepsOriginalDispositionsAndUnbinds(t *testing.T) {
+	n := New()
+	ctx := context.Background()
+	tick := 0
+	n.log.now = func() time.Time { tick++; return time.Date(2026, 1, 2, 3, 4, tick, 0, time.UTC) }
+
+	n.BindFS(&memFS{name: "a"}, "", "/boot", Replace)
+	n.BindFSSpec(&memFS{name: "b"}, "", "/work", Replace, `dir("/x")`)
+	n.BindPath(ctx, []string{"/work", "/boot"}, "/u", Replace)
+	n.BindPath(ctx, []string{"/boot"}, "/u", Before)
+	if err := n.BindPath(ctx, []string{"/missing"}, "/u", After); err == nil {
+		t.Fatal("bind of a missing source should fail")
+	}
+	if err := n.Unbind("/work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Unbind("/never"); err == nil {
+		t.Fatal("unbind of nothing should fail")
+	}
+
+	entries, dropped := n.Log()
+	if dropped != 0 {
+		t.Fatalf("dropped = %d", dropped)
+	}
+	want := []LogEntry{
+		{Seq: 1, Time: "2026-01-02T03:04:01Z", Op: "bind", Dst: "/boot", Src: "", Disp: "replace"},
+		{Seq: 2, Time: "2026-01-02T03:04:02Z", Op: "bind", Dst: "/work", Src: `dir("/x")`, Disp: "replace"},
+		{Seq: 3, Time: "2026-01-02T03:04:03Z", Op: "bind", Dst: "/u", Src: "/work + /boot", Disp: "replace"},
+		{Seq: 4, Time: "2026-01-02T03:04:04Z", Op: "bind", Dst: "/u", Src: "/boot", Disp: "before"},
+		{Seq: 5, Time: "2026-01-02T03:04:05Z", Op: "unbind", Dst: "/work"},
+	}
+	if !reflect.DeepEqual(entries, want) {
+		t.Fatalf("Log() =\n%#v\nwant\n%#v (failed operations must not be logged)", entries, want)
+	}
+
+	wantText := "# bind <builtin>, /boot  # 2026-01-02T03:04:01Z\n" +
+		"bind dir(\"/x\"), /work  # 2026-01-02T03:04:02Z\n" +
+		"bind /work + /boot, /u  # 2026-01-02T03:04:03Z\n" +
+		"bind /boot, /u, before  # 2026-01-02T03:04:04Z\n" +
+		"unbind /work  # 2026-01-02T03:04:05Z\n"
+	if got := FormatLog(entries, dropped); got != wantText {
+		t.Fatalf("FormatLog =\n%s\nwant\n%s", got, wantText)
+	}
+}
+
+func TestLogIsCappedOldestFirst(t *testing.T) {
+	n := New()
+	for i := 0; i < maxLogEntries+5; i++ {
+		n.BindFSSpec(&memFS{name: "a"}, "", "/p", Replace, `dir("/x")`)
+	}
+	entries, dropped := n.Log()
+	if len(entries) != maxLogEntries || dropped != 5 {
+		t.Fatalf("len = %d, dropped = %d; want %d and 5", len(entries), dropped, maxLogEntries)
+	}
+	if entries[0].Seq != 6 || entries[len(entries)-1].Seq != maxLogEntries+5 {
+		t.Fatalf("seq range = %d..%d, want 6..%d", entries[0].Seq, entries[len(entries)-1].Seq, maxLogEntries+5)
+	}
+	if got := FormatLog(entries[:1], dropped); !strings.HasPrefix(got, "# 5 earlier entries dropped\n") {
+		t.Fatalf("FormatLog should say what was dropped, got %q", got)
+	}
+}
+
+func TestBindsFSLogFiles(t *testing.T) {
+	n := New()
+	ctx := context.Background()
+	n.BindFS(NewBindsFS(n), "", "/ns", Replace)
+	n.BindFSSpec(&memFS{name: "a"}, "", "/w", Replace, `dir("/x")`)
+	n.Unbind("/w")
+	root, _ := n.Attach(ctx, "u", "")
+
+	txt := mustWalk(t, ctx, root, "ns", "log")
+	txt.Open(ctx, 0)
+	lines := strings.Split(strings.TrimSpace(readAll(t, ctx, txt)), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[0], "# bind <builtin>, /ns") ||
+		!strings.HasPrefix(lines[1], `bind dir("/x"), /w`) || !strings.HasPrefix(lines[2], "unbind /w") {
+		t.Fatalf("log text = %q", lines)
+	}
+
+	js := mustWalk(t, ctx, root, "ns", "log.json")
+	js.Open(ctx, 0)
+	var doc struct {
+		Dropped uint64     `json:"dropped"`
+		Entries []LogEntry `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(readAll(t, ctx, js)), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Dropped != 0 || len(doc.Entries) != 3 || doc.Entries[2].Op != "unbind" {
+		t.Fatalf("log.json = %#v", doc)
 	}
 }

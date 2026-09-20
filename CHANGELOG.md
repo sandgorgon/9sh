@@ -17,6 +17,8 @@ once a first tagged release is cut.
   kyu (bootstrap binds with no kyu spelling appear as comments);
   `binds()` is the `Table`-of-`Record`s view, like `ps()` over `/jobs`.
   Previously nothing recorded a bind's parameters after it ran.
+- `binds(path)` — the same list filtered to layers bound at `path` or
+  beneath it, by whole path segments.
 - `source(path)` builtin — runs a kyu file from the namespace against
   the session, so `source(/ns/binds)` replays a namespace. Parse errors
   are an `ErrorVal` (nothing runs); self-sourcing is bounded at 32 deep.

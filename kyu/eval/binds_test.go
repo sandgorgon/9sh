@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sandgorgon/9sh/kyu/value"
@@ -58,10 +59,41 @@ func TestBindsReportsBootstrapAndUserBinds(t *testing.T) {
 	}
 }
 
-func TestBindsRejectsArguments(t *testing.T) {
+func TestBindsRejectsBadArguments(t *testing.T) {
 	env := bindsEnv(t)
 	if _, err := biBinds(env, []value.Value{value.Int(1)}); err == nil {
 		t.Fatal("binds(1) should be an error")
+	}
+	if _, err := biBinds(env, []value.Value{value.Path("/a"), value.Path("/b")}); err == nil {
+		t.Fatal("binds(/a, /b) should be an error")
+	}
+}
+
+func TestBindsPathFilterIsAtOrUnderBySegment(t *testing.T) {
+	dir := t.TempDir()
+	env := bindsEnv(t)
+	for _, dst := range []string{"/n", "/n/h1", "/n/h2/deep", "/nfs", "/other"} {
+		runEnv(t, `bind dir("`+dir+`"), `+dst, env)
+	}
+	dsts := func(src string) []string {
+		var out []string
+		for _, el := range runEnv(t, src, env).(*value.List).Elems {
+			d, _ := el.(*value.Record).Get("dst")
+			out = append(out, string(d.(value.Path)))
+		}
+		return out
+	}
+	if got := strings.Join(dsts(`binds(/n)`), " "); got != "/n /n/h1 /n/h2/deep" {
+		t.Errorf("binds(/n) = %q (must include /n and its children, exclude /nfs)", got)
+	}
+	if got := strings.Join(dsts(`binds(/n/h1)`), " "); got != "/n/h1" {
+		t.Errorf("binds(/n/h1) = %q", got)
+	}
+	if got := dsts(`binds(/nothing)`); len(got) != 0 {
+		t.Errorf("binds(/nothing) = %v, want empty", got)
+	}
+	if all, filtered := len(dsts(`binds()`)), len(dsts(`binds(/)`)); all != filtered {
+		t.Errorf("binds(/) returned %d layers, binds() %d — root should match everything", filtered, all)
 	}
 }
 

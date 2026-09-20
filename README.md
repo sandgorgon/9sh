@@ -213,7 +213,9 @@ control flow, env/kyu vars, remote namespaces, file ops).
   no-checkout-needed view of `/jobs`' own `status` files, e.g.
   `ps() | where { |j| j.state == "running" }`.
 - `binds()` returns every layer bound in the namespace as a `Table` of
-  `Record`s (`dst`, `src`, `disp`), in bind order — the structured view
+  `Record`s (`dst`, `src`, `disp`), in bind order; `binds(path)` keeps
+  only layers bound at `path` or beneath it, by whole path segments
+  (`binds(/n)` is every remote mount, and doesn't match `/nfs`) — the structured view
   of `/ns/binds`, the way `ps()` is of `/jobs`. `cat("/ns/binds")` is
   the same list as replayable kyu (a bind with no kyu spelling, like
   the `/jobs` bootstrap, is a `#` comment), so it can be read, diffed,

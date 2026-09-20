@@ -20,9 +20,23 @@ import (
 //
 // disp is the canonical replay disposition, not the one a layer was
 // originally bound with — see ns.Bind.
+//
+// With a Path argument, only layers bound at that path or anywhere
+// beneath it are returned (`binds(/n)` is every remote mount; `/nfs`
+// doesn't match — whole path segments only). It's a filter on the same
+// list, so an unbound or never-bound path is an empty List, not an
+// error.
 func biBinds(env *Env, args []value.Value) (value.Value, error) {
-	if len(args) != 0 {
-		return nil, fmt.Errorf("binds: expected no arguments, got %d", len(args))
+	if len(args) > 1 {
+		return nil, fmt.Errorf("binds: expected at most 1 argument (a path), got %d", len(args))
+	}
+	var under []string
+	if len(args) == 1 {
+		p, ok := args[0].(value.Path)
+		if !ok {
+			return nil, fmt.Errorf("binds: expected a path, got %s", args[0].Kind())
+		}
+		under = splitPath(string(p))
 	}
 	namespace := env.Namespace()
 	if namespace == nil {
@@ -46,8 +60,11 @@ func biBinds(env *Env, args []value.Value) (value.Value, error) {
 	if err := json.Unmarshal(b, &binds); err != nil {
 		return nil, fmt.Errorf("binds: %w", err)
 	}
-	out := make([]value.Value, len(binds))
-	for i, x := range binds {
+	out := make([]value.Value, 0, len(binds))
+	for _, x := range binds {
+		if !hasPathPrefix(splitPath(x.Dst), under) {
+			continue
+		}
 		r := value.NewRecord()
 		r.Set("dst", value.Path(x.Dst))
 		if x.Src == "" {
@@ -56,7 +73,22 @@ func biBinds(env *Env, args []value.Value) (value.Value, error) {
 			r.Set("src", value.String(x.Src))
 		}
 		r.Set("disp", value.String(x.Disp))
-		out[i] = r
+		out = append(out, r)
 	}
 	return value.NewList(out), nil
+}
+
+// hasPathPrefix reports whether path starts with every element of
+// prefix, by whole elements (so /nfs is not under /n). An empty prefix
+// matches everything.
+func hasPathPrefix(path, prefix []string) bool {
+	if len(prefix) > len(path) {
+		return false
+	}
+	for i := range prefix {
+		if path[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
 }

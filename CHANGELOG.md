@@ -8,8 +8,15 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-20
+
 ### Added
 
+- `examples/09_namespace_introspection_and_safety.ky` and
+  `examples/10_regex_and_collections.ky` — runnable, verified examples
+  for the 0.4.30 features (`write`/`append`, read-only binds, `binds()`,
+  `which_bind()`, `bind_log()`, `in_ns`, `source()`, regex, `range`,
+  `zip`, `keys`/`values`). The example count in the READMEs is updated.
 - `?` at an empty prompt opens the help screen, as a second way in for
   terminals that keep `F1` for themselves (xfce4-terminal binds it to
   its own Help menu and never forwards it). It only claims the key at a

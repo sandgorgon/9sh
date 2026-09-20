@@ -22,7 +22,7 @@ bind /scratch, /view, ro
 blocked := !write(/view/9sh-example-note.txt, "nope")
 still_hello := cat(/view/9sh-example-note.txt)
 
-# binds() is every layer bound right now (dst, src, disp, ro); binds(path)
+# binds() is every layer bound right now (dst, src, disp, ro, dev); binds(path)
 # keeps only that path and what's beneath it, by whole path segment.
 # disp is the canonical *replay* disposition (replace for a path's
 # first layer, after for the rest), not necessarily the one you typed.
@@ -30,11 +30,22 @@ view_layer := binds(/view) | first
 view_src := view_layer.src
 view_ro := view_layer.ro
 
-# which_bind(path) answers what `ls` can't inside a union: which bind
-# point and which layer serves a path, and the path within that layer.
+# which_bind(path) answers which bind point and which layer serves a
+# path, and the path within that layer -- what a merged union listing
+# hides.
 served_by := which_bind(/view/9sh-example-note.txt)
 served_layer := served_by.layer
 served_inner := served_by.inner
+
+# ls and stat carry a dev field too: the id of the layer that really
+# serves each file (Plan 9's Dir.dev), the same number binds() and
+# which_bind() report -- so any name in a listing can be tied back to its
+# bind without a which_bind per entry. /view is a bind of /scratch, and a
+# bind doesn't change where a file lives, so /view's files carry
+# /scratch's id (and /view's own binds() row reports dev 0).
+note_dev := stat(/view/9sh-example-note.txt).dev
+scratch_dev := (binds(/scratch) | first).dev
+same_layer := note_dev == scratch_dev
 
 # bind_log() keeps what was actually typed -- every successful bind and
 # unbind, oldest first -- including things binds() can't show you, like
@@ -69,7 +80,7 @@ rm(/scratch/9sh-example-note.txt)
 rm(/scratch/9sh-example-src.ky)
 
 format(
-    "note = \"{}\"; write through the ro bind blocked: {} (file still \"{}\"); /view came from {} (ro: {}); served by layer {} at {}; bind_log's last entry: {} {}; in_ns saw /scratch from {} while outside it's still {}; source() defined sourced_value = {}",
+    "note = \"{}\"; write through the ro bind blocked: {} (file still \"{}\"); /view came from {} (ro: {}); served by layer {} at {}; its dev matches /scratch's layer: {}; bind_log's last entry: {} {}; in_ns saw /scratch from {} while outside it's still {}; source() defined sourced_value = {}",
     note,
     blocked,
     still_hello,
@@ -77,6 +88,7 @@ format(
     view_ro,
     served_layer,
     served_inner,
+    same_layer,
     last_op,
     last_dst,
     inside_src,

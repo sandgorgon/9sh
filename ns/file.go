@@ -28,10 +28,14 @@ const sysUser = "9sh"
 // doesn't try to invent a answer); once real is set, ".." is delegated
 // to the underlying filesystem, which may or may not support it on its
 // own terms (dirfs, for instance, refuses to leave its export root).
+//
+// dev is the layer id stamped into Stat.Dev of everything served from
+// real (see dev.go); 0 leaves real's own Dev alone.
 type nsFile struct {
 	ns   *Namespace
 	n    *node
 	real server.File
+	dev  uint32
 }
 
 func (f *nsFile) Qid() p9.Qid {
@@ -43,7 +47,11 @@ func (f *nsFile) Qid() p9.Qid {
 
 func (f *nsFile) Stat(ctx context.Context) (p9.Stat, error) {
 	if f.real != nil {
-		return f.real.Stat(ctx)
+		st, err := f.real.Stat(ctx)
+		if f.dev != 0 {
+			st.Dev = f.dev
+		}
+		return st, err
 	}
 	return p9.Stat{Qid: f.Qid(), Mode: p9.DMDIR | 0755, Name: "/", Uid: sysUser, Gid: sysUser, Muid: sysUser}, nil
 }
@@ -61,7 +69,7 @@ func (f *nsFile) Walk(ctx context.Context, name string) (server.File, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &nsFile{ns: f.ns, real: child}, nil
+		return &nsFile{ns: f.ns, real: child, dev: f.dev}, nil
 	}
 	if name == ".." {
 		return nil, errors.New("ns: '..' is not supported at a namespace bind point")
@@ -87,7 +95,7 @@ func (f *nsFile) Walk(ctx context.Context, name string) (server.File, error) {
 			lastErr = err
 			continue
 		}
-		return &nsFile{ns: f.ns, real: got}, nil
+		return &nsFile{ns: f.ns, real: got, dev: l.dev()}, nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("ns: %s: no such file", name)
@@ -108,7 +116,7 @@ func (f *nsFile) Create(ctx context.Context, name string, perm, mode p9.Mode) (s
 		if err != nil {
 			return nil, err
 		}
-		return &nsFile{ns: f.ns, real: child}, nil
+		return &nsFile{ns: f.ns, real: child, dev: f.dev}, nil
 	}
 	f.n.mu.RLock()
 	layers := f.n.layers
@@ -124,7 +132,7 @@ func (f *nsFile) Create(ctx context.Context, name string, perm, mode p9.Mode) (s
 	if err != nil {
 		return nil, err
 	}
-	return &nsFile{ns: f.ns, real: child}, nil
+	return &nsFile{ns: f.ns, real: child, dev: layers[0].dev()}, nil
 }
 
 func (f *nsFile) Remove(ctx context.Context) error {
@@ -150,7 +158,11 @@ func (f *nsFile) Write(ctx context.Context, offset int64, p []byte) (int, error)
 
 func (f *nsFile) Read(ctx context.Context, offset int64, p []byte) (int, error) {
 	if f.real != nil {
-		return f.real.Read(ctx, offset, p)
+		n, err := f.real.Read(ctx, offset, p)
+		if f.dev != 0 && n > 0 && f.real.Qid().IsDir() {
+			setDirDev(p[:n], f.dev)
+		}
+		return n, err
 	}
 	entries, err := f.listLocalDir(ctx)
 	if err != nil {

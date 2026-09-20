@@ -33,8 +33,10 @@ func TestBindsRecordsSpecAndCanonicalDisposition(t *testing.T) {
 	}
 
 	want := []Bind{
-		{Dst: "/boot", Src: "", Disp: "replace"},
-		{Dst: "/work", Src: `dir("/x")`, Disp: "replace"},
+		// Dev is the layer's bind sequence number; a path bind (/alias, /u)
+		// has none of its own and reports 0.
+		{Dst: "/boot", Src: "", Disp: "replace", Dev: 1},
+		{Dst: "/work", Src: `dir("/x")`, Disp: "replace", Dev: 2},
 		{Dst: "/alias", Src: "/work", Disp: "replace"},
 		{Dst: "/u", Src: "/boot", Disp: "replace"},
 		{Dst: "/u", Src: "/boot", Disp: "after"},
@@ -66,7 +68,7 @@ func TestBindsAfterUnbindAndReplace(t *testing.T) {
 	// Replace drops the prior layer from the report too.
 	n.BindFSSpec(&memFS{name: "c"}, "", "/b", Replace, `dir("/c")`)
 	_ = ctx
-	want := []Bind{{Dst: "/b", Src: `dir("/c")`, Disp: "replace"}}
+	want := []Bind{{Dst: "/b", Src: `dir("/c")`, Disp: "replace", Dev: 3}}
 	if got := n.Binds(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Binds() = %#v, want %#v", got, want)
 	}
@@ -147,11 +149,11 @@ func TestResolveUnionLayersTreeAndBindPoint(t *testing.T) {
 		path string
 		want Resolution
 	}{
-		{"/u/a", Resolution{Path: "/u/a", Kind: "layer", Dst: "/u", Src: `dir("/one")`, Layer: 0, Layers: 2, Inner: "/a"}},
-		{"/u/b", Resolution{Path: "/u/b", Kind: "layer", Dst: "/u", Src: `dir("/two")`, Layer: 1, Layers: 2, Inner: "/b"}},
+		{"/u/a", Resolution{Path: "/u/a", Kind: "layer", Dst: "/u", Src: `dir("/one")`, Layer: 0, Layers: 2, Dev: 1, Inner: "/a"}},
+		{"/u/b", Resolution{Path: "/u/b", Kind: "layer", Dst: "/u", Src: `dir("/two")`, Layer: 1, Layers: 2, Dev: 2, Inner: "/b"}},
 		{"/u", Resolution{Path: "/u", Kind: "bindpoint", Dst: "/u", Layer: -1, Layers: 2}},
 		{"/n", Resolution{Path: "/n", Kind: "tree", Dst: "/n", Layer: -1}},
-		{"/n/h/c", Resolution{Path: "/n/h/c", Kind: "layer", Dst: "/n/h", Layer: 0, Layers: 1, Inner: "/c"}},
+		{"/n/h/c", Resolution{Path: "/n/h/c", Kind: "layer", Dst: "/n/h", Layer: 0, Layers: 1, Dev: 3, Inner: "/c"}},
 		{"/", Resolution{Path: "/", Kind: "tree", Dst: "/", Layer: -1}},
 	}
 	for _, c := range cases {

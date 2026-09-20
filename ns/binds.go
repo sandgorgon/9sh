@@ -28,6 +28,11 @@ type Bind struct {
 	Disp string `json:"disp"`
 	// RO is whether the layer refuses writes (bound with the ro flag).
 	RO bool `json:"ro"`
+	// Dev is the id this layer stamps into Stat.Dev of every file it
+	// serves, so an entry from `ls` can be matched back to its layer. 0
+	// for a layer that binds an existing namespace path: it has no id of
+	// its own, its files keep the id of the layer that really serves them.
+	Dev uint32 `json:"dev"`
 }
 
 // Binds reports every layer currently bound anywhere in the namespace,
@@ -79,7 +84,7 @@ func (ns *Namespace) Binds() []Bind {
 			if i == 0 {
 				disp = "replace"
 			}
-			out = append(out, Bind{Dst: p.dst, Src: l.spec, Disp: disp, RO: l.ro})
+			out = append(out, Bind{Dst: p.dst, Src: l.spec, Disp: disp, RO: l.ro, Dev: l.dev()})
 		}
 	}
 	return out
@@ -275,6 +280,10 @@ type Resolution struct {
 	Src    string
 	Layer  int
 	Layers int
+	// Dev is the Stat.Dev the serving layer's files carry (see Bind.Dev);
+	// for a layer that binds an existing path, the id of the layer that
+	// really serves the file. 0 unless Kind is "layer".
+	Dev uint32
 	// Inner is the path within the serving layer ("/" is its root); ""
 	// unless Kind is "layer".
 	Inner string
@@ -331,6 +340,12 @@ func (ns *Namespace) Resolve(ctx context.Context, path string) (Resolution, erro
 				}
 			}
 			res.Kind, res.Dst, res.Src, res.RO = "layer", dst, l.spec, l.ro
+			res.Dev = l.dev()
+			if res.Dev == 0 {
+				if st, err := f.Stat(ctx); err == nil {
+					res.Dev = st.Dev
+				}
+			}
 			res.Layer, res.Layers = li, len(layers)
 			res.Inner = "/" + strings.Join(parts[i:], "/")
 			return res, nil

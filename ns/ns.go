@@ -87,9 +87,10 @@ func (l *layer) root(ctx context.Context) (server.File, error) {
 	return f, nil
 }
 
-// list reads this layer's root directory, wrapping any failure with the
-// layer's bind spec (or a generic label for a Go-bootstrap bind, which has
-// none) so an error from a union says which member it came from.
+// list reads this layer's root directory, stamping each entry with the
+// layer's dev (see dev.go) and wrapping any failure with the layer's bind
+// spec (or a generic label for a Go-bootstrap bind, which has none) so an
+// error from a union says which member it came from.
 func (l *layer) list(ctx context.Context) ([]p9.Stat, error) {
 	label := l.spec
 	if label == "" {
@@ -102,6 +103,11 @@ func (l *layer) list(ctx context.Context) ([]p9.Stat, error) {
 	entries, err := ReadDirEntries(ctx, root)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", label, err)
+	}
+	if dev := l.dev(); dev != 0 {
+		for i := range entries {
+			entries[i].Dev = dev
+		}
 	}
 	return entries, nil
 }

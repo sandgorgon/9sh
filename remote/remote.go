@@ -39,6 +39,8 @@ import (
 	auth "github.com/sandgorgon/9auth"
 	"github.com/sandgorgon/9p/client"
 	"github.com/sandgorgon/9p/server"
+
+	"github.com/sandgorgon/9sh/ns"
 )
 
 type peerFPKey struct{}
@@ -308,7 +310,7 @@ func ListenUnix(ctx context.Context, path string, fs server.FileSystem) (net.Lis
 		return nil, fmt.Errorf("remote: chmod %s: %w", path, err)
 	}
 
-	srv := &server.Server{FS: fs}
+	srv := &server.Server{FS: ns.Unstamped(fs)}
 	go func() {
 		<-ctx.Done()
 		l.Close()
@@ -439,7 +441,7 @@ func listen(ctx context.Context, id *auth.Identity, authorized auth.AuthorizedPe
 	}
 
 	srv := &server.Server{
-		FS: &authFS{fs: fs, authorized: authorized, rootPerms: rootPerms},
+		FS: &authFS{fs: ns.Unstamped(fs), authorized: authorized, rootPerms: rootPerms},
 		ConnContext: func(connCtx context.Context, c net.Conn) context.Context {
 			tc, ok := c.(*tls.Conn)
 			if !ok {

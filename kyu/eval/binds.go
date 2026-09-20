@@ -12,14 +12,15 @@ import (
 )
 
 // biBinds implements `binds()`: every layer bound in the namespace, as a
-// Table of Records (dst, src, disp) — the structured view of /ns/binds
+// Table of Records (dst, src, disp, ro, dev) — the structured view of /ns/binds
 // the way ps() is of /jobs. Reads /ns/binds.json through the namespace,
 // never the Namespace value directly, so it works on anything that
 // serves a /ns the same way. src is Null for a bootstrap bind with no
 // kyu spelling (/jobs, /env, ...).
 //
 // disp is the canonical replay disposition, not the one a layer was
-// originally bound with — see ns.Bind.
+// originally bound with — see ns.Bind. dev is the id ls/stat stamp on the
+// layer's files, 0 for a layer that binds an existing path (see ns/dev.go).
 //
 // With a Path argument, only layers bound at that path or anywhere
 // beneath it are returned (`binds(/n)` is every remote mount; `/nfs`
@@ -74,6 +75,7 @@ func biBinds(env *Env, args []value.Value) (value.Value, error) {
 		}
 		r.Set("disp", value.String(x.Disp))
 		r.Set("ro", value.Bool(x.RO))
+		r.Set("dev", value.Int(x.Dev))
 		out = append(out, r)
 	}
 	return value.NewList(out), nil

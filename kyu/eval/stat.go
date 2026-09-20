@@ -19,6 +19,10 @@ import (
 // describes (st.Name alone is only the base name — ns.ReadDirEntries
 // never saw the directory it came from).
 //
+// dev is Plan 9's Dir.dev: the id of the bound layer serving the file (0
+// for a purely synthetic directory), the same number binds() and
+// which_bind() report as their own dev — see ns/dev.go.
+//
 // mtime/atime are Unix epoch seconds (p9.Stat's own Mtime/Atime are
 // already exactly that, as a uint32) stored as a plain Int, not a
 // dedicated kyu time value — kyu doesn't have one yet, only Duration
@@ -35,6 +39,7 @@ func statRecord(fullPath string, st p9.Stat) *value.Record {
 	r.Set("atime", value.Int(st.Atime))
 	r.Set("uid", value.String(st.Uid))
 	r.Set("gid", value.String(st.Gid))
+	r.Set("dev", value.Int(st.Dev))
 	return r
 }
 

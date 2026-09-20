@@ -855,3 +855,95 @@ func TestBoundRemoteDirectoryListsThroughNamespace(t *testing.T) {
 		}
 	}
 }
+
+// A namespace's layer ids are its own: a peer dialing a served namespace
+// must see dev 0 on the wire (as a 9P server should), and stamp its own id
+// when it binds the connection -- Plan 9's mount driver does the same.
+func TestServedNamespaceSendsNoDevAndPeerStampsItsOwn(t *testing.T) {
+	work := t.TempDir()
+	os.MkdirAll(filepath.Join(work, "sub"), 0755)
+	os.WriteFile(filepath.Join(work, "sub", "f.txt"), []byte("x"), 0644)
+	fs, err := dirfs.New(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Burn a few layer ids so the server's and the peer's can't coincide.
+	server := ns.New()
+	for _, dst := range []string{"/pad1", "/pad2", "/pad3"} {
+		server.BindFS(memfs.New(), "", dst, ns.Replace)
+	}
+	server.BindFS(fs, "", "/work", ns.Replace)
+	serverDev := server.Binds()[3].Dev
+	if serverDev == 0 {
+		t.Fatal("precondition: served layer should have a dev")
+	}
+
+	sockPath := filepath.Join(t.TempDir(), "dev.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l, err := ListenUnix(ctx, sockPath, server)
+	if err != nil {
+		t.Fatalf("ListenUnix: %v", err)
+	}
+	defer l.Close()
+	conn, err := Dial(ctx, sockPath)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Straight off the wire: no dev, in a listing or a Stat.
+	remoteRoot, err := conn.FS().Attach(ctx, "9sh", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireDir, err := remoteRoot.Walk(ctx, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ns.ReadDirEntries(ctx, wireDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("listing /work over the wire: %v, %d entries", err, len(entries))
+	}
+	for _, e := range entries {
+		if e.Dev != 0 {
+			t.Errorf("wire entry %s carries dev %d, want 0", e.Name, e.Dev)
+		}
+	}
+	sub, err := wireDir.Walk(ctx, "sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := sub.Stat(ctx); err != nil || st.Dev != 0 {
+		t.Errorf("wire Stat(/work/sub) dev = %d (err %v), want 0", st.Dev, err)
+	}
+
+	// Bound on the peer, the same files carry the peer's own layer id.
+	peer := ns.New()
+	peer.BindFS(memfs.New(), "", "/pad", ns.Replace)
+	if err := peer.BindFS(conn.FS(), "", "/n/srv", ns.Replace); err != nil {
+		t.Fatal(err)
+	}
+	peerDev := peer.Binds()[1].Dev
+	root, err := peer.Attach(ctx, "9sh", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, parts := range [][]string{{"n", "srv", "work"}, {"n", "srv", "work", "sub"}} {
+		dir := root
+		for _, p := range parts {
+			if dir, err = dir.Walk(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := ns.ReadDirEntries(ctx, dir)
+		if err != nil || len(got) == 0 {
+			t.Fatalf("listing %v: %v, %d entries", parts, err, len(got))
+		}
+		for _, e := range got {
+			if e.Dev != peerDev {
+				t.Errorf("%v/%s: dev = %d, want the peer's own %d", parts, e.Name, e.Dev, peerDev)
+			}
+		}
+	}
+}

@@ -8,17 +8,18 @@ import (
 )
 
 // biWhichBind implements `which_bind(path)`: what serves this path — the
-// bind point and union layer a Walk to it goes through. The answer
-// `ls` can't give inside a union directory, where a listing merges
-// layers and hides which one a name came from.
+// bind point and union layer a Walk to it goes through. A union
+// directory's listing merges its layers and hides which one a name came
+// from; ls's dev field narrows it per entry and this names the layer.
 //
 // Returns a Record: path; kind ("layer", "bindpoint", or "tree" — see
 // ns.Resolution); dst (the bind point); src (the serving layer's source
 // expression, null for a bootstrap bind or a non-layer path); layer
 // (0-based union position, null when none); layers (how many layers dst
-// has); ro (whether the serving layer refuses writes — for a bindpoint,
-// its first layer, where a create would go); inner (the path
-// within the layer, null unless kind is "layer").
+// has); dev (the id ls/stat stamp on that layer's files — see ns/dev.go;
+// 0 unless kind is "layer"); ro (whether the serving layer refuses writes
+// — for a bindpoint, its first layer, where a create would go); inner (the
+// path within the layer, null unless kind is "layer").
 // A path that doesn't resolve is an ordinary in-stream ErrorVal.
 //
 // Unlike ps()/binds() this asks the Namespace value directly rather than
@@ -56,6 +57,7 @@ func biWhichBind(env *Env, args []value.Value) (value.Value, error) {
 		r.Set("layer", value.Null{})
 	}
 	r.Set("layers", value.Int(res.Layers))
+	r.Set("dev", value.Int(res.Dev))
 	r.Set("ro", value.Bool(res.RO))
 	if res.Kind == "layer" {
 		r.Set("inner", value.Path(res.Inner))

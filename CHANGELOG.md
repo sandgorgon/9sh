@@ -8,6 +8,26 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-20
+
+### Added
+
+- `dev` on every file reached through a bound filesystem: the id of the
+  layer serving it, as Plan 9's `Dir.dev` names the mounted server. It
+  is a field of `ls`/`stat` records, `which_bind()` and `binds()` (and
+  `/ns/binds.json`), so an entry in a merged union listing can be tied
+  back to its layer — `binds() | where { |b| b.dev == e.dev }` — without
+  a `which_bind` per entry. It is stamped in `Stat.Dev` inside the
+  namespace, on a stat and on directory reads at any depth (patched in
+  place in the raw entries, so offsets and 9P2000.u entries are
+  unaffected). Following Plan 9: binding an existing path (`bind /src,
+  /alias`) doesn't change which server a file lives on, so the alias
+  keeps the source layer's id and its own `binds()` row reports 0; the
+  ids are this namespace's own, so `-listen`/`-listen-unix` send `dev`
+  as zero (`ns.Unstamped`) and a dialing peer stamps its own; synthetic
+  directories have `dev` 0; ids are never reused after `unbind`.
+  `examples/09` demonstrates it.
+
 ### Changed
 
 - Listing a bind point whose every layer fails now returns an error

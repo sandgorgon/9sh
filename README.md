@@ -186,7 +186,7 @@ introspection and safety, regex and collections).
 - `stat(path)`/`ls(pattern)` are `glob`'s metadata-bearing siblings:
   `stat` returns one `Path`'s real properties as a `Record` (`path`,
   `name`, `size`, `is_dir`, `mode` as an `"rwxr-xr-x"` string, `mtime`/
-  `atime` as Unix-epoch `Int`, `uid`, `gid`); `ls(pattern)` is `glob`'s
+  `atime` as Unix-epoch `Int`, `uid`, `gid`, `dev`); `ls(pattern)` is `glob`'s
   own directory-and-pattern matching, but returns a `Table` (`List` of
   those `Record`s) instead of bare `Path`s — the real `ls -la`
   experience, native to the namespace. `glob` itself is left alone for
@@ -254,7 +254,7 @@ introspection and safety, regex and collections).
   no-checkout-needed view of `/jobs`' own `status` files, e.g.
   `ps() | where { |j| j.state == "running" }`.
 - `binds()` returns every layer bound in the namespace as a `Table` of
-  `Record`s (`dst`, `src`, `disp`), in bind order; `binds(path)` keeps
+  `Record`s (`dst`, `src`, `disp`, `ro`, `dev`), in bind order; `binds(path)` keeps
   only layers bound at `path` or beneath it, by whole path segments
   (`binds(/n)` is every remote mount, and doesn't match `/nfs`) — the structured view
   of `/ns/binds`, the way `ps()` is of `/jobs`. `cat("/ns/binds")` is
@@ -302,12 +302,26 @@ introspection and safety, regex and collections).
   like `/n` when only `/n/host` is bound), `dst` (the bind point),
   `src` (the serving layer's source expression), `layer` (0-based union
   position), `layers` (how many `dst` has), and `inner` (the path within
-  the layer). It's what `ls` can't tell you inside a union, where a
-  listing merges layers and hides which one a name came from. It
+  the layer), and `dev` (see below). A union listing merges layers, so
+  `ls` alone doesn't name the layer a name came from — `ls`'s `dev` field
+  narrows it, and `which_bind` says exactly. It
   reports exactly what a real walk would do — first layer whose walk of
   the next name succeeds serves the rest, with no fallback to a later
   layer — and, unlike `binds()`, answers only for the local namespace.
   An unresolvable path is an `ErrorVal`.
+- `dev` is which server a file lives on, the way Plan 9's `Dir.dev` is
+  (`ls -l` prints it there too): every file reached through a bound
+  filesystem carries the id of the layer serving it, in `ls`/`stat` and
+  in `which_bind` and `binds()` alike, so a name in a merged union
+  listing can be matched to its layer with
+  `binds() | where { |b| b.dev == e.dev }` — no per-entry `which_bind`
+  needed. Two Plan 9 rules hold: `bind /src, /alias` doesn't change where
+  a file lives, so `/alias`'s files keep `/src`'s id (and its own `binds()`
+  row reports `dev` 0); and the ids are this namespace's own, so 9sh
+  sends `dev` as zero to anything it serves (`-listen`, `-listen-unix`)
+  and a peer that binds it stamps its own. Purely synthetic directories,
+  like `/n` when only `/n/host` is bound, have `dev` 0. An id is never
+  reused after `unbind`.
 - `source(path)` runs a kyu file from the namespace against the session,
   exactly as if its text were typed at the prompt (defines and binds
   land in the session, not a local scope) — `source(/ns/binds)`
@@ -684,7 +698,7 @@ A Unix socket path is capped at 108 bytes by the OS
 
 ## Status
 
-Pre-1.0 (`v0.5.0`). The full v1 build-order plan (namespace
+Pre-1.0 (`v0.5.1`). The full v1 build-order plan (namespace
 core, jobs, kyu, an interactive TUI, session history, remote namespace/
 auth, dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real

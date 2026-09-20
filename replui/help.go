@@ -49,7 +49,7 @@ var keybindingHelp = []string{
 	"Ctrl+C                   copy the whole transcript",
 	"Alt+C                    copy only what's currently visible",
 	"paste                    inserts at the cursor",
-	"F1                       toggle this help screen",
+	"F1 (or ? at an empty prompt)  toggle this help screen",
 	"Ctrl+D (at an empty prompt)  quit 9sh",
 	"",
 	"Running a fullscreen program (vim, top, ssh, ... -- see",

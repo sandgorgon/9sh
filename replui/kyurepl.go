@@ -417,6 +417,16 @@ func (w *kyuReplWidget) HandleEvent(e input.Event) tui.Cmd {
 // other key routes to handleSearchKey instead of the normal editing
 // switch below; bash's own reverse-i-search doesn't support arbitrary
 // mid-search editing either, so this doesn't try to.
+// isHelpQuestionMark reports whether ke is a bare `?` typed at a truly
+// empty prompt — the only place it's safe to claim: no kyu statement can
+// start with `?` (it's the postfix error-check operator, `f()?`), and
+// multi-line continuation lives inside w.input, so an empty input is
+// never mid-statement. Anywhere else `?` is ordinary text.
+func (w *kyuReplWidget) isHelpQuestionMark(ke input.KeyEvent) bool {
+	return ke.Rune == '?' && ke.Key == input.KeyNone &&
+		ke.Mod&(input.ModCtrl|input.ModAlt) == 0 && w.input == ""
+}
+
 func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	ctrl := ke.Mod&input.ModCtrl != 0
 	alt := ke.Mod&input.ModAlt != 0
@@ -438,11 +448,16 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	}
 
 	switch {
-	case ke.Key == input.KeyF1:
+	case ke.Key == input.KeyF1, w.isHelpQuestionMark(ke):
 		// The multiplexer this package replaced toggled help from a
 		// control-strip button; there's no control strip here, so this
-		// is its one keybinding instead — F1 is otherwise unused now
-		// that F1-F9's pane-jump meaning went with the split tree.
+		// is its keybinding instead — F1 is otherwise unused now that
+		// F1-F9's pane-jump meaning went with the split tree.
+		//
+		// `?` at an empty prompt is the second way in, for terminals
+		// that keep F1 for themselves (xfce4-terminal's Help menu, for
+		// one, never forwards it). It mirrors the help screen's own
+		// close keys, which already include `?`.
 		return func() tui.Msg { return toggleHelpMsg{} }
 	case ctrl && ke.Rune == 'd' && w.input == "":
 		// bash/zsh's own "Ctrl-D at an empty prompt exits the shell" —

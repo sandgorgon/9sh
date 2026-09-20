@@ -108,6 +108,10 @@ var builtinDocs = []BuiltinDoc{
 		"Every job at /jobs as a Table of Records (id, kind, state, argv, pid, exit_code, signal, error, detached, cwd, started_at, finished_at) — the structured, no-checkout-needed view of /jobs' own status files."},
 	{"bind_log", "bind_log()",
 		"Every successful bind and unbind so far, oldest first, as a Table of Records (seq, time, op, dst, src, disp) — what was actually typed, including the before/after that binds() can't recover and every unbind. The text form, /ns/log, is replayable kyu. Capped at the newest 1000 entries."},
+	{"write", "write(path, str)",
+		"Replaces a namespace file's content with a String, creating it (in an existing directory) if needed — cat's write-side counterpart. Any failure is an ErrorVal."},
+	{"append", "append(path, str)",
+		"Adds a String to the end of a namespace file, creating it if needed. Needs a file server that reports a real length (every real directory does)."},
 	{"which_bind", "which_bind(path)",
 		"Which bind point and union layer serves a path, as a Record (path, kind, dst, src, layer, layers, inner) — what ls can't say inside a union directory. kind is layer, bindpoint or tree; an unresolvable path is an ErrorVal. Local namespace only."},
 	{"source", "source(path)",
@@ -189,7 +193,7 @@ var builtinDocs = []BuiltinDoc{
 // without that diff.
 var namespaceAppNames = map[string]bool{
 	"bind": true, "unbind": true, "glob": true, "ls": true, "stat": true,
-	"checkout": true, "find": true, "cat": true, "cp": true, "rm": true, "mv": true,
+	"checkout": true, "find": true, "cat": true, "write": true, "append": true, "cp": true, "rm": true, "mv": true,
 	"mkdir": true, "rmdir": true, "source_config": true, "reset_config": true,
 	"history": true, "history_delete": true, "history_clear": true,
 	"dial": true, "dir": true, "getenv": true, "setenv": true, "unsetenv": true,

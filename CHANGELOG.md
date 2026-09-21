@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-20
+
 ### Added
 
 - `@` takes its mount point as a `Path`-typed operand, like `bind`'s

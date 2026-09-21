@@ -8,6 +8,12 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `github.com/sandgorgon/tui` from v0.9.0 to v0.10.0: a
+  `RawKeyClaimer`'s release key is now also reported to `Update` as
+  `tui.ReleaseMsg`. No API change 9sh uses; no behavior change here.
+
 ### Removed
 
 - The `F1` help binding in the interactive TUI. `?` at an empty prompt

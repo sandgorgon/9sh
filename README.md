@@ -550,8 +550,8 @@ one bootstrap, in this order, before any of your own code runs:
    `_9SH_UNIX_SOCK`. It's a snapshot, not a live view: `setenv()`
    writes into this snapshot, not into 9sh's real process environment.
 5. `/config` is bound — `~/.config/9/config/config.ky` is seeded with
-   defaults (`fullscreen_programs`, `native_programs`) the first time
-   only; an existing file is never overwritten.
+   defaults (`fullscreen_programs`, `native_programs`, `history_mode`)
+   the first time only; an existing file is never overwritten.
 6. `/ns` is bound — a read-only view of this namespace's own binds
    (`/ns/binds`, `/ns/binds.json`, `/ns/log`, `/ns/log.json`); see
    `binds()` and `bind_log()`.
@@ -583,7 +583,7 @@ under `~/.config/9`, not one: `config/config.ky` (settings, auto-seeded
 once), `ns/common.ky` + `ns/hosts/<hostname>.ky` (namespace recipes,
 never auto-created — a fresh install has none of these), and
 `session/` (auto-managed history, not meant to be hand-edited). None of
-steps 3 through 9 are fatal to starting the shell on their own: a
+steps 3 through 10 are fatal to starting the shell on their own: a
 missing `9vcs`, no home directory, or a syntax error in `config.ky`/
 `common.ky`/`hosts/<hostname>.ky` each print one warning to stderr and
 are otherwise skipped — a broken `common.ky` doesn't even block a

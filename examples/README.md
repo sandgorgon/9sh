@@ -16,7 +16,7 @@ the real binary (not just written prose). Run any of them directly:
 | `05_control_flow_and_closures.ky` | `while`/`break`/`continue`, self-recursive closures, default parameters, `error()`/`?`, errors-as-values in a pipeline |
 | `06_env_and_kyu_vars.ky` | `getenv`/`setenv`/`unsetenv` (real `/env` files), `vars()`/`unset()` (plain kyu variables) |
 | `07_remote_and_local_namespaces.ky` | `dir()`, `join_path`/`path`/`Path + String`, `dial()`'s graceful-failure behavior — plus a commented sketch of `dial`+`bind`+`@host{}`/`@(expr){}` (including running a command on a list of hosts) against a real peer |
-| `08_script_args_and_file_ops.ky` | a script's own `args`, `cp`/`mv`/`rm`/`find` |
+| `08_script_args_and_file_ops.ky` | a script's own `args`, `cp`/`mv`/`rm`/`find`, and `cp`/`mv` *into* an existing directory |
 | `09_namespace_introspection_and_safety.ky` | `write`/`append`, read-only binds (`bind ..., ro`), `binds()`, `which_bind()`, `dev` on `ls`/`stat`, `bind_log()`, `in_ns { ... }`, `source()` |
 | `10_regex_and_collections.ky` | `match`/`capture`/`replace_re`, `range`, `zip`, `keys`/`values` |
 

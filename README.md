@@ -210,16 +210,23 @@ introspection and safety, regex and collections).
   bound in can be either side, with no separate transfer protocol,
   since they're already the same namespace once bound. For a regular
   file, `dst` may be an existing file (overwritten) or a new one at an
-  already-existing directory level. For a directory `src`, `dst` is
-  created fresh as a full recursive copy of the tree — `dst` must not
-  already exist (no merge-into-an-existing-directory semantics yet).
+  already-existing directory level — and an existing *directory* `dst`
+  means "into it", as with Unix `cp`: `cp(/f, /d)` writes `/d/f`. A
+  directory `src` is copied as a full recursive tree to a fresh
+  destination (`cp(/a, /d)` with `/d` a directory copies to `/d/a`); a
+  destination that already exists under that name is refused, since
+  there are no merge semantics yet, and a directory can't be copied into
+  itself.
   `rm(path)` removes one namespace file, anywhere `cp`'s `dst` can
   reach — use `rmdir` for a directory. `mv(src, dst)` moves/renames — a
   real in-place rename (no content copied) when `src`/`dst` share a
   parent directory (works on a directory `src` too, since it's a
   metadata-only rename), otherwise a copy-then-remove (a recursive tree
-  copy for a directory `src`, same "`dst` must not already exist"
-  restriction as `cp`'s directory mode). `mkdir(path)` creates `path`,
+  copy for a directory `src`). An existing directory `dst` means "into
+  it" here too (`mv(/a/f, /d)` moves it to `/d/f`), with the same
+  fresh-name restriction as `cp`'s directory mode; moving a file onto
+  itself (`mv(/d/f, /d)`) or a directory into itself is refused rather
+  than deleting anything. `mkdir(path)` creates `path`,
   creating any missing intermediate directories along the way (`mkdir
   -p` semantics) — a no-op if `path` already exists as a directory.
   `rmdir(path)` removes one empty namespace directory (errors, from the

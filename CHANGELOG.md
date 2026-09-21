@@ -27,6 +27,13 @@ once a first tagged release is cut.
   `Path`, and `"x" + /n` is an error that says so. `Path + Path` keeps
   meaning namespace union.
 
+- `cp` and `mv` treat an existing directory destination as "into it", as
+  their Unix namesakes do: `cp(/f, /d)` writes `/d/f`, `mv(/a/f, /d)`
+  moves it there, and `cp(/a, /d)` / `mv(/a, /d)` on a directory land at
+  `/d/a`. This replaces the "copying/moving into a directory not yet
+  supported" errors. Still no merge: a destination that already has an
+  entry of that name is refused with nothing touched.
+
 ### Changed
 
 - The error for an `@` whose mount isn't bound now names the mount and
@@ -38,6 +45,15 @@ once a first tagged release is cut.
   `tui.ReleaseMsg`, and v0.11.0 adds the optional `FocusRequester`
   interface for moving focus synchronously. No API change 9sh uses; no
   behavior change here.
+
+### Fixed
+
+- `cp` and `mv` refuse to copy or move a directory into itself
+  (`cp(/a, /a/new)` used to recurse until the path grew too long, taking
+  tens of seconds), and — now that a directory destination is resolved —
+  refuse `mv(/d/f, /d)`, which would otherwise copy the file onto itself
+  and then delete the only copy. The check is on namespace paths, so a
+  bind that aliases the source elsewhere isn't seen through.
 
 ### Removed
 

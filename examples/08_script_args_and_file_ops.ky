@@ -26,17 +26,34 @@ new_name_size := stat(/scratch/9sh-example-license-renamed.txt).size
 rm(/scratch/9sh-example-license-renamed.txt)
 new_name_gone_too := !stat(/scratch/9sh-example-license-renamed.txt)
 
+# An existing directory as the destination means "into it", as with Unix
+# cp/mv: cp(file, dir) writes dir/<file's name>, and mv(file, dir) moves
+# it there. (A destination that isn't an existing directory is the new
+# name, as above.)
+mkdir(/scratch/9sh-example-inbox)
+mkdir(/scratch/9sh-example-archive)
+cp(/work/LICENSE, /scratch/9sh-example-inbox)
+copied_into_dir_size := stat(/scratch/9sh-example-inbox/LICENSE).size
+mv(/scratch/9sh-example-inbox/LICENSE, /scratch/9sh-example-archive)
+left_the_inbox := !stat(/scratch/9sh-example-inbox/LICENSE)
+archived_size := stat(/scratch/9sh-example-archive/LICENSE).size
+rmdir(/scratch/9sh-example-inbox, true)
+rmdir(/scratch/9sh-example-archive, true)
+
 # find(dir, pattern) is glob's recursive sibling -- every subdirectory
 # beneath dir, pattern matched against each entry's base name at
 # every depth.
 docs_go_files := find(/work/kyu, "docs.go") | count
 
 format(
-    "{}; copied LICENSE ({} bytes), renamed (old name gone: {}, new name still {} bytes), then removed it (gone too: {}); find(/work/kyu, \"docs.go\") matched {} file(s)",
+    "{}; copied LICENSE ({} bytes), renamed (old name gone: {}, new name still {} bytes), then removed it (gone too: {}); cp into a directory made {} bytes, mv into another left the first (gone: {}) and arrived as {} bytes; find(/work/kyu, \"docs.go\") matched {} file(s)",
     arg_summary,
     copied_size,
     old_name_gone,
     new_name_size,
     new_name_gone_too,
+    copied_into_dir_size,
+    left_the_inbox,
+    archived_size,
     docs_go_files,
 )

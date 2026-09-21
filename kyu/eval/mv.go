@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	p9 "github.com/sandgorgon/9p"
 
@@ -38,6 +39,13 @@ func dontTouchStat() p9.Stat {
 // copyDirTree (tree.go) — the same recursive-copy primitive biCp's own
 // directory mode uses — finished by removeTree on src instead of a
 // plain Remove.
+//
+// If dst is an existing directory, the move goes into it, as with Unix
+// mv: mv(/a/f, /d) moves it to /d/f (see resolveDstIntoDir), after which
+// the above applies to the resolved destination. Moving a file onto
+// itself (mv(/d/f, /d)) or a directory into itself is refused
+// (selfTransferMsg) rather than treated as a no-op — copy-then-remove of
+// a file onto itself would delete the only copy.
 //
 // Any failure is an ordinary ErrorVal, not a hard error, matching
 // cp/rm/stat/glob's convention.
@@ -78,6 +86,14 @@ func biMv(env *Env, args []value.Value) (value.Value, error) {
 	srcSt, err := srcFile.Stat(ctx)
 	if err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: %v", src, err)}, nil
+	}
+
+	// An existing directory as dst means "into it", as with Unix mv: the
+	// real destination is dst/<base name of src>. Errors below name it.
+	dstParts, intoDir := resolveDstIntoDir(ctx, root, srcParts, dstParts)
+	dst = value.Path("/" + strings.Join(dstParts, "/"))
+	if msg := selfTransferMsg(srcSt.Qid.IsDir(), srcParts, dstParts, intoDir); msg != "" {
+		return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: %s", dst, msg)}, nil
 	}
 
 	if samePath(srcParts[:len(srcParts)-1], dstParts[:len(dstParts)-1]) {
@@ -134,7 +150,7 @@ func biMv(env *Env, args []value.Value) (value.Value, error) {
 		return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: %v", dst, err)}, nil
 	}
 	if dstSt, err := dstFile.Stat(ctx); err == nil && dstSt.Qid.IsDir() {
-		return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: is a directory (moving into a directory not yet supported -- name the destination file explicitly)", dst)}, nil
+		return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: is a directory (can't overwrite it with a file -- name a different destination)", dst)}, nil
 	}
 	if err := dstFile.Open(ctx, p9.OWRITE|p9.OTRUNC); err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("mv: %s: %v", dst, err)}, nil

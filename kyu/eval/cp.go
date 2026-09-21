@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	p9 "github.com/sandgorgon/9p"
 
@@ -24,19 +25,23 @@ import (
 // reach a namespace-only endpoint (/jobs, /env) at all without staging
 // through checkout() first.
 //
-// src may also be a directory: dst is then created fresh (via
-// copyDirTree, tree.go) as a full recursive copy of src's tree, same
-// shared primitive mv's cross-directory directory move uses. dst must
-// not already exist in that case — no merge-into-an-existing-directory
-// semantics yet, name a fresh destination, mirroring mkdir's own
-// "already exists and isn't a directory" refusal.
+// If dst is an existing directory, the copy goes into it, as with Unix
+// cp: cp(/f, /d) writes /d/f (see resolveDstIntoDir). Everything below
+// then applies to that resolved destination.
 //
-// For a regular-file src, dst may not itself be an existing directory
-// (name the destination file explicitly) — unchanged from before
-// directory src support existed. Any failure is an ordinary ErrorVal,
-// not a hard error, matching stat/glob/ls's own convention for "the
-// path you gave doesn't fit what this builtin does" rather than a
-// malformed-call error.
+// src may also be a directory: the destination is then created fresh (via
+// copyDirTree, tree.go) as a full recursive copy of src's tree, same
+// shared primitive mv's cross-directory directory move uses. It must
+// not already exist in that case — no merge-into-an-existing-directory
+// semantics yet, so cp(/a, /d) with /d/a already present is refused,
+// mirroring mkdir's own "already exists and isn't a directory" refusal.
+// A directory can't be copied into itself (selfTransferMsg).
+//
+// For a regular-file src, dst may be an existing file (overwritten) or a
+// new name; a resolved destination that is itself a directory is refused.
+// Any failure is an ordinary ErrorVal, not a hard error, matching
+// stat/glob/ls's own convention for "the path you gave doesn't fit what
+// this builtin does" rather than a malformed-call error.
 func biCp(env *Env, args []value.Value) (value.Value, error) {
 	if len(args) != 2 {
 		return nil, fmt.Errorf("cp: expected 2 arguments (source path, destination path), got %d", len(args))
@@ -59,7 +64,8 @@ func biCp(env *Env, args []value.Value) (value.Value, error) {
 		return nil, err
 	}
 
-	srcFile, err := walkAll(ctx, root, splitPath(string(src)))
+	srcParts := splitPath(string(src))
+	srcFile, err := walkAll(ctx, root, srcParts)
 	if err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", src, err)}, nil
 	}
@@ -70,6 +76,13 @@ func biCp(env *Env, args []value.Value) (value.Value, error) {
 	dstParts := splitPath(string(dst))
 	if len(dstParts) == 0 {
 		return value.ErrorVal{Msg: "cp: destination cannot be the namespace root"}, nil
+	}
+	// An existing directory as dst means "into it", as with Unix cp: the
+	// real destination is dst/<base name of src>. Errors below name it.
+	dstParts, intoDir := resolveDstIntoDir(ctx, root, srcParts, dstParts)
+	dst = value.Path("/" + strings.Join(dstParts, "/"))
+	if msg := selfTransferMsg(srcSt.Qid.IsDir(), srcParts, dstParts, intoDir); msg != "" {
+		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %s", dst, msg)}, nil
 	}
 
 	if srcSt.Qid.IsDir() {
@@ -99,7 +112,7 @@ func biCp(env *Env, args []value.Value) (value.Value, error) {
 		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", dst, err)}, nil
 	}
 	if dstSt, err := dstFile.Stat(ctx); err == nil && dstSt.Qid.IsDir() {
-		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: is a directory (copying into a directory not yet supported -- name the destination file explicitly)", dst)}, nil
+		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: is a directory (can't overwrite it with a file -- name a different destination)", dst)}, nil
 	}
 	if err := dstFile.Open(ctx, p9.OWRITE|p9.OTRUNC); err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("cp: %s: %v", dst, err)}, nil

@@ -8,7 +8,7 @@ import (
 
 // BuiltinDoc is one language-reference entry — the single source of
 // truth for both help(name) (biHelp, this file) and package replui's
-// expanded F1 help screen's language-reference section (see
+// expanded help screen's language-reference section (see
 // replui/help.go), so the two can never drift apart the way two
 // hand-maintained copies of the same reference would.
 type BuiltinDoc struct {
@@ -246,7 +246,7 @@ func docRecord(d BuiltinDoc) *value.Record {
 // biHelp implements `help()`/`help(name)`: with no arguments, every
 // documented name as a Table (Record: name, signature, description);
 // with one String name, that single entry's Record. The same table
-// replui/help.go's expanded F1 screen language-reference section
+// replui/help.go's expanded help screen language-reference section
 // renders (see Docs), so the two can't drift apart.
 //
 // An unknown name is an ordinary in-stream ErrorVal, not a hard Go

@@ -231,7 +231,7 @@ introspection and safety, regex and collections).
 - `help(name)` — e.g. `help("bind")` — returns that builtin/keyword's
   signature and description as a `Record`; `help()` with no arguments
   returns every documented entry as a `Table`. The interactive TUI's
-  `F1` screen renders the exact same table as its language-reference
+  help screen renders the exact same table as its language-reference
   section (press `2` there to jump straight to it), so the two can't
   drift apart.
 - Closures take default parameters: `{ |a, b = 10| a + b }` — a later
@@ -574,7 +574,7 @@ design: for a real multi-pane terminal (9sh alongside a shell, or
 several 9sh sessions side by side), see
 [`9mux`](https://github.com/sandgorgon/9mux) instead, a separate
 project this binary doesn't host itself. The same keybinding reference
-below is built into 9sh: press `F1` (or `?` at an empty prompt) any time.
+below is built into 9sh: press `?` at an empty prompt any time.
 
 | Key | Does |
 |---|---|
@@ -592,19 +592,17 @@ below is built into 9sh: press `F1` (or `?` at an empty prompt) any time.
 | Ctrl+C | Copy the whole transcript |
 | Alt+C | Copy only what's currently visible on screen |
 | paste | Inserts at the cursor |
-| `F1`, or `?` at an empty prompt | Toggle the built-in help screen (`?`, `q` or `Esc` also close it) |
+| `?` at an empty prompt | Toggle the built-in help screen (`?`, `q` or `Esc` also close it) |
 | Ctrl+D (at an empty prompt) | Quit 9sh — bash/zsh's own "EOF at an empty prompt exits" convention |
 
-Some terminals keep `F1` for themselves and never forward it to the
-program inside — xfce4-terminal (the XFCE default) binds it to its own
-Help menu, and other emulators can too. That's why `?` at an empty
-prompt also opens help: it's an ordinary character, so no terminal
+Help is bound to `?` rather than a function key on purpose: terminal
+emulators keep function keys for themselves (xfce4-terminal binds `F1`
+to its own Help menu and never forwards it), so no function key is
+bound anywhere in 9sh. `?` is an ordinary character, so no terminal
 intercepts it, and it can't clash with anything you're typing — no kyu
 statement starts with `?` (it's the postfix error-check operator, as in
 `f()?`), and anywhere else on the line, or inside an open multi-line
-block, `?` just types a `?`. If you'd rather have `F1` itself, look for
-a Help/Contents shortcut in your terminal's own keyboard-shortcut
-preferences and clear it.
+block, `?` just types a `?`.
 
 Ctrl+C is "copy all," not the Ctrl+Shift+C you might expect from a
 desktop terminal: most terminal emulators (this one's own standing

@@ -14,7 +14,7 @@ import (
 // buildHelpText) from three sections a user actually needs: this
 // screen's own keybindings, the kyu language reference, and the
 // bash/zsh mental-model section. Multi-pane content (control-strip
-// buttons, split/zoom/minimize, F1-F9 pane jump, the namespace-browser/
+// buttons, split/zoom/minimize, pane jump, the namespace-browser/
 // job-viewer/session-viewer panes) lived here before this package
 // replaced github.com/sandgorgon/9sh's old multi-pane pane package —
 // see github.com/sandgorgon/9mux for where that capability went.
@@ -49,7 +49,7 @@ var keybindingHelp = []string{
 	"Ctrl+C                   copy the whole transcript",
 	"Alt+C                    copy only what's currently visible",
 	"paste                    inserts at the cursor",
-	"F1 (or ? at an empty prompt)  toggle this help screen",
+	"? (at an empty prompt)  toggle this help screen",
 	"Ctrl+D (at an empty prompt)  quit 9sh",
 	"",
 	"Running a fullscreen program (vim, top, ssh, ... -- see",

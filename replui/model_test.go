@@ -100,26 +100,6 @@ func TestFullscreenExitedMsgCallsOnDoneAndClearsFullscreen(t *testing.T) {
 // ---- integration: real tui.App, the part with actual keying-
 // correctness risk (see this package's own doc comment) ----
 
-// TestHelpShowsContentOnScreenViaF1 drives the real input path (F1,
-// this package's help toggle now that there's no control-strip button
-// — see kyurepl.go's handleKey) rather than just Update, confirming
-// the modal's content genuinely reaches the screen.
-func TestHelpShowsContentOnScreenViaF1(t *testing.T) {
-	m := New(eval.NewGlobalEnv(nil))
-	app := tui.NewApp(m, 80, 24)
-	defer app.Close()
-
-	for _, cmd := range app.HandleInput(input.KeyEvent{Key: input.KeyF1}) {
-		if cmd != nil {
-			app.Dispatch(cmd())
-		}
-	}
-	forceRenders(app, 1)
-	if buf := app.Buffer().String(); !strings.Contains(buf, "9sh — help") {
-		t.Fatalf("expected help content on screen after F1:\n%s", buf)
-	}
-}
-
 // TestFullscreenAttachRendersTerminalAndRestoresOnExit exercises the
 // full round trip: a fullscreen attachment takes over the screen (a
 // widget.Terminal, same as 9mux's own Terminal pane kind), and once
@@ -139,7 +119,7 @@ func TestHelpShowsContentOnScreenViaF1(t *testing.T) {
 // once the cycle settles, however many Dispatch calls it took.
 // dispatchAll runs the tui.Cmds HandleInput returns synchronously,
 // mirroring the loop cmd/9sh's real run loop uses (see
-// TestHelpShowsContentOnScreenViaF1).
+// TestHelpOpensAndClosesWithQuestionMark).
 func dispatchAll(app *tui.App, cmds []tui.Cmd) {
 	for _, cmd := range cmds {
 		if cmd != nil {
@@ -234,11 +214,10 @@ func TestFullscreenAttachRendersTerminalAndRestoresOnExit(t *testing.T) {
 	}
 }
 
-// TestHelpOpensAndClosesWithQuestionMarkWithoutF1 drives the real input
-// path for a terminal that never forwards F1: `?` at the empty prompt
-// opens the help modal, and `?` again — now handled by the modal's own
+// TestHelpOpensAndClosesWithQuestionMark drives the real input path:
+// `?` at the empty prompt opens the help modal, and `?` again — now handled by the modal's own
 // body, which claims focus while open — closes it.
-func TestHelpOpensAndClosesWithQuestionMarkWithoutF1(t *testing.T) {
+func TestHelpOpensAndClosesWithQuestionMark(t *testing.T) {
 	m := New(eval.NewGlobalEnv(nil))
 	app := tui.NewApp(m, 80, 24)
 	defer app.Close()

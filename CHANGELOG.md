@@ -8,6 +8,13 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Removed
+
+- The `F1` help binding in the interactive TUI. `?` at an empty prompt
+  is now the only way to open the help screen: terminal emulators keep
+  function keys for themselves (xfce4-terminal never forwards `F1`), so
+  9sh binds none.
+
 ## [0.5.1] - 2026-09-20
 
 ### Added

@@ -1020,17 +1020,16 @@ func TestKyuReplPaintDoesNotPanicOnTinyRect(t *testing.T) {
 	w.Reconcile(struct{}{})
 }
 
-// TestKyuReplF1TogglesHelp locks in F1's new role now that this
-// package has no control strip to host a help button on — see
-// handleKey's own doc comment.
-func TestKyuReplF1TogglesHelp(t *testing.T) {
+// TestKyuReplF1IsNotABinding locks in that no function key opens help:
+// terminal emulators keep them for themselves, so `?` is the only way in
+// — see handleKey's own doc comment.
+func TestKyuReplF1IsNotABinding(t *testing.T) {
 	w := newTestReplWidget(t)
-	cmd := w.HandleEvent(input.KeyEvent{Key: input.KeyF1})
-	if cmd == nil {
-		t.Fatal("expected a Cmd from F1")
+	if cmd := w.HandleEvent(input.KeyEvent{Key: input.KeyF1}); cmd != nil {
+		t.Fatalf("F1 must not produce a Cmd, got %T", cmd())
 	}
-	if _, ok := cmd().(toggleHelpMsg); !ok {
-		t.Fatalf("Cmd produced %T, want toggleHelpMsg", cmd())
+	if w.input != "" {
+		t.Errorf("F1 must not type anything, input = %q", w.input)
 	}
 }
 
@@ -1062,9 +1061,8 @@ func TestKyuReplCtrlDMidInputIsNoop(t *testing.T) {
 	}
 }
 
-// TestKyuReplQuestionMarkOpensHelpOnlyAtAnEmptyPrompt: `?` is the way in
-// for terminals that keep F1 for themselves (xfce4-terminal never
-// forwards it). It may only claim the key where nothing else could mean
+// TestKyuReplQuestionMarkOpensHelpOnlyAtAnEmptyPrompt: `?` is the only
+// way in (function keys are left to the terminal emulator). It may only claim the key where nothing else could mean
 // it — anywhere else `?` is ordinary text, notably the postfix
 // error-check operator in `f()?`.
 func TestKyuReplQuestionMarkOpensHelpOnlyAtAnEmptyPrompt(t *testing.T) {

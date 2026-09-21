@@ -409,7 +409,7 @@ func (w *kyuReplWidget) HandleEvent(e input.Event) tui.Cmd {
 }
 
 // handleKey returns a Cmd for the copy bindings (tui.CopyToClipboard),
-// F1 (help), and Ctrl+D at an empty prompt (quit) — every other case
+// `?` at an empty prompt (help), and Ctrl+D at an empty prompt (quit) — every other case
 // mutates the widget directly and returns nil. Ctrl-R is checked before
 // everything else, whether or not search mode is already active (it
 // means "start searching" the first time, "search further back" on
@@ -448,16 +448,15 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	}
 
 	switch {
-	case ke.Key == input.KeyF1, w.isHelpQuestionMark(ke):
+	case w.isHelpQuestionMark(ke):
 		// The multiplexer this package replaced toggled help from a
 		// control-strip button; there's no control strip here, so this
-		// is its keybinding instead — F1 is otherwise unused now that
-		// F1-F9's pane-jump meaning went with the split tree.
-		//
-		// `?` at an empty prompt is the second way in, for terminals
-		// that keep F1 for themselves (xfce4-terminal's Help menu, for
-		// one, never forwards it). It mirrors the help screen's own
-		// close keys, which already include `?`.
+		// is its keybinding instead. Deliberately not a function key:
+		// terminal emulators keep those for themselves (xfce4-terminal
+		// binds F1 to its own Help menu and never forwards it), so a
+		// plain character is the only binding that works everywhere. It
+		// mirrors the help screen's own close keys, which already
+		// include `?`.
 		return func() tui.Msg { return toggleHelpMsg{} }
 	case ctrl && ke.Rune == 'd' && w.input == "":
 		// bash/zsh's own "Ctrl-D at an empty prompt exits the shell" —

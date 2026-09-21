@@ -74,11 +74,14 @@ func biSourceConfig(env *Env, args []value.Value) (value.Value, error) {
 // previous source_config()/reset_config() left behind, goes away before
 // config.ky/common.ky/hosts/<hostname>.ky run again from a clean slate.
 //
-// Residual limitation: if a dotfile binds onto one of the six
-// protected roots themselves with an explicit before/after (rather than
-// plain bind's default replace), that extra layer survives a reset —
-// removing it would mean unbinding the root entirely, which this
-// deliberately never does (see protectedNamespaceRoots).
+// Residual limitation (documented for users in docs.go and the README,
+// and pinned by TestResetConfigLeavesLayersBoundOntoProtectedRoots): a
+// dotfile that binds onto one of the six protected roots themselves —
+// with an explicit before/after, or a plain replacing bind, whose
+// replaced bootstrap layer isn't restored either — leaves that layer in
+// place across a reset. Removing it would mean unbinding the root
+// entirely, which this deliberately never does (see
+// protectedNamespaceRoots).
 func biResetConfig(env *Env, args []value.Value) (value.Value, error) {
 	if len(args) != 0 {
 		return nil, fmt.Errorf("reset_config: expected no arguments, got %d", len(args))

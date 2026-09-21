@@ -167,9 +167,14 @@ var startupSequenceHelp = []string{
 	"source_config() re-runs them against the current session, additively",
 	"(bind already defaults to replacing its destination, := already",
 	"overwrites). reset_config() first clears every := variable and",
-	"unbinds every namespace entry outside jobs/local/env/config/session,",
-	"then does what source_config() does -- so a bind or variable you've",
-	"since removed from a dotfile actually disappears.",
+	"unbinds every namespace entry outside jobs/local/env/config/session/",
+	"ns, then does what source_config() does -- so a bind or variable",
+	"you've since removed from a dotfile actually disappears.",
+	"",
+	"Limitation: reset_config() never touches those six roots, so a layer",
+	"a dotfile binds onto one of them (before/after, or a replacing bind)",
+	"survives a reset. Bind such layers at a path outside the six to keep",
+	"them resettable, or restart 9sh.",
 }
 
 // buildHelpText assembles the full document once at package load:

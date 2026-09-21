@@ -595,6 +595,20 @@ exactly what `source_config()` does — so a bind rule or variable you've
 since removed from a dotfile actually disappears, instead of surviving
 from a previous load the way plain `source_config()` would leave it.
 
+One limitation: `reset_config()` never touches those six roots at all,
+so a layer a dotfile binds *onto* one of them survives a reset — an
+explicit `before`/`after` layer (`bind dir("/x"), /local, after`), or a
+plain replacing bind, which also leaves the bootstrap layer it replaced
+gone. A bind at any other path is reset as described. To keep a
+dotfile's binds resettable, bind them at a path outside the six; if a
+layer has already landed on one, restart 9sh, which starts clean. (The
+six can't be rebuilt from inside a running session: `/jobs` holds live
+job records, and `/local`, `/config` and `/session` depend on paths and
+state the shell only has at launch.) One more consequence: a layer on one of
+the six whose *source* is another namespace path outside them empties
+out on a reset, because that source gets unbound — give such a layer a
+`dir(...)` or `dial(...)` source instead.
+
 ## Using the interactive TUI
 
 Run `9sh` with no arguments in a real terminal and you land in the

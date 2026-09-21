@@ -93,3 +93,66 @@ func TestResetConfigUnbindsNonCoreEntries(t *testing.T) {
 		t.Errorf("/jobs (a protected root) was unbound by reset_config(): %#v", v)
 	}
 }
+
+// TestResetConfigLeavesLayersBoundOntoProtectedRoots pins the documented
+// residual limitation (see biResetConfig, docs.go, README): reset_config()
+// never touches the six protected roots at all, so a layer a dotfile bound
+// onto one of them survives a reset — an explicit before/after layer, or a
+// plain replacing bind (whose replaced bootstrap layer is not restored
+// either) — unlike a bind at any other path.
+//
+// The layers' source is dir(...), a real directory, deliberately: a
+// path-bind layer sourced from another namespace path would empty out
+// instead, because reset_config() unbinds that source (if it is outside
+// the protected roots), which would confound what's being pinned here.
+func TestResetConfigLeavesLayersBoundOntoProtectedRoots(t *testing.T) {
+	env, dir := globEnv(t) // binds /jobs (protected, has "clone") and /testdir (not)
+	env.SetSourceConfig(func(e *Env) {})
+	if err := os.WriteFile(dir+"/marker.txt", []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	names := func(src string) []string {
+		var out []string
+		for _, e := range runEnv(t, src, env).(*value.List).Elems {
+			out = append(out, e.String())
+		}
+		return out
+	}
+	has := func(list []string, want string) bool {
+		for _, n := range list {
+			if n == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	// A layer added after /jobs' own, and an ordinary bind for contrast.
+	runEnv(t, `bind dir("`+dir+`"), /jobs, after`, env)
+	runEnv(t, `bind dir("`+dir+`"), /elsewhere`, env)
+	if !has(names(`glob("/jobs/*")`), "/jobs/marker.txt") {
+		t.Fatalf("setup: the after layer isn't visible under /jobs")
+	}
+
+	runEnv(t, `reset_config()`, env)
+
+	if got := names(`glob("/elsewhere/*")`); len(got) != 0 {
+		t.Errorf("the bind at /elsewhere survived reset_config(): %v", got)
+	}
+	got := names(`glob("/jobs/*")`)
+	if !has(got, "/jobs/marker.txt") {
+		t.Errorf("the layer bound after /jobs' own was removed by reset_config() (documented as surviving): %v", got)
+	}
+	if !has(got, "/jobs/clone") {
+		t.Errorf("/jobs' own bootstrap layer was disturbed by reset_config(): %v", got)
+	}
+
+	// A plain replacing bind onto a protected root: it survives too, and the
+	// bootstrap layer it replaced does not come back.
+	runEnv(t, `bind dir("`+dir+`"), /jobs`, env)
+	runEnv(t, `reset_config()`, env)
+	got = names(`glob("/jobs/*")`)
+	if !has(got, "/jobs/marker.txt") || has(got, "/jobs/clone") {
+		t.Errorf("after a replacing bind and a reset, /jobs = %v, want only the replacing layer's content", got)
+	}
+}

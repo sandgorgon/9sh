@@ -46,6 +46,12 @@ once a first tagged release is cut.
   interface for moving focus synchronously. No API change 9sh uses; no
   behavior change here.
 
+- Documented `reset_config()`'s one limitation where users can see it (the
+  language reference and help screen, and the README), it having lived
+  only in a Go comment: a layer a dotfile binds onto one of the six
+  protected roots survives a reset, and how to avoid that. The reference
+  and help screen also listed five protected roots; the sixth is `/ns`.
+
 ### Fixed
 
 - `cp` and `mv` refuse to copy or move a directory into itself

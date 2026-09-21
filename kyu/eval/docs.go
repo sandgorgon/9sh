@@ -71,7 +71,7 @@ var builtinDocs = []BuiltinDoc{
 	{"source_config", "source_config()",
 		"Re-runs config.ky, then common.ky/hosts/<hostname>.ky, against this session — the same startup sequence cmd/9sh runs once at launch, callable again at runtime. Additive: a plain bind refreshes its destination (default disposition is replace), a := redefinition overwrites, and only an explicit before/after union bind actually stacks another layer."},
 	{"reset_config", "reset_config()",
-		"source_config's fresh-start sibling: first clears every := -defined variable and unbinds every namespace entry outside jobs/local/env/config/session, then does exactly what source_config does — so a removed bind or variable actually goes away instead of lingering from a previous source."},
+		"source_config's fresh-start sibling: first clears every := -defined variable and unbinds every namespace entry outside jobs/local/env/config/session/ns, then does exactly what source_config does — so a removed bind or variable actually goes away instead of lingering from a previous source. Limitation: those six roots are never touched, so a layer a dotfile bound onto one of them (before/after, or a replacing bind) survives a reset — bind such layers at a path outside the six to keep them resettable, or restart 9sh."},
 	{"dial", `dial(addr)`,
 		"Connects to a remote 9sh/9P peer, or a local Unix-socket 9P server, and returns an unbound MountHandle — bind grafts it in. Mutual TLS + 9auth identity for host:port; same-UID trust only for a socket path."},
 	{"dir", `dir(path)`,

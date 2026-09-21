@@ -10,9 +10,11 @@ once a first tagged release is cut.
 
 ### Changed
 
-- Bumped `github.com/sandgorgon/tui` from v0.9.0 to v0.10.0: a
-  `RawKeyClaimer`'s release key is now also reported to `Update` as
-  `tui.ReleaseMsg`. No API change 9sh uses; no behavior change here.
+- Bumped `github.com/sandgorgon/tui` from v0.9.0 to v0.11.0: v0.10.0
+  reports a `RawKeyClaimer`'s release key to `Update` as
+  `tui.ReleaseMsg`, and v0.11.0 adds the optional `FocusRequester`
+  interface for moving focus synchronously. No API change 9sh uses; no
+  behavior change here.
 
 ### Removed
 

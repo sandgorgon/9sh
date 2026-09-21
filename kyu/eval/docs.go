@@ -79,7 +79,7 @@ var builtinDocs = []BuiltinDoc{
 	{"path", `path(str)`,
 		"Converts a String to a Path — the explicit way to use dynamically-built path text (format(...), split/join, ...) with bind/checkout/stat/join_path, which all require an actual Path. Requires an absolute string."},
 	{"join_path", "join_path(base, ...segments)",
-		"Builds a Path from an already-fully-qualified base Path plus string segments — cuts repetition without introducing a namespace cwd (kyu deliberately has none)."},
+		"Builds a Path from an already-fully-qualified base Path plus string segments — cuts repetition without introducing a namespace cwd (kyu deliberately has none). `base + \"segment\"` does the same for one segment (`/n + name`); the Path goes on the left, and a Path on the right means namespace union instead."},
 
 	// Variables & environment
 	{"vars", "vars()",
@@ -179,7 +179,7 @@ var builtinDocs = []BuiltinDoc{
 	{"native_programs", "cmdname arg1 arg2 ...  (no % needed)", `A third call form, for external programs that are themselves namespace-aware (e.g. 9ed, 9vcs) rather than legacy Bytes-only binaries: any name listed in the native_programs kyu variable (see /config/config.ky) can be called bareword, no % sigil, same argument shape %cmd takes. A Path argument is passed through as its literal path text, untouched — no checkout, no scratch copy — trusting the program to resolve it itself (dial 9sh's namespace socket, Walk an absolute path or one rooted at /local, fall back to a real OS path only if the namespace doesn't claim it). Extend it like fullscreen_programs: native_programs := native_programs + ["mytool"].`},
 	{"&", "%cmd ... &", `Backgrounds a %cmd as a live job record: j.status, j.ctl = "stop", j | wait. Refused for a fullscreen program (see %cmd) -- nothing to hand the real screen to if it isn't in the foreground.`},
 	{"in_ns", "in_ns { ... }", "Runs the block against a private copy of the namespace — binds and unbinds inside it don't leak out, and everything already bound is visible inside (Plan 9's rfork). The original is restored however the block ends. A bind is a view, so writes through a shared directory still reach it; a background job started inside keeps the job it was given. The block's last value is its value."},
-	{"@host", "@host { ... }", "Re-roots job creation at a dial()'d remote peer's own /jobs for the block — 'proxy jobs,' no separate remote-job protocol."},
+	{"@host", "@host { ... }  @/path { ... }  @(expr) { ... }", "Re-roots job creation at a bound peer's own /jobs for the block — 'proxy jobs,' no separate remote-job protocol. The operand is a mount point, a Path like bind's destination: `@host` is shorthand for `@/n/host` (always a literal name, never a variable), `@/path` names any mount, and `@(expr)` takes any expression that yields a Path, so it can be computed: `@(/n + name) { %uptime }`, or over a list `hosts | each { |h| @(/n + h) { %uptime } }`."},
 }
 
 // namespaceAppNames is every BuiltinDoc name that's a namespace-aware

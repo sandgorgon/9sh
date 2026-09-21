@@ -253,15 +253,22 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 
 // isProxyJobRoot reports whether jobRoot points at a remote peer's /jobs
 // tree — `@host{}`'s desugaring (see evalAtHost) — rather than the local
-// /jobs, and if so returns the remote host name. evalBackground and
-// runExternalViaJob don't otherwise know or care that @host exists; this
-// is the one place either asks, purely to decide whether a local-side
-// proxy linking record is even applicable.
+// /jobs, and if so returns a label for the remote: the bare host name for
+// the common /n/<host> mount, the mount path otherwise (`@/mnt/ci{}`).
+// evalBackground and runExternalViaJob don't otherwise know or care that @
+// exists; this is the one place either asks, purely to decide whether a
+// local-side proxy linking record is even applicable.
 func isProxyJobRoot(jobRoot []string) (host string, ok bool) {
-	if len(jobRoot) >= 2 && jobRoot[0] == "n" {
-		return jobRoot[1], true
+	// The local job root is exactly ["jobs"]; anything else ends in
+	// "jobs" under some mount point.
+	if len(jobRoot) < 2 || jobRoot[len(jobRoot)-1] != "jobs" {
+		return "", false
 	}
-	return "", false
+	mount := jobRoot[:len(jobRoot)-1]
+	if len(mount) == 2 && mount[0] == "n" {
+		return mount[1], true
+	}
+	return "/" + strings.Join(mount, "/"), true
 }
 
 // recordProxyJobAsync waits for a backgrounded proxy job to finish, then

@@ -8,7 +8,30 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `@` takes its mount point as a `Path`-typed operand, like `bind`'s
+  destination, so the target of a proxy job can be computed:
+  `@/path { ... }` names any mount, and `@(expr) { ... }` takes any
+  expression that evaluates to a `Path` — `@(/n + name) { %uptime }`, or
+  over a list of hosts `hosts | each { |h| @(/n + h) { %uptime & } }`.
+  Bare `@host { ... }` is unchanged and remains shorthand for
+  `@/n/host` (it is always a literal name, never a variable lookup; use
+  `@(expr)` for that). A path operand also reaches hosts whose names a
+  bare identifier can't spell (`@/n/build-box`) and mounts outside `/n`;
+  the local proxy linking record's `host` is then the mount path
+  (`/mnt/ci`), while `/n/<host>` blocks still record the bare host name.
+- `Path + String` appends a segment and yields a `Path` (`/n + name`),
+  sharing one implementation with `join_path(base, name)`. The `Path`
+  goes on the left — a `String` is never implicitly turned into a
+  `Path`, and `"x" + /n` is an error that says so. `Path + Path` keeps
+  meaning namespace union.
+
 ### Changed
+
+- The error for an `@` whose mount isn't bound now names the mount and
+  suggests `bind dial("addr"), /n/host` with a `Path` literal (it used
+  to show a quoted string, which `bind` rejects).
 
 - Bumped `github.com/sandgorgon/tui` from v0.9.0 to v0.11.0: v0.10.0
   reports a `RawKeyClaimer`'s release key to `Update` as

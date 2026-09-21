@@ -356,6 +356,26 @@ protocol:
 `@host { ... }` re-roots job creation at the bound remote's own `/jobs`
 for the block — a "proxy job" is nothing more than that.
 
+The operand is a mount point, a `Path` like `bind`'s destination, so it
+can be given three ways: `@host` is shorthand for `@/n/host` (always a
+literal name, never a variable lookup), `@/path { ... }` names any mount
+(including hosts with a `-` or `.` in the name, which a bare identifier
+can't spell), and `@(expr) { ... }` takes any expression that evaluates
+to a `Path`, so the target can be computed. That is what makes a command
+on a set of hosts possible:
+
+```
+9sh> hosts := ["web1", "web2", "db1"]
+9sh> hosts | each { |h| bind dial(h + ":2049"), /n + h }
+9sh> jobs := hosts | each { |h| @(/n + h) { %uptime & } }
+9sh> jobs | each { |j| j | wait }
+```
+
+`/n + h` is `Path + String`: it appends a segment, exactly like
+`join_path(/n, h)`. The `Path` goes on the left — a `String` is never
+implicitly turned into one — and `Path + Path` keeps meaning namespace
+union (`/a + /b`).
+
 `dial` also reaches a local Unix-domain-socket 9P server — no TLS, no
 identity, the socket's own file permissions are the trust boundary:
 
@@ -440,6 +460,9 @@ cosmetic:
   as `dial`/`dir` hard-require a `String`, never a `Path`, in the
   opposite direction. Both crossings are always an explicit function
   call, never an implicit guess based on what a value looks like.
+  `base + "segment"` is `join_path(base, "segment")` for one segment
+  (`/n + name`) — the `Path` goes on the left, since a `String` on the
+  left is `String + String`; `Path + Path` stays namespace union.
 - **Handing a namespace path straight to `%cmd` is caught, not
   silently wrong.** The natural first mistake this mental model
   produces — `%cat /local/foo`, treating `/local` like a real directory

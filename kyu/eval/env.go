@@ -306,8 +306,8 @@ func (e *Env) LastExitCode() *int {
 }
 
 // JobRoot returns the namespace path prefix job creation should use —
-// ["jobs"] normally, or ["n", host, "jobs"] inside an `@host { ... }`
-// block (see evalAtHost), searching outward through parents the same way
+// ["jobs"] normally, or <mount>/jobs (["n", host, "jobs"] for `@host`)
+// inside an `@ ... { ... }` block (see evalAtHost), searching outward through parents the same way
 // Get does. This is how `@host{}` desugars to "no separate remote-job
 // protocol" per the design doc: evalBackground and runExternalViaJob
 // don't know they're running inside an @host block at all, they just ask

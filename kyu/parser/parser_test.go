@@ -614,3 +614,53 @@ func TestBindStmtRejectsBadTrailingWords(t *testing.T) {
 		}
 	}
 }
+
+// TestAtHostForms: `@` takes the mount point as a Path-typed operand —
+// the same shape bind's destination has — in three spellings.
+func TestAtHostForms(t *testing.T) {
+	t.Run("bare identifier is shorthand for /n/host", func(t *testing.T) {
+		at := parseOK(t, `@build { %true }`).Stmts[0].(*ast.ExprStmt).X.(*ast.AtHost)
+		if at.Host != "build" || at.Target != nil {
+			t.Errorf("got Host=%q Target=%#v, want Host=\"build\" and no Target", at.Host, at.Target)
+		}
+		if len(at.Body) != 1 {
+			t.Errorf("body has %d stmts, want 1", len(at.Body))
+		}
+	})
+	t.Run("path literal", func(t *testing.T) {
+		at := parseOK(t, `@/mnt/ci { %true }`).Stmts[0].(*ast.ExprStmt).X.(*ast.AtHost)
+		lit, ok := at.Target.(*ast.PathLit)
+		if !ok || lit.Val != "/mnt/ci" || at.Host != "" {
+			t.Errorf("got Host=%q Target=%#v, want a PathLit /mnt/ci", at.Host, at.Target)
+		}
+	})
+	t.Run("parenthesized expression", func(t *testing.T) {
+		at := parseOK(t, `@(/n + name) { %true }`).Stmts[0].(*ast.ExprStmt).X.(*ast.AtHost)
+		be, ok := at.Target.(*ast.BinaryExpr)
+		if !ok || be.Op != token.PLUS || at.Host != "" {
+			t.Errorf("got Host=%q Target=%#v, want a `+` BinaryExpr", at.Host, at.Target)
+		}
+	})
+	t.Run("variable needs parentheses", func(t *testing.T) {
+		// A bare identifier is always a literal host name, never a variable
+		// lookup: `@h` means /n/h.
+		at := parseOK(t, `@h { %true }`).Stmts[0].(*ast.ExprStmt).X.(*ast.AtHost)
+		if at.Host != "h" || at.Target != nil {
+			t.Errorf("got Host=%q Target=%#v, want the literal host \"h\"", at.Host, at.Target)
+		}
+		at = parseOK(t, `@(h) { %true }`).Stmts[0].(*ast.ExprStmt).X.(*ast.AtHost)
+		if id, ok := at.Target.(*ast.Ident); !ok || id.Name != "h" {
+			t.Errorf("got Target=%#v, want the variable h", at.Target)
+		}
+	})
+}
+
+func TestAtHostRejectsOtherOperands(t *testing.T) {
+	for _, src := range []string{`@ { %true }`, `@"host" { %true }`, `@5 { %true }`, `@(/n) %true`, `@/n/x`} {
+		p := New(src)
+		p.ParseProgram()
+		if len(p.Errors()) == 0 {
+			t.Errorf("src %q: expected a parse error, got none", src)
+		}
+	}
+}

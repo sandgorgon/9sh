@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -278,5 +279,151 @@ j | wait`
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("proxy recorder was never called")
+	}
+}
+
+// atHostOutput runs src (which must end in a foreground %sh "-c" "echo hi")
+// and returns its output, failing the test on anything else.
+func atHostOutput(t *testing.T, src string, env *Env) string {
+	t.Helper()
+	v := runEnv(t, src, env)
+	b, ok := v.(value.Bytes)
+	if !ok {
+		t.Fatalf("src %q: got %s (%s), want the command's output as bytes", src, v.Kind(), v.String())
+	}
+	return string(b)
+}
+
+// TestAtTakesAPathTypedOperand: `@` names its mount point the way bind's
+// destination does — a Path literal, or any expression that evaluates to
+// one, so the mount can be a variable or built at run time. Every spelling
+// must reach the same real remote peer.
+func TestAtTakesAPathTypedOperand(t *testing.T) {
+	env := setupAtHostTestPeer(t)
+	run := `@/n/testhost { %sh "-c" "echo hi" }`
+	cases := map[string]string{
+		"bare identifier":      `@testhost { %sh "-c" "echo hi" }`,
+		"path literal":         run,
+		"variable in parens":   "m := /n/testhost\n@(m) { %sh \"-c\" \"echo hi\" }",
+		"computed with +":      "name := \"testhost\"\n@(/n + name) { %sh \"-c\" \"echo hi\" }",
+		"computed with join":   `@(join_path(/n, "testhost")) { %sh "-c" "echo hi" }`,
+		"path() from a string": `@(path("/n/testhost")) { %sh "-c" "echo hi" }`,
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := atHostOutput(t, src, env); got != "hi\n" {
+				t.Errorf("output = %q, want %q", got, "hi\n")
+			}
+		})
+	}
+}
+
+// TestAtFansOutOverAListOfHosts is the use the computed operand exists
+// for: one command on each of a set of hosts. Both list entries name the
+// same peer here (a second real one adds nothing to what's being checked:
+// that the operand is re-evaluated per iteration, inside a closure).
+func TestAtFansOutOverAListOfHosts(t *testing.T) {
+	env := setupAtHostTestPeer(t)
+	runEnv(t, `bind /n/testhost, /n/second`, env)
+
+	v := runEnv(t, `["testhost", "second"] | each { |h| @(/n + h) { %sh "-c" "echo hi" } }`, env)
+	l, ok := v.(*value.List)
+	if !ok || len(l.Elems) != 2 {
+		t.Fatalf("got %s (%s), want a list of 2 outputs", v.Kind(), v.String())
+	}
+	for i, e := range l.Elems {
+		if b, ok := e.(value.Bytes); !ok || string(b) != "hi\n" {
+			t.Errorf("element %d = %#v, want output \"hi\\n\"", i, e)
+		}
+	}
+}
+
+// TestAtMountAnywhere: the mount point needn't be under /n. The proxy
+// linking record then carries the mount path as its host label instead of
+// a bare host name.
+func TestAtMountAnywhere(t *testing.T) {
+	env := setupAtHostTestPeer(t)
+	runEnv(t, `bind /n/testhost, /mnt/ci`, env)
+
+	hostCh := make(chan string, 1)
+	env.SetProxyRecorder(func(host string, remoteID int, argv []string, tsStart, tsEnd time.Time, exitCode *int, signal string) {
+		hostCh <- host
+	})
+
+	if got := atHostOutput(t, `@/mnt/ci { %sh "-c" "echo hi" }`, env); got != "hi\n" {
+		t.Errorf("output = %q, want %q", got, "hi\n")
+	}
+	select {
+	case h := <-hostCh:
+		if h != "/mnt/ci" {
+			t.Errorf("recorded host = %q, want %q", h, "/mnt/ci")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy recorder was never called")
+	}
+}
+
+func TestAtBareHostRecordsTheBareName(t *testing.T) {
+	env := setupAtHostTestPeer(t)
+	hostCh := make(chan string, 1)
+	env.SetProxyRecorder(func(host string, remoteID int, argv []string, tsStart, tsEnd time.Time, exitCode *int, signal string) {
+		hostCh <- host
+	})
+	// Same peer, spelled as a computed /n/<name>: still recorded as the bare name.
+	atHostOutput(t, `@(/n + "testhost") { %sh "-c" "echo hi" }`, env)
+	select {
+	case h := <-hostCh:
+		if h != "testhost" {
+			t.Errorf("recorded host = %q, want %q", h, "testhost")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy recorder was never called")
+	}
+}
+
+func TestAtRejectsBadOperands(t *testing.T) {
+	env, _ := jobsEnvWithManager(t)
+	cases := []struct{ name, src, want string }{
+		{"a string is never a path", `@("/n/x") { %true }`, "expected a path"},
+		{"a number", `@(5) { %true }`, "expected a path"},
+		{"the namespace root", `@/ { %true }`, "namespace root"},
+		{"an unbound mount names itself and the fix", `@/n/nosuch { %true }`, "is /n/nosuch bound"},
+		{"an unbound computed mount", `@(/n + "nosuch") { %true }`, "is /n/nosuch bound"},
+		{"an unbound bare host keeps its message", `@nosuch { %true }`, "@nosuch:"},
+		{"an undefined variable", `@(nosuchvar) { %true }`, "nosuchvar"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runEnvErr(t, tc.src, env)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q should contain %q", err, tc.want)
+			}
+		})
+	}
+	// The hint shows a Path literal, not a quoted string.
+	err := runEnvErr(t, `@/n/nosuch { %true }`, env)
+	if !strings.Contains(err.Error(), `bind dial("addr"), /n/nosuch`) {
+		t.Errorf("error %q should suggest `bind dial(\"addr\"), /n/nosuch`", err)
+	}
+}
+
+func TestIsProxyJobRoot(t *testing.T) {
+	cases := []struct {
+		root     []string
+		wantHost string
+		wantOK   bool
+	}{
+		{[]string{"jobs"}, "", false},
+		{[]string{"n", "web", "jobs"}, "web", true},
+		{[]string{"mnt", "ci", "jobs"}, "/mnt/ci", true},
+		{[]string{"n", "web", "sub", "jobs"}, "/n/web/sub", true},
+		{[]string{"n", "jobs"}, "/n", true},
+		{nil, "", false},
+	}
+	for _, tc := range cases {
+		host, ok := isProxyJobRoot(tc.root)
+		if host != tc.wantHost || ok != tc.wantOK {
+			t.Errorf("isProxyJobRoot(%v) = (%q, %v), want (%q, %v)", tc.root, host, ok, tc.wantHost, tc.wantOK)
+		}
 	}
 }

@@ -204,16 +204,22 @@ func biJoinPath(args []value.Value) (value.Value, error) {
 	if !ok {
 		return nil, fmt.Errorf("join_path: first argument must be a path, got %s", args[0].Kind())
 	}
-	segs := make([]string, len(args))
-	segs[0] = string(base)
+	segs := make([]string, len(args)-1)
 	for i, a := range args[1:] {
 		s, ok := a.(value.String)
 		if !ok {
 			return nil, fmt.Errorf("join_path: segment %d must be a string, got %s", i+1, a.Kind())
 		}
-		segs[i+1] = string(s)
+		segs[i] = string(s)
 	}
-	return value.Path(path.Join(segs...)), nil
+	return joinPath(base, segs...), nil
+}
+
+// joinPath appends string segments to a base Path, lexically cleaning the
+// result. The one implementation behind both join_path(base, ...) and
+// `base + "segment"`, so the two can't drift apart.
+func joinPath(base value.Path, segs ...string) value.Path {
+	return value.Path(path.Join(append([]string{string(base)}, segs...)...))
 }
 
 func lastAsList(args []value.Value, fnName string) (*value.List, []value.Value, error) {

@@ -707,27 +707,46 @@ func (p *Parser) parseWhileExpr() ast.Expr {
 	return &ast.WhileExpr{Tok: tok, Cond: cond, Body: body}
 }
 
-// parseAtHost parses `@host { ... }`. host is a bareword identifier
-// directly after '@', the same treatment %cmd's external command name
-// gets after '%' — exempt from the usual bareword-ambiguity concerns
-// since nothing infix-operator-shaped can follow '@' at this position.
+// parseAtHost parses `@host { ... }`, `@/path { ... }` and
+// `@(expr) { ... }`. All three name the mount point whose /jobs the block
+// runs against; the operand is a Path-typed expression, the same as bind's
+// destination, so it can be computed:
+//
+//   - a bare identifier directly after '@' is shorthand for the mount
+//     /n/<ident> (the same treatment %cmd's command name gets after '%' —
+//     exempt from the usual bareword-ambiguity concerns since nothing
+//     infix-operator-shaped can follow '@' at this position). It is
+//     always a literal name, never a variable lookup: use @(expr) for that.
+//   - a Path literal names any mount point.
+//   - a parenthesized expression is evaluated to a Path at run time.
 func (p *Parser) parseAtHost() ast.Expr {
 	tok := p.cur // '@'
-	p.next()     // consume '@' -> host ident
-	if p.cur.Kind != token.IDENT {
-		p.errorf("expected a host name after '@', got %s(%q)", p.cur.Kind, p.cur.Literal)
+	p.next()     // consume '@' -> the operand's first token
+	at := &ast.AtHost{Tok: tok}
+	switch p.cur.Kind {
+	case token.IDENT:
+		at.Host = p.cur.Literal
+	case token.PATH:
+		if at.Target = p.parsePrefix(); at.Target == nil {
+			return nil
+		}
+	case token.LPAREN:
+		if at.Target = p.parseGroupedExpr(); at.Target == nil {
+			return nil
+		}
+	default:
+		p.errorf("expected a host name, a path or '(' after '@', got %s(%q)", p.cur.Kind, p.cur.Literal)
 		return nil
 	}
-	host := p.cur.Literal
 	if !p.expectPeekOrCur(token.LBRACE) {
 		return nil
 	}
 	p.next() // consume '{'
-	body := p.parseBlock()
+	at.Body = p.parseBlock()
 	if !p.expectPeekOrCur(token.RBRACE) {
 		return nil
 	}
-	return &ast.AtHost{Tok: tok, Host: host, Body: body}
+	return at
 }
 
 // parseInNS parses `in_ns { ... }`.

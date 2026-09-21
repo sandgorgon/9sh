@@ -214,9 +214,16 @@ type Background struct {
 // `bind`) — evalAtHost just re-roots job creation for the block's
 // duration (see Env.JobRoot).
 type AtHost struct {
-	Tok  token.Token // '@'
+	Tok token.Token // '@'
+	// Host is the bare-identifier shorthand: `@host` means `@/n/host`.
+	// Empty when Target is set.
 	Host string
-	Body []Stmt
+	// Target is `@/path` or `@(expr)`: any expression that evaluates to a
+	// Path naming the mount point whose /jobs the block runs against —
+	// the same Path-typed operand bind/unbind/checkout/stat take. Nil for
+	// the shorthand.
+	Target Expr
+	Body   []Stmt
 }
 
 func (*AtHost) exprNode() {}

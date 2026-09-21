@@ -10,6 +10,11 @@ project := /scratch
 sub := join_path(project, "9sh-example-doesnotexist")
 built_from_string := path("/scratch/9sh-example-doesnotexist")
 
+# `Path + String` appends a segment -- the same as join_path, and the way
+# to compute a mount point: /n + name. (Path + Path is namespace union,
+# so a String on the right is what says "a name".)
+computed := /scratch + "9sh-example-doesnotexist"
+
 # dial() reaches a remote 9sh/9P peer (host:port, mutual TLS) or a
 # local Unix-socket 9P server (same-UID trust only) -- here, nothing
 # is listening, which is the realistic first-run experience. Like
@@ -30,11 +35,20 @@ dial_failed := !maybe_peer
 #
 # @host{} re-roots job creation at the bound remote's own /jobs for
 # the block -- a "proxy job" is nothing more than that, no separate
-# remote-job protocol.
+# remote-job protocol. The operand is a mount point, a Path like bind's
+# destination: @otherhost is shorthand for @/n/otherhost, any mount can
+# be named (@/mnt/ci { ... }), and @(expr) takes any expression that
+# yields a Path -- so the target can be computed, which is how to run a
+# command on a set of hosts:
+#
+#   hosts := ["web1", "web2", "db1"]
+#   hosts | each { |h| bind dial(h + ":2049"), /n + h }
+#   jobs := hosts | each { |h| @(/n + h) { %uptime & } }
+#   jobs | each { |j| j | wait }
 
 format(
-    "/scratch (dir(/tmp)) has {} entries; join_path(...) and path(...) built the same Path: {}; dialing a nonexistent socket failed gracefully (not a hard abort): {}",
+    "/scratch (dir(/tmp)) has {} entries; join_path(...), path(...) and Path + String built the same Path: {}; dialing a nonexistent socket failed gracefully (not a hard abort): {}",
     tmp_listing,
-    sub == built_from_string,
+    sub == built_from_string && sub == computed,
     dial_failed,
 )

@@ -621,6 +621,21 @@ func evalArith(op token.Kind, l, r value.Value) (value.Value, error) {
 		if u, ok := nsUnion(l, r); ok {
 			return u, nil
 		}
+		// Path + String appends a segment (`/n + name`), same as
+		// join_path(/n, name). Path + Path is namespace union (nsUnion
+		// above), so a String on the right is what says "a name", not
+		// another namespace. The Path goes on the left: kyu never
+		// implicitly turns a String into a Path.
+		if lp, ok := l.(value.Path); ok {
+			if rs, ok := r.(value.String); ok {
+				return joinPath(lp, string(rs)), nil
+			}
+		}
+		if _, ok := l.(value.String); ok {
+			if _, ok := r.(value.Path); ok {
+				return nil, fmt.Errorf(`cannot apply + to string and path (put the path on the left: /base + "name", or convert with path(str))`)
+			}
+		}
 		if ls, ok := l.(value.String); ok {
 			if rs, ok := r.(value.String); ok {
 				return ls + rs, nil

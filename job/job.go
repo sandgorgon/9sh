@@ -281,7 +281,12 @@ func (j *Job) Ctl(cmd string) error {
 		}
 		return j.setPriority(n)
 	case "resize":
-		return errors.New("ctl: resize: no pty allocated for this job (pty/tui integration is a later phase)")
+		// Recognized so the answer is a clear one, not "unknown command":
+		// jobs run over pipes (stdin/stdout/stderr are plain streams), so
+		// there is no terminal to resize, in any state. A program that
+		// needs one is a fullscreen_programs entry, which the shell runs on
+		// its own terminal rather than as a job.
+		return errors.New("ctl: resize: jobs run over pipes, not a pty, so there is no terminal to resize (programs that need one belong in fullscreen_programs)")
 	case "detach":
 		j.mu.Lock()
 		j.detached = true

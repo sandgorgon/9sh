@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -423,4 +424,35 @@ func (r *growBufReader) Read(p []byte) (int, error) {
 		return n, io.EOF
 	}
 	return n, err
+}
+
+// TestCtlResizeExplainsThereIsNoPty: jobs run over pipes, so resize is a
+// recognized command that always answers with a clear, permanent error —
+// in any state — rather than "unknown command" or a promise of a later
+// phase.
+func TestCtlResizeExplainsThereIsNoPty(t *testing.T) {
+	mgr := NewManager()
+	pending := mgr.AllocSubprocess()
+
+	running := mgr.AllocSubprocess()
+	if err := running.SetArgv([]string{"sleep", "30"}); err != nil {
+		t.Fatalf("SetArgv: %v", err)
+	}
+	if err := running.Ctl("start"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer running.Ctl("kill")
+
+	for name, j := range map[string]*Job{"pending": pending, "running": running} {
+		err := j.Ctl("resize 24 80")
+		if err == nil {
+			t.Fatalf("%s job: resize should error, there is no pty", name)
+		}
+		if !strings.Contains(err.Error(), "no terminal to resize") {
+			t.Errorf("%s job: error %q should say there is no terminal to resize", name, err)
+		}
+		if strings.Contains(err.Error(), "unknown command") || strings.Contains(err.Error(), "later phase") {
+			t.Errorf("%s job: error %q should be neither \"unknown command\" nor a promise of a later phase", name, err)
+		}
+	}
 }

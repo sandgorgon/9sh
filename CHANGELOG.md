@@ -52,6 +52,14 @@ once a first tagged release is cut.
   protected roots survives a reset, and how to avoid that. The reference
   and help screen also listed five protected roots; the sixth is `/ns`.
 
+- `ctl resize` on a job now says why it can't work — jobs run over pipes,
+  not a pty, so there is no terminal to resize — instead of promising
+  "pty/tui integration is a later phase". It stays a recognized command
+  so the answer is that message rather than "unknown command". The job
+  `ctl` vocabulary (`start`, `stop`, `resume`, `kill`, `signal`,
+  `priority`, `detach`) is now written down in the README, where before
+  only `stop` and `kill` appeared.
+
 ### Fixed
 
 - `cp` and `mv` refuse to copy or move a directory into itself

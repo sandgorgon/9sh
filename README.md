@@ -102,6 +102,16 @@ introspection and safety, regex and collections).
 - `%cmd` calls out to an ordinary Linux binary; a `%cmd ... &` job is a
   live record — `j.status`, `j.ctl = "stop"`, `j | wait` all read/write
   through to real namespace files, not a snapshot.
+- A job's `ctl` file takes one command per write: `start` (begin a
+  pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
+  `signal NAME` (`signal HUP`), `priority N` (the nice value of a running
+  subprocess job), and `detach` (sets the `detached` flag `status` and
+  `ps()` report; the process itself is unaffected). An unknown command is
+  an error, never a silent no-op. There is no working `resize`: jobs run
+  over pipes, not a pty, so it is recognized only to answer that there
+  is no terminal to resize. A program that needs a terminal is a
+  `fullscreen_programs` entry, which gets the real screen instead of
+  running as a job.
 - `|` is a structured pipe by default (`where`/`select`/`sort_by`/
   `group_by`/`each`/...), not raw bytes — `%` is the sigil that marks
   "this call is bytes, not structured data."

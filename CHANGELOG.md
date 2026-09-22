@@ -27,6 +27,17 @@ once a first tagged release is cut.
   job's job-record `stdin` field is writable (`j.stdin = "text\n"`) —
   the first kyu syntax able to feed a backgrounded job's stdin at all.
   A plain job's `stdin` still pre-closes immediately as before.
+- `attach(job)`: the ssh-less remote-terminal client this whole round
+  was building toward. Takes over the local terminal (raw mode) and
+  streams bytes directly to/from a `&pty` job's real pty, local or
+  `@host{}`-remote alike — Ctrl-D/Ctrl-C/Ctrl-Z reach the job like a
+  real terminal, window size is sent on attach and on every local
+  resize, and Ctrl-] detaches back to the kyu prompt without touching
+  the job (typed twice, sends a literal Ctrl-] through instead —
+  telnet's own convention). Not yet supported inside the interactive
+  TUI, or 9mux — those need a real terminal-emulator widget wired to a
+  job's pty instead of this plain-terminal passthrough, a separate,
+  larger piece of work.
 
 ## [0.9.0] - 2026-09-22
 

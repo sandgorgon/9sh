@@ -139,6 +139,21 @@ introspection and safety, regex and collections).
   still pre-closed immediately once backgrounded (there's still no kyu
   syntax to feed one an ongoing byte stream): its `stdin` field exists
   but a write to it errors, since there's nothing left open to write to.
+- `attach(job)` takes over the local terminal and streams raw bytes
+  directly between it and a `&pty` job's real pty — the ssh-less
+  terminal client: works the same whether `job` was created locally or
+  via `@host{}` (the job record's own files are already correctly
+  rooted at whichever host built it). Puts the local terminal in raw
+  mode for the duration; Ctrl-D/Ctrl-C/Ctrl-Z reach the job exactly like
+  a real terminal's line discipline would, and its window size is sent
+  over on attach and again on every local resize. Ctrl-] detaches back
+  to the kyu prompt without touching the job itself (typed twice, it
+  reaches the job as a literal Ctrl-] instead — the same escape telnet
+  uses); the job keeps running either way, exactly like a real detached
+  session. Errors clearly for a non-pty job, when stdin isn't a real
+  terminal, or inside the interactive TUI (not supported there yet —
+  that needs a proper terminal-emulator widget, a separate, larger
+  piece of work than this plain-terminal passthrough).
 - A job's `ctl` file takes one command per write: `start` (begin a
   pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
   `signal NAME` (`signal HUP`), `priority N` (the nice value of a running

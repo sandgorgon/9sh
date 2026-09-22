@@ -56,6 +56,12 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("glob", &Builtin{Name: "glob", Fn: func(args []value.Value) (value.Value, error) {
 		return biGlob(env, args)
 	}})
+	// attach needs the calling Env (for PassthroughBlocked's "not inside
+	// the TUI yet" guard) — same closure-capture shape as cd/checkout
+	// above. See attach.go's biAttach doc comment.
+	env.Define("attach", &Builtin{Name: "attach", Fn: func(args []value.Value) (value.Value, error) {
+		return biAttach(env, args)
+	}})
 	// exit_code needs the calling Env's LastExitCode -- bash's $?
 	// equivalent; see Env.SetLastExitCode's doc comment.
 	env.Define("exit_code", &Builtin{Name: "exit_code", Fn: func(args []value.Value) (value.Value, error) {

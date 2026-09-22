@@ -8,6 +8,21 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `&` backgrounds any kyu expression now, not just `%cmd` — an
+  in-process job (`status.kind` distinguishes it from a subprocess
+  one) instead of a real OS process. A bare `{ ... }` block is
+  auto-invoked with zero arguments; its result comes back as bytes on
+  the job's `stdout` field, the same as a `%cmd`'s captured output.
+  Local only: `@host{ ... }` still requires `%cmd` for anything
+  backgrounded there. Killing one (`j.ctl = "kill"`) is cooperative —
+  a running `while true {}` or self-recursive call stops at its next
+  iteration/call, not instantly like a real signal; unbounded
+  recursion is additionally depth-bounded on its own, so a missing
+  base case fails cleanly instead of crashing the session. `stop`/
+  `resume`/`signal`/`priority` remain subprocess-only ctl commands.
+
 ## [0.6.0] - 2026-09-20
 
 ### Added

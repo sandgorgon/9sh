@@ -433,8 +433,23 @@ func (continueSignal) Error() string { return "continue outside a loop" }
 // running Body in a fresh child scope (matching evalIf's Then/Else) as
 // long as it's truthy. A nested while's break/continue is caught by its
 // own innermost evalWhile — it never bubbles out to an enclosing loop.
+//
+// Checks env.CancelContext() at the top of every iteration — nil for
+// ordinary (non-backgrounded) evaluation, where this is a no-op; set by
+// evalBackgroundInproc on an in-process background job's own private
+// Env, this is what actually makes a backgrounded `while true {}`
+// killable (see CancelContext's own doc comment for why: Go can't
+// force-kill a goroutine the way a real process can be signaled, so the
+// loop has to check for itself).
 func evalWhile(x *ast.WhileExpr, env *Env) (value.Value, error) {
 	for {
+		if ctx := env.CancelContext(); ctx != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+		}
 		cond, err := evalExpr(x.Cond, env)
 		if err != nil {
 			return nil, err

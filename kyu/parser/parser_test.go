@@ -254,10 +254,12 @@ func TestNativeCallParsesAsExternalCall(t *testing.T) {
 }
 
 // TestNativeCallSupportsBackgrounding confirms `9ed foo &` reaches
-// *ast.Background the same way `%9ed foo &` does -- parseValueExpr only
-// checks the expression's Go type (*ast.ExternalCall), so this works for
-// free once parseNativeCall builds that same type; a regression here
-// would mean the two call forms had silently diverged.
+// *ast.Background the same way `%9ed foo &` does, and specifically as a
+// subprocess job (evalBackground's *ast.ExternalCall branch), not the
+// in-process one -- parseNativeCall builds the exact same
+// *ast.ExternalCall node parseExternalCall does (see its own doc
+// comment), so this works for free; a regression here would mean the
+// two call forms had silently diverged.
 func TestNativeCallSupportsBackgrounding(t *testing.T) {
 	isNative := func(name string) bool { return name == "9ed" }
 	prog := parseOKNative(t, `9ed "/x" &`, isNative)
@@ -535,11 +537,15 @@ func TestBackgroundExternalCall(t *testing.T) {
 	if !ok {
 		t.Fatalf("want Background, got %T", def.Val)
 	}
-	if bg.Call.Name != "sleep" {
-		t.Errorf("want command sleep, got %s", bg.Call.Name)
+	call, ok := bg.Expr.(*ast.ExternalCall)
+	if !ok {
+		t.Fatalf("want Expr = *ast.ExternalCall, got %T", bg.Expr)
 	}
-	if len(bg.Call.Args) != 1 {
-		t.Fatalf("want 1 arg, got %d", len(bg.Call.Args))
+	if call.Name != "sleep" {
+		t.Errorf("want command sleep, got %s", call.Name)
+	}
+	if len(call.Args) != 1 {
+		t.Fatalf("want 1 arg, got %d", len(call.Args))
 	}
 }
 
@@ -551,11 +557,17 @@ func TestBackgroundBareStatement(t *testing.T) {
 	}
 }
 
-func TestBackgroundRejectsNonExternalCall(t *testing.T) {
-	p := New(`j := 5 &`)
-	p.ParseProgram()
-	if len(p.Errors()) == 0 {
-		t.Fatal("backgrounding a non-external-call expression should be a parse error")
+// TestBackgroundAcceptsArbitraryExpr confirms backgrounding is no longer
+// scoped to *ast.ExternalCall -- see ast.Background's own doc comment
+// and kyu/eval's evalBackgroundInproc for the runtime side (an
+// in-process job, not a parse-time restriction).
+func TestBackgroundAcceptsArbitraryExpr(t *testing.T) {
+	for _, src := range []string{`j := 5 &`, `j := { 6 * 7 } &`, `j := f(21) &`} {
+		prog := parseOK(t, src)
+		def := prog.Stmts[0].(*ast.DefineStmt)
+		if _, ok := def.Val.(*ast.Background); !ok {
+			t.Fatalf("%s: want Background, got %T", src, def.Val)
+		}
 	}
 }
 

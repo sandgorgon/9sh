@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
 
@@ -29,13 +30,13 @@ func runErr(t *testing.T, src string) error {
 
 // jobsEnv is a global env with /jobs bound, the same bootstrap
 // cmd/9sh's main does — for tests exercising bind/background/live fields.
+// SetLocalJobManager is wired too (same as main.go's bootstrap — see its
+// own doc comment), so `expr &` for non-%cmd expr (evalBackgroundInproc)
+// works here as well as %cmd &.
 func jobsEnv(t *testing.T) *Env {
 	t.Helper()
-	namespace := ns.New()
-	if err := namespace.BindFS(job.New(job.NewManager()), "", "/jobs", ns.Replace); err != nil {
-		t.Fatalf("bootstrap bind /jobs: %v", err)
-	}
-	return NewGlobalEnv(namespace)
+	env, _ := jobsEnvWithManager(t)
+	return env
 }
 
 // markFullscreen defines fullscreen_programs on env, so a %name call
@@ -1145,6 +1146,143 @@ j.status`, env)
 	}
 }
 
+// TestBackgroundClosureLifecycle confirms `{ ... } &` -- open-item #2, a
+// bare closure literal immediately backgrounded and auto-invoked with
+// zero arguments (see evalBackgroundInproc's own doc comment for why
+// that auto-invoke exists: evaluating a *ast.Closure node on its own
+// just produces a value, it doesn't run the body). No skipUnlessOnPath:
+// unlike every other background test in this file, this never spawns a
+// real subprocess.
+func TestBackgroundClosureLifecycle(t *testing.T) {
+	env := jobsEnv(t)
+	v := runEnv(t, `j := { 6 * 7 } &
+j | wait
+j.stdout`, env)
+	if string(v.(value.Bytes)) != "42" {
+		t.Fatalf("stdout = %q, want %q", v, "42")
+	}
+}
+
+// TestBackgroundCallExprLifecycle confirms the other open-item #2
+// example, `f(21) &` -- a call expression, which (unlike a bare closure
+// literal) already runs when evaluated, so evalBackgroundInproc doesn't
+// need to special-case it at all.
+func TestBackgroundCallExprLifecycle(t *testing.T) {
+	env := jobsEnv(t)
+	v := runEnv(t, `f := { |x| x * 2 }
+j := f(21) &
+j | wait
+j.stdout`, env)
+	if string(v.(value.Bytes)) != "42" {
+		t.Fatalf("stdout = %q, want %q", v, "42")
+	}
+}
+
+// TestBackgroundInprocDoesNotShareEnvWithForeground confirms the
+// snapshot-not-shared design (see evalBackgroundInproc's own doc
+// comment): a variable defined in the background job's own scope must
+// not leak back into the foreground Env backgrounding it ran from --
+// that would mean the two shared live state, exactly what running
+// against a brand-new root Env exists to avoid.
+func TestBackgroundInprocDoesNotShareEnvWithForeground(t *testing.T) {
+	env := jobsEnv(t)
+	runEnv(t, `x := "foreground"
+j := { x := "background"; x } &
+j | wait`, env)
+	v := runEnv(t, `x`, env)
+	if string(v.(value.String)) != "foreground" {
+		t.Fatalf("foreground x = %v, want unchanged %q (background job leaked into foreground Env)", v, "foreground")
+	}
+}
+
+// TestBackgroundWhileLoopKillIsCooperative is the real regression test
+// for open-item #2's hard part: a backgrounded `while true {}` must
+// actually be killable (evalWhile's cancellation check), landing in
+// StateFailed like job.KindInproc's own TestInprocKillIsCooperativeCancellation
+// (job/job_test.go) already establishes for a bare ctx.Done() loop --
+// this is the same thing reached through real kyu source instead.
+func TestBackgroundWhileLoopKillIsCooperative(t *testing.T) {
+	env := jobsEnv(t)
+	runEnv(t, `j := { i := 0; while true { i = i + 1 } } &`, env)
+	// Give the job's goroutine a moment to actually be running the loop
+	// (not merely allocated) before killing it -- AllocInproc's start
+	// spawns a goroutine rather than blocking until it's scheduled, so
+	// unlike a subprocess job's synchronous cmd.Start() (see
+	// TestBackgroundJobKillViaCtlField's own comment), there's a real
+	// (if narrow) race here. A kill landing before the goroutine even
+	// starts would still be caught by evalWhile's very first iteration
+	// check, so this sleep is about testing a genuinely-running loop's
+	// cancellation, not about correctness of the mechanism itself.
+	time.Sleep(20 * time.Millisecond)
+	runEnv(t, `j.ctl = "kill"`, env)
+	v := runEnv(t, `j | wait
+j.status`, env)
+	st := v.(*value.Record)
+	state, _ := st.Get("state")
+	if state.(value.String) != "failed" {
+		t.Fatalf("state = %v, want failed (ctx.Err() surfaces as a plain failure for an in-process job, same as job.KindInproc's own tests)", state)
+	}
+}
+
+// TestBackgroundUnboundedRecursionFailsCleanly is a real regression
+// test found while writing this feature: unbounded self-recursion
+// (`loop := { loop() }`) isn't actually stoppable in time by
+// callClosure's cancellation check alone (see its own doc comment) --
+// plain Go recursion has no natural yield point, so thousands of calls
+// happen in well under a millisecond, blowing the goroutine's stack
+// before any kill could land. That used to be a fatal, unrecoverable
+// runtime error taking down the *entire* 9sh process -- not just this
+// one job -- reachable even in the foreground with no backgrounding at
+// all (`loop()` alone, never mind `&`). maxCallDepth (callable.go) is
+// what actually prevents it: the job now finishes quickly instead of
+// crashing or hanging, its "nested more than N deep" error on stderr
+// like any other kyu runtime error (StateDone, not StateFailed --
+// matching how a subprocess's nonzero exit isn't a job failure either;
+// see evalBackgroundInproc's own doc comment).
+func TestBackgroundUnboundedRecursionFailsCleanly(t *testing.T) {
+	env := jobsEnv(t)
+	runEnv(t, `loop := { loop() }
+j := loop() &`, env)
+	v := runEnv(t, `j | wait
+j.stderr`, env)
+	if !strings.Contains(string(v.(value.Bytes)), "nested more than") {
+		t.Fatalf("stderr = %q, want it to mention recursion depth", v)
+	}
+}
+
+// TestUnboundedRecursionFailsCleanlyInForeground is
+// TestBackgroundUnboundedRecursionFailsCleanly's foreground counterpart
+// -- maxCallDepth applies unconditionally (see callClosure's own doc
+// comment), not only to backgrounded jobs, since the crash it prevents
+// has nothing to do with backgrounding.
+func TestUnboundedRecursionFailsCleanlyInForeground(t *testing.T) {
+	err := runErr(t, `loop := { loop() }
+loop()`)
+	if !strings.Contains(err.Error(), "nested more than") {
+		t.Fatalf("error = %v, want it to mention recursion depth", err)
+	}
+}
+
+// TestBackgroundInprocRejectsRemoteHost confirms evalBackgroundInproc's
+// local-only restriction (see its own doc comment for why: sending a
+// live Go closure across a 9P wire to a different 9sh process is a
+// different, much bigger feature than this implements). Binds a second,
+// independent job.FS at /n/fakehost/jobs -- enough for @fakehost{}'s own
+// walkability check to succeed and set a proxy jobRoot (isProxyJobRoot),
+// without needing a real remote peer; %cmd & remains fully functional
+// through the exact same mount (evalBackgroundSubprocess is unaffected
+// by this restriction).
+func TestBackgroundInprocRejectsRemoteHost(t *testing.T) {
+	env := jobsEnv(t)
+	if err := env.Namespace().BindFS(job.New(job.NewManager()), "", "/n/fakehost/jobs", ns.Replace); err != nil {
+		t.Fatalf("bind /n/fakehost/jobs: %v", err)
+	}
+	err := runEnvErr(t, `@fakehost { 5 & }`, env)
+	if !strings.Contains(err.Error(), "remote host") {
+		t.Fatalf("error = %v, want it to mention backgrounding on a remote host isn't supported", err)
+	}
+}
+
 func TestJobCtlFieldRejectsNonString(t *testing.T) {
 	skipUnlessOnPath(t, "true")
 	env := jobsEnv(t)
@@ -1169,7 +1307,9 @@ func jobsEnvWithManager(t *testing.T) (*Env, *job.Manager) {
 	if err := namespace.BindFS(job.New(mgr), "", "/jobs", ns.Replace); err != nil {
 		t.Fatalf("bootstrap bind /jobs: %v", err)
 	}
-	return NewGlobalEnv(namespace), mgr
+	env := NewGlobalEnv(namespace)
+	env.SetLocalJobManager(mgr)
+	return env, mgr
 }
 
 func TestForegroundExternalCallRoutesThroughJobsWhenNamespacePresent(t *testing.T) {

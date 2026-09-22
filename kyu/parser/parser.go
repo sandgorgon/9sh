@@ -171,7 +171,10 @@ func (p *Parser) parseDefineStmt() ast.Stmt {
 // expression is parsed: a define's RHS, an assignment's RHS, and a bare
 // expression statement) rather than as a general infix/postfix operator,
 // since '&' is a statement-shaped verb ("run this as a job"), not
-// something that composes inside a larger expression.
+// something that composes inside a larger expression. Any expression can
+// be backgrounded now — an *ast.ExternalCall becomes a subprocess job
+// (evalBackground), anything else an in-process one (evalBackgroundInproc,
+// local-only) — see ast.Background's own doc comment.
 func (p *Parser) parseValueExpr() ast.Expr {
 	expr := p.parseExpr(LOWEST)
 	if expr == nil {
@@ -180,13 +183,8 @@ func (p *Parser) parseValueExpr() ast.Expr {
 	if p.peek.Kind != token.AMP {
 		return expr
 	}
-	ext, ok := expr.(*ast.ExternalCall)
-	if !ok {
-		p.errorf("'&' (background) is only supported on an external command call (%%cmd), got %T", expr)
-		return nil
-	}
 	p.next() // cur: expr's last token -> '&'
-	return &ast.Background{Tok: p.cur, Call: ext}
+	return &ast.Background{Tok: p.cur, Expr: expr}
 }
 
 // parseBindStmt parses `bind SRC, DST[, before|after|replace][, ro]`. SRC and
@@ -635,10 +633,11 @@ func (p *Parser) parseExternalCall() ast.Expr {
 // isNativeProgram, e.g. 9ed) needs no '%'/'$' sigil to consume first.
 // Deliberately builds the exact same *ast.ExternalCall node
 // parseExternalCall does, not a new AST type: that's what makes
-// backgrounding (parseValueExpr's *ast.ExternalCall type check, right
-// below), the fullscreen guard (isFullscreenProgram(env, x.Call.Name) in
-// evalBackground), and ordinary job execution (runExternal dispatches on
-// x.Name) all keep working with zero duplicated logic on the eval side.
+// backgrounding (evalBackground's own *ast.ExternalCall branch, taken
+// over evalBackgroundInproc's for any Background whose Expr is one), the
+// fullscreen guard (isFullscreenProgram(env, x.Expr.(*ast.ExternalCall).Name)
+// in evalBackground), and ordinary job execution (runExternal dispatches
+// on x.Name) all keep working with zero duplicated logic on the eval side.
 func (p *Parser) parseNativeCall() ast.Expr {
 	return p.parseExternalCallArgs(p.cur, p.cur.Literal)
 }

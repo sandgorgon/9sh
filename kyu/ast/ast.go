@@ -195,15 +195,17 @@ type ContinueExpr struct {
 	Tok token.Token
 }
 
-// Background is `%cmd args... &`: starts an external command as a job
-// and evaluates to a live job record (its fields backed by the job's
-// namespace files) rather than blocking for output like a bare
-// ExternalCall. Scoped to ExternalCall only for now — backgrounding an
-// arbitrary kyu call would mean a native-inproc job, which has no kyu
-// syntax yet (see kyu/eval's job wiring).
+// Background is `expr &`: runs expr as a job and evaluates to a live
+// job record (its fields backed by the job's namespace files) rather
+// than blocking for its value. When Expr is an *ExternalCall, this is a
+// subprocess job (see kyu/eval's evalBackground) — the original, still
+// remote-capable via @host{}. Anything else is an in-process job (see
+// evalBackgroundInproc): local only, since running arbitrary kyu code
+// means sending a live Go closure, not something a 9P wire protocol can
+// carry to a different 9sh process.
 type Background struct {
 	Tok  token.Token // the '&'
-	Call *ExternalCall
+	Expr Expr
 }
 
 // AtHost is `@host { ... }` — runs the block's job creation (both `&` and

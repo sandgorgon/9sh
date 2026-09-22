@@ -120,20 +120,32 @@ func parseDisposition(s string) (ns.Disposition, error) {
 	}
 }
 
-// evalBackground runs `%cmd args... &`: allocates a subprocess job under
-// /jobs (via the namespace — the same File interface a real 9P client
-// would use, just in-process; see ns.Namespace.Attach), starts it, and
-// returns a live job record whose fields write through to the job's
-// namespace files.
+// evalBackground runs `expr &` (see ast.Background's own doc comment):
+// an *ast.ExternalCall becomes a subprocess job (this function, below,
+// unchanged from before this dispatch existed); anything else becomes
+// an in-process job (evalBackgroundInproc).
+func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
+	call, ok := x.Expr.(*ast.ExternalCall)
+	if !ok {
+		return evalBackgroundInproc(x.Expr, env)
+	}
+	return evalBackgroundSubprocess(call, env)
+}
+
+// evalBackgroundSubprocess runs `%cmd args... &`: allocates a
+// subprocess job under /jobs (via the namespace — the same File
+// interface a real 9P client would use, just in-process; see
+// ns.Namespace.Attach), starts it, and returns a live job record whose
+// fields write through to the job's namespace files.
 //
 // Rejected outright for a fullscreen program (see isFullscreenProgram,
 // fullscreen.go): there's no real screen to hand a backgrounded process
 // -- it isn't in the foreground -- so running it via /jobs like an
 // ordinary command would just start it with no controlling terminal at
 // all, not something a user backgrounding vim/ssh/etc. actually wants.
-func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
-	if isFullscreenProgram(env, x.Call.Name) {
-		return nil, fmt.Errorf("'&': %s needs a live terminal, can't run in the background", x.Call.Name)
+func evalBackgroundSubprocess(call *ast.ExternalCall, env *Env) (value.Value, error) {
+	if isFullscreenProgram(env, call.Name) {
+		return nil, fmt.Errorf("'&': %s needs a live terminal, can't run in the background", call.Name)
 	}
 	namespace := env.Namespace()
 	if namespace == nil {
@@ -142,9 +154,9 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	ctx := context.Background()
 	jobRoot := env.JobRoot()
 
-	argv := make([]string, len(x.Call.Args)+1)
-	argv[0] = x.Call.Name
-	for i, a := range x.Call.Args {
+	argv := make([]string, len(call.Args)+1)
+	argv[0] = call.Name
+	for i, a := range call.Args {
 		v, err := evalExpr(a, env)
 		if err != nil {
 			return nil, err
@@ -245,6 +257,127 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	}
 
 	base, err := walkAll(ctx, root, jobPath(jobRoot, id))
+	if err != nil {
+		return nil, err
+	}
+	return buildJobRecord(ctx, base)
+}
+
+// evalBackgroundInproc runs `expr &` for any expr that isn't an
+// *ast.ExternalCall: an in-process job (job.KindInproc), not a
+// subprocess. Local only -- rejected via isProxyJobRoot the same way a
+// fullscreen program is rejected in evalBackgroundSubprocess, since
+// sending a live Go closure across a 9P wire to a different 9sh process
+// isn't something this implements (that would be a distributed-
+// evaluation feature, not this one).
+//
+// expr runs against a brand-new root Env (NewGlobalEnv), not env
+// itself, seeded with a snapshot of every name env.Names() reports --
+// deliberately not the live env: Env.vars has no locking, and most of
+// Env's other process-wide fields are documented safe only because no
+// two evaluate() calls ever overlap (see e.g. SetFullscreenHandler's
+// doc comment), an invariant a genuinely concurrent background job
+// breaks by construction. The snapshot copies bindings, not values: a
+// captured *value.Record/*value.List (or another closure) still aliases
+// the original, same as an ordinary Go closure capturing a shared
+// slice/map would -- this doesn't newly introduce that class of race,
+// just doesn't try to solve it either.
+//
+// A bare `{ ... }` closure literal immediately backgrounded (the
+// canonical `{ 6 * 7 } &` case) is auto-invoked with zero arguments --
+// evaluating a *ast.Closure node on its own just produces a ClosureVal,
+// it doesn't run the body, and "background this closure value, unrun"
+// isn't a useful job (its whole result would always just be
+// "<closure>"). Anything else (e.g. `f(21) &`, already a call
+// expression) evaluates normally -- it doesn't need this, since
+// evaluating a call expression already runs it.
+//
+// The result value has nowhere structured to go in the job protocol
+// (Status has no slot for an arbitrary kyu value, only success/failure
+// -- see job.Status's own fields), so it's serialized the same way a
+// foreground %cmd's captured stdout already becomes value.Bytes:
+// written as text to the job's stdout, read back via `j.wait` then
+// `j.stdout`, exactly mirroring evalBackgroundSubprocess's own
+// "stdout/stderr are the return channel" convention. A kyu-level error
+// (ErrorVal, or an ordinary Go error from evalExpr) is written to
+// stderr and otherwise treated like a nonzero exit -- not a job
+// failure -- so only real cancellation (a killed job, ctx.Err()) ever
+// produces StateFailed; see evalWhile/callClosure for where that
+// cancellation is actually checked.
+func evalBackgroundInproc(expr ast.Expr, env *Env) (value.Value, error) {
+	namespace := env.Namespace()
+	if namespace == nil {
+		return nil, fmt.Errorf("'&': no namespace attached to this environment (is /jobs bound?)")
+	}
+	jobRoot := env.JobRoot()
+	if host, ok := isProxyJobRoot(jobRoot); ok {
+		return nil, fmt.Errorf("'&': can't background kyu code on a remote host (%s) -- only external commands (%%cmd) can run there", host)
+	}
+	mgr := env.LocalJobManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("'&': no local job manager configured (is this environment fully bootstrapped?)")
+	}
+
+	// NewGlobalEnv, not a bare NewEnv(nil): builtins like cd/checkout
+	// close over the specific Env they were Defined on (see
+	// NewGlobalEnv's own doc comment) -- this is what makes cd() inside
+	// a backgrounded closure call SetCwd on the job's own fresh root,
+	// not on env's root, which matters even though this whole snapshot
+	// already exists to avoid the background job touching env's
+	// mutable state.
+	freshRoot := NewGlobalEnv(namespace)
+	jobEnv := NewEnv(freshRoot)
+	for _, name := range env.Names() {
+		if _, isBuiltin := freshRoot.Get(name); isBuiltin {
+			// Already bound by NewGlobalEnv above, correctly closing
+			// over freshRoot -- copying env's own (foreground-bound)
+			// version over it would silently break that rebinding, e.g.
+			// making a backgrounded cd() mutate the wrong Env.
+			continue
+		}
+		if v, ok := env.Get(name); ok {
+			jobEnv.Define(name, v)
+		}
+	}
+	if cwd := env.Cwd(); cwd != "" {
+		freshRoot.SetCwd(cwd)
+	}
+
+	j := mgr.AllocInproc(func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
+		jobEnv.SetCancelContext(ctx)
+		var result value.Value
+		var err error
+		if closureLit, ok := expr.(*ast.Closure); ok {
+			result, err = callClosure(&ClosureVal{Node: closureLit, Env: jobEnv}, nil)
+		} else {
+			result, err = evalExpr(expr, jobEnv)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			io.WriteString(stderr, err.Error())
+			return nil
+		}
+		if result.Kind() != "null" {
+			text := result.String()
+			if b, ok := result.(value.Bytes); ok {
+				text = string(b)
+			}
+			io.WriteString(stdout, text)
+		}
+		return nil
+	})
+	if err := j.Ctl("start"); err != nil {
+		return nil, fmt.Errorf("'&': starting job: %w", err)
+	}
+
+	ctx := context.Background()
+	root, err := namespace.Attach(ctx, "9sh", "")
+	if err != nil {
+		return nil, err
+	}
+	base, err := walkAll(ctx, root, jobPath(jobRoot, strconv.Itoa(j.ID)))
 	if err != nil {
 		return nil, err
 	}

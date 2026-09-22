@@ -1,10 +1,13 @@
 package eval
 
 import (
+	"context"
 	"os/exec"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/value"
 	"github.com/sandgorgon/9sh/ns"
 )
@@ -14,21 +17,45 @@ import (
 // root Env (by NewGlobalEnv); Namespace() walks up to find it, the same
 // way every other language keeps one thing (here, "what /jobs resolves
 // to") outside the scope-per-block model that vars/Define/Set exist for.
+//
+// mu guards two different things depending on which Env it's locked on:
+// on ANY node, it protects that node's own vars (see Get/Define/Set/
+// Delete/Names, each of which locks e.mu, or n.mu while walking parents,
+// never a different node's); on the root specifically, it additionally
+// protects every field below marked "process-wide" (locked via
+// e.root().mu — see e.g. SetCwd/Cwd). Both uses became necessary once
+// evalBackgroundInproc existed: a closure snapshotted onto a background
+// job's own fresh Env still carries a live reference to whatever Env it
+// was originally *defined* in (ClosureVal.Env, kyu/eval/callable.go) --
+// calling it, or any inner closure it in turn calls, walks right back
+// into that original Env's vars and, via root(), the process-wide
+// fields too. Before background jobs existed, "no two evaluate() calls
+// ever overlap" (still true, and still why cancelCtx below stays a
+// plain field) made all of this safe without locking; a background
+// job's own goroutine calling back into the foreground Env it was
+// snapshotted from is exactly the second, genuinely concurrent access
+// that invariant no longer rules out. ns and interruptHandler already
+// used atomics for a narrower version of this same reason (see
+// SetInterruptHandler's own doc comment) -- this generalizes that.
 type Env struct {
+	mu                 sync.RWMutex
 	vars               map[string]value.Value
 	parent             *Env
 	ns                 atomic.Pointer[ns.Namespace] // swapped for the duration of an in_ns block; see SwapNamespace
-	jobRoot            []string                     // nil = inherit from parent; see JobRoot
-	proxyRecorder      ProxyRecorderFunc            // process-wide, like ns; see ProxyRecorder
-	passthroughBlocked string                       // process-wide, like ns; see SetPassthroughBlocked
-	cwd                string                       // process-wide, like ns; see SetCwd
-	interruptHandler   atomic.Pointer[func()]       // process-wide, like ns, but see SetInterruptHandler for why this one field alone needs real cross-goroutine safety
-	lastExitCode       *int                         // process-wide, like ns; see SetLastExitCode
-	fullscreenHandler  FullscreenHandlerFunc        // process-wide, like ns; see SetFullscreenHandler
-	externalOutputSink ExternalOutputSinkFunc       // process-wide, like ns; see SetExternalOutputSink
-	sourceConfig       SourceConfigFunc             // process-wide, like ns; see SetSourceConfig
-	historyAccess      *HistoryAccess               // process-wide, like ns; see SetHistoryAccess
-	sourceDepth        int                          // process-wide, like ns; see biSource's maxSourceDepth
+	jobRoot            []string                     // nil = inherit from parent; write-once at construction (athost.go), never reassigned on a shared Env afterward -- safe unlocked
+	proxyRecorder      ProxyRecorderFunc            // process-wide, guarded by root().mu; see ProxyRecorder
+	passthroughBlocked string                       // process-wide, guarded by root().mu; see SetPassthroughBlocked
+	cwd                string                       // process-wide, guarded by root().mu; see SetCwd
+	interruptHandler   atomic.Pointer[func()]       // process-wide; see SetInterruptHandler for why this one predates the general fix above and stays a dedicated atomic
+	lastExitCode       *int                         // process-wide, guarded by root().mu; see SetLastExitCode
+	fullscreenHandler  FullscreenHandlerFunc        // process-wide, guarded by root().mu; see SetFullscreenHandler
+	externalOutputSink ExternalOutputSinkFunc       // process-wide, guarded by root().mu; see SetExternalOutputSink
+	sourceConfig       SourceConfigFunc             // process-wide, guarded by root().mu; see SetSourceConfig
+	historyAccess      *HistoryAccess               // process-wide, guarded by root().mu; see SetHistoryAccess
+	sourceDepth        int                          // process-wide, guarded by root().mu; see biSource's maxSourceDepth
+	callDepth          int                          // process-wide, guarded by root().mu; see callClosure's maxCallDepth
+	localJobManager    *job.Manager                 // process-wide; write-once at cmd/9sh's bootstrap, before env is ever shared with another goroutine -- safe unlocked, see SetLocalJobManager
+	cancelCtx          context.Context              // NOT process-wide -- see SetCancelContext
 }
 
 // ExternalOutputSinkFunc receives a foreground %cmd's captured stderr
@@ -111,12 +138,18 @@ func (e *Env) SwapNamespace(n *ns.Namespace) *ns.Namespace {
 // eval-package tests that never call cmd/9sh's bootstrap) means neither
 // builtin is available.
 func (e *Env) SetSourceConfig(fn SourceConfigFunc) {
-	e.root().sourceConfig = fn
+	root := e.root()
+	root.mu.Lock()
+	root.sourceConfig = fn
+	root.mu.Unlock()
 }
 
 // SourceConfig returns the hook set by SetSourceConfig, or nil.
 func (e *Env) SourceConfig() SourceConfigFunc {
-	return e.root().sourceConfig
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.sourceConfig
 }
 
 // HistoryAccess bundles the three operations history()/
@@ -146,12 +179,18 @@ type HistoryAccess struct {
 // no recall history to begin with) means none of the three are
 // available.
 func (e *Env) SetHistoryAccess(a *HistoryAccess) {
-	e.root().historyAccess = a
+	root := e.root()
+	root.mu.Lock()
+	root.historyAccess = a
+	root.mu.Unlock()
 }
 
 // HistoryAccess returns the hook set by SetHistoryAccess, or nil.
 func (e *Env) HistoryAccess() *HistoryAccess {
-	return e.root().historyAccess
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.historyAccess
 }
 
 // SetProxyRecorder configures the hook evalBackground/runExternalViaJob
@@ -160,12 +199,18 @@ func (e *Env) HistoryAccess() *HistoryAccess {
 // (the default) means proxy jobs simply aren't recorded, matching how
 // session history degrades gracefully everywhere else in this codebase.
 func (e *Env) SetProxyRecorder(fn ProxyRecorderFunc) {
-	e.root().proxyRecorder = fn
+	root := e.root()
+	root.mu.Lock()
+	root.proxyRecorder = fn
+	root.mu.Unlock()
 }
 
 // ProxyRecorder returns the hook set by SetProxyRecorder, or nil.
 func (e *Env) ProxyRecorder() ProxyRecorderFunc {
-	return e.root().proxyRecorder
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.proxyRecorder
 }
 
 // SetPassthroughBlocked marks whether a fullscreen %cmd (see
@@ -187,13 +232,19 @@ func (e *Env) ProxyRecorder() ProxyRecorderFunc {
 // fullscreen command there inherits stdio directly. "" (the default)
 // means direct inheritance is allowed.
 func (e *Env) SetPassthroughBlocked(reason string) {
-	e.root().passthroughBlocked = reason
+	root := e.root()
+	root.mu.Lock()
+	root.passthroughBlocked = reason
+	root.mu.Unlock()
 }
 
 // PassthroughBlocked returns the reason set by SetPassthroughBlocked, or
 // "" if direct stdio inheritance is allowed here.
 func (e *Env) PassthroughBlocked() string {
-	return e.root().passthroughBlocked
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.passthroughBlocked
 }
 
 // SetFullscreenHandler registers the hook a fullscreen %cmd (see
@@ -208,13 +259,19 @@ func (e *Env) PassthroughBlocked() string {
 // falls back to an ErrorVal mentioning PassthroughBlocked's reason in
 // that case rather than blocking.
 func (e *Env) SetFullscreenHandler(fn FullscreenHandlerFunc) {
-	e.root().fullscreenHandler = fn
+	root := e.root()
+	root.mu.Lock()
+	root.fullscreenHandler = fn
+	root.mu.Unlock()
 }
 
 // FullscreenHandler returns the hook set by SetFullscreenHandler, or nil
 // if none is currently registered.
 func (e *Env) FullscreenHandler() FullscreenHandlerFunc {
-	return e.root().fullscreenHandler
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.fullscreenHandler
 }
 
 // SetExternalOutputSink registers where a foreground %cmd's captured
@@ -235,13 +292,19 @@ func (e *Env) FullscreenHandler() FullscreenHandlerFunc {
 // (os.Stderr.Write(errOut) in runExternalViaJob), not a hypothetical
 // one.
 func (e *Env) SetExternalOutputSink(fn ExternalOutputSinkFunc) {
-	e.root().externalOutputSink = fn
+	root := e.root()
+	root.mu.Lock()
+	root.externalOutputSink = fn
+	root.mu.Unlock()
 }
 
 // ExternalOutputSink returns the hook set by SetExternalOutputSink, or
 // nil if none is registered (direct os.Stdout/os.Stderr inheritance).
 func (e *Env) ExternalOutputSink() ExternalOutputSinkFunc {
-	return e.root().externalOutputSink
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.externalOutputSink
 }
 
 // SetCwd sets the working directory `%cmd` subprocesses run in —
@@ -252,13 +315,19 @@ func (e *Env) ExternalOutputSink() ExternalOutputSinkFunc {
 // one that called cd. "" (the default) means subprocesses inherit 9sh's
 // own process cwd, unchanged from today's behavior.
 func (e *Env) SetCwd(path string) {
-	e.root().cwd = path
+	root := e.root()
+	root.mu.Lock()
+	root.cwd = path
+	root.mu.Unlock()
 }
 
 // Cwd returns the path set by SetCwd, or "" if cd has never been called
 // (subprocesses should then inherit 9sh's own process cwd as before).
 func (e *Env) Cwd() string {
-	return e.root().cwd
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.cwd
 }
 
 // SetInterruptHandler registers the function a Ctrl-C should call to
@@ -309,13 +378,19 @@ func (e *Env) InterruptHandler() func() {
 // is specifically the "last foreground command" convenience, mirroring
 // what bash's $? tracks.
 func (e *Env) SetLastExitCode(code *int) {
-	e.root().lastExitCode = code
+	root := e.root()
+	root.mu.Lock()
+	root.lastExitCode = code
+	root.mu.Unlock()
 }
 
 // LastExitCode returns the value set by SetLastExitCode, or nil if no
 // foreground external command has completed yet this session.
 func (e *Env) LastExitCode() *int {
-	return e.root().lastExitCode
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.lastExitCode
 }
 
 // JobRoot returns the namespace path prefix job creation should use —
@@ -336,9 +411,65 @@ func (e *Env) JobRoot() []string {
 	return []string{"jobs"}
 }
 
-// Get looks up name in this scope, then outward through parents.
+// SetLocalJobManager registers the *job.Manager backing this process's
+// own local /jobs — process-wide like the namespace, set once by
+// cmd/9sh's bootstrap right where it constructs that Manager and binds
+// it into the namespace. evalBackgroundInproc is the one caller: an
+// in-process background job (arbitrary kyu code, not %cmd) needs the
+// concrete Go value to call Manager.AllocInproc on, since a live Go
+// closure can't be carried across the abstract server.File interface
+// the way argv bytes can for an ordinary %cmd & — see
+// evalBackgroundInproc's own doc comment. Nil until set (e.g. in tests
+// that construct an Env without cmd/9sh's bootstrap), in which case
+// backgrounding non-%cmd kyu code fails with a clear error rather than
+// a nil-pointer panic.
+func (e *Env) SetLocalJobManager(mgr *job.Manager) {
+	e.root().localJobManager = mgr
+}
+
+// LocalJobManager returns what SetLocalJobManager registered, or nil.
+func (e *Env) LocalJobManager() *job.Manager {
+	return e.root().localJobManager
+}
+
+// SetCancelContext registers ctx as the cancellation signal evalWhile
+// and callClosure check on every loop iteration/call (see their own
+// doc comments) — how a killed in-process background job
+// (evalBackgroundInproc) actually stops a runaway `while true {}` or
+// unbounded recursion, since Go can't force-kill a goroutine the way a
+// real process can be signaled.
+//
+// Deliberately NOT process-wide like every other Env hook above,
+// despite living on the same struct: those are all safe only because no
+// two evaluate() calls ever overlap on one Env tree (see e.g.
+// SetFullscreenHandler's doc comment) — the opposite of what this is
+// for. Each in-process background job gets its own brand-new root Env
+// (see evalBackgroundInproc), so this is set exactly once, read only by
+// that job's own single goroutine, and never touched by anything else —
+// a plain field is correct here for the same reason a mutex would be
+// pointless: there is no second goroutine to race with. Contrast
+// SetInterruptHandler, which genuinely does need atomics, because the
+// UI goroutine reads that one from outside the evaluating goroutine.
+func (e *Env) SetCancelContext(ctx context.Context) {
+	e.root().cancelCtx = ctx
+}
+
+// CancelContext returns what SetCancelContext registered, or nil for
+// ordinary (non-backgrounded) evaluation — evalWhile/callClosure's
+// cancellation check is a no-op whenever this is nil.
+func (e *Env) CancelContext() context.Context {
+	return e.root().cancelCtx
+}
+
+// Get looks up name in this scope, then outward through parents. Each
+// level's own vars lookup is locked independently (see Env.mu's own doc
+// comment) and released before recursing to the parent's own, separate
+// lock — never held across the recursive call.
 func (e *Env) Get(name string) (value.Value, bool) {
-	if v, ok := e.vars[name]; ok {
+	e.mu.RLock()
+	v, ok := e.vars[name]
+	e.mu.RUnlock()
+	if ok {
 		return v, true
 	}
 	if e.parent != nil {
@@ -359,28 +490,37 @@ func (e *Env) Names() []string {
 	seen := map[string]bool{}
 	var out []string
 	for n := e; n != nil; n = n.parent {
+		n.mu.RLock()
 		for name := range n.vars {
 			if !seen[name] {
 				seen[name] = true
 				out = append(out, name)
 			}
 		}
+		n.mu.RUnlock()
 	}
 	return out
 }
 
 // Define binds name in this scope (kyu's `:=`), shadowing any outer binding.
 func (e *Env) Define(name string, v value.Value) {
+	e.mu.Lock()
 	e.vars[name] = v
+	e.mu.Unlock()
 }
 
 // Set assigns to an already-defined binding, searching outward (kyu's `=`).
-// It reports whether an existing binding was found.
+// It reports whether an existing binding was found. Each level's own
+// vars is locked independently, same as Get — never held across the
+// recursive call to the parent's own, separate lock.
 func (e *Env) Set(name string, v value.Value) bool {
+	e.mu.Lock()
 	if _, ok := e.vars[name]; ok {
 		e.vars[name] = v
+		e.mu.Unlock()
 		return true
 	}
+	e.mu.Unlock()
 	if e.parent != nil {
 		return e.parent.Set(name, v)
 	}
@@ -392,10 +532,13 @@ func (e *Env) Set(name string, v value.Value) bool {
 // holds the name, mirroring Set's shadowing rules. Reports whether a
 // binding was found and removed.
 func (e *Env) Delete(name string) bool {
+	e.mu.Lock()
 	if _, ok := e.vars[name]; ok {
 		delete(e.vars, name)
+		e.mu.Unlock()
 		return true
 	}
+	e.mu.Unlock()
 	if e.parent != nil {
 		return e.parent.Delete(name)
 	}

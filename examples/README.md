@@ -10,7 +10,7 @@ the real binary (not just written prose). Run any of them directly:
 | File | Covers |
 |---|---|
 | `01_namespace_and_files.ky` | `bind`, `glob`, `ls`, `stat`, `cat`, `format_time`/`humanize_time` |
-| `02_jobs_and_processes.ky` | `%cmd`, backgrounding with `&`, `j.status`/`j \| wait`, `ps()`, `&&`/`\|\|` chaining, `exit_code()` |
+| `02_jobs_and_processes.ky` | `%cmd`, backgrounding with `&` (subprocess and in-process jobs), `j.status`/`j \| wait`, `ps()`, `&&`/`\|\|` chaining, `exit_code()` |
 | `03_data_pipelines.ky` | `where`/`select`/`sort_by`/`group_by`/`each`, `sum`/`min`/`max`/`avg`/`any`, `round` |
 | `04_strings_and_formatting.ky` | `split`/`trim`/`join`/`contains`/`starts_with`/`ends_with`/`index_of`, `pad_left`/`pad_right`/`repeat`/`len`, `to_int`, `format` |
 | `05_control_flow_and_closures.ky` | `while`/`break`/`continue`, self-recursive closures, default parameters, `error()`/`?`, errors-as-values in a pipeline |

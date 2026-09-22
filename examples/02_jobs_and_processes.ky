@@ -20,17 +20,33 @@ after := j.status.state
 # the %echo the chain above ran.
 chain_result := exit_code()
 
+# `&` isn't only for %cmd -- any kyu expression can be backgrounded as
+# an in-process job instead of a subprocess one (status.kind says
+# which). A bare `{ ... }` block is auto-invoked with zero arguments;
+# its result comes back the same way a %cmd's captured stdout does --
+# as bytes on the job's own stdout field (try `inproc_job.stdout` at
+# the interactive prompt to see 42; format()'s `{}` below shows Bytes
+# as a "<N bytes>" summary instead, the same as it would for any %cmd's
+# captured output). A backgrounded while-true or unbounded self-
+# recursion is killable exactly like a subprocess job too
+# (`inproc_job.ctl = "kill"`), just cooperative rather than a real
+# signal -- there's no OS process to send one to.
+inproc_job := { 6 * 7 } &
+inproc_job | wait
+inproc_kind := inproc_job.status.kind
+
 # ps() is the structured, no-checkout-needed view of every job at
 # /jobs -- "every command is a job" is load-bearing, not incidental:
-# the background sleep *and* both foreground commands in the chain
-# above all show up here, which is what makes session history
-# meaningful in real use.
+# the background sleep, the in-process job above, and both foreground
+# commands in the chain above all show up here, which is what makes
+# session history meaningful in real use.
 job_count := ps() | count
 
 format(
-    "background job went from '{}' to '{}'; chained command's exit code was {}; {} job(s) total now recorded at /jobs",
+    "background job went from '{}' to '{}'; chained command's exit code was {}; the { 6 * 7 } & job's kind is '{}'; {} job(s) total now recorded at /jobs",
     before,
     after,
     chain_result,
+    inproc_kind,
     job_count,
 )

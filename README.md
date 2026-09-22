@@ -102,11 +102,31 @@ introspection and safety, regex and collections).
 - `%cmd` calls out to an ordinary Linux binary; a `%cmd ... &` job is a
   live record — `j.status`, `j.ctl = "stop"`, `j | wait` all read/write
   through to real namespace files, not a snapshot.
+- `&` isn't only for `%cmd` — any kyu expression can be backgrounded,
+  as an in-process job instead of a subprocess one (`status.kind` says
+  which, `ps()` lists both together). A bare `{ ... }` block is
+  auto-invoked with zero arguments (`{ slow_thing() } &`, not just
+  `f(x) &`, which was already a call); its result comes back the same
+  way a `%cmd`'s captured stdout does — bytes on the job's own `stdout`
+  field, once it reaches a terminal state. Local only: backgrounding
+  kyu code inside `@host{ ... }` is a clear error, unlike `%cmd &`,
+  which works there — running arbitrary kyu on a remote peer would mean
+  shipping a live closure across the wire, a different, much bigger
+  feature than this. Killing one is cooperative, not a real signal —
+  there's no OS process to send one to, so a backgrounded `while true
+  {}` or unbounded self-recursion only actually stops at its next loop
+  iteration or function call after `j.ctl = "kill"`; both are also
+  bounded on their own regardless (an in-process job's recursion can't
+  exceed a fixed depth before erroring, so a bug like a missing base
+  case fails cleanly instead of crashing the whole session).
 - A job's `ctl` file takes one command per write: `start` (begin a
   pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
   `signal NAME` (`signal HUP`), `priority N` (the nice value of a running
   subprocess job), and `detach` (sets the `detached` flag `status` and
-  `ps()` report; the process itself is unaffected). An unknown command is
+  `ps()` report; the process itself is unaffected). `stop`/`resume`/
+  `signal`/`priority` are subprocess-only — an in-process job rejects
+  them (there's no real process to pause, signal, or renice), but
+  `start`/`kill`/`detach` work on either kind. An unknown command is
   an error, never a silent no-op. There is no working `resize`: jobs run
   over pipes, not a pty, so it is recognized only to answer that there
   is no terminal to resize. A program that needs a terminal is a

@@ -74,11 +74,18 @@ func biSource(env *Env, args []value.Value) (value.Value, error) {
 	}
 
 	global := env.root()
+	global.mu.Lock()
 	if global.sourceDepth >= maxSourceDepth {
+		global.mu.Unlock()
 		return nil, fmt.Errorf("source: %s: nested more than %d deep (does it source itself?)", p, maxSourceDepth)
 	}
 	global.sourceDepth++
-	defer func() { global.sourceDepth-- }()
+	global.mu.Unlock()
+	defer func() {
+		global.mu.Lock()
+		global.sourceDepth--
+		global.mu.Unlock()
+	}()
 
 	ps := parser.New(string(src), parser.WithNativeProgramLookup(func(name string) bool {
 		return isNativeProgram(global, name)

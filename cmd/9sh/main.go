@@ -286,6 +286,14 @@ func bootstrap(listenAddr, listenUnixPath string, lo listenOpts) (*eval.Env, *se
 		})
 	}
 	env := eval.NewGlobalEnv(namespace)
+	// The Go value backing /jobs above, not just its namespace path: an
+	// in-process background job (arbitrary kyu code via `&`, not %cmd)
+	// needs the concrete *job.Manager to call AllocInproc on, since a
+	// live Go closure can't be carried across the abstract 9P File
+	// interface the way argv bytes can — see evalBackgroundInproc's own
+	// doc comment. %cmd & is unaffected; it still only ever reaches
+	// /jobs through the namespace, same as always.
+	env.SetLocalJobManager(mgr)
 	if recorder != nil {
 		// The local-side half of @host{} session recording: the remote
 		// peer's own Recorder (if it has one) already logs an ordinary

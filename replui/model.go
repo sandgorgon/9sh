@@ -123,6 +123,33 @@ type fullscreenExitedMsg struct{ err error }
 type toggleHelpMsg struct{}
 type closeHelpMsg struct{}
 
+// evalStartedMsg is submit()'s tui.Cmd result -- not the evaluation
+// itself (a real trap: *tui.App resolves a Cmd returned from the
+// focused widget's HandleEvent synchronously, on its own event-loop
+// goroutine, via resolveWidgetCmd, exactly because every built-in
+// widget's own callback-style Cmd only ever repackages a Msg it
+// already computed, never blocking work -- see resolveWidgetCmd's own
+// doc comment in package tui. Putting the actual eval.Eval call inside
+// this Cmd's closure, as an earlier version of this fix did, silently
+// reintroduced the very freeze it was meant to fix: it just moved the
+// blocking call from Model.Update into resolveWidgetCmd instead, still
+// on App.Run's one event-loop goroutine). Handled in Update purely to
+// start the redraw tick (see redrawTickMsg) so w.busy's eventual
+// resolution -- and Ctrl+C's actual effect on the running command --
+// become visible without needing an unrelated keypress first; the
+// evaluate() call it names runs on a genuine goroutine submit() spawns
+// itself, reporting back via TakePendingMsg/evalDoneMsg instead (see
+// both their own doc comments).
+type evalStartedMsg struct{}
+
+// evalDoneMsg is what kyuReplWidget.TakePendingMsg reports once
+// submit()'s background evaluate() call (see its own doc comment for
+// why it has to run this way, not as a Cmd) finishes: its evalResult is
+// ready to be applied back to the one live *kyuReplWidget -- via
+// applyEvalResult, on this, the UI goroutine, same as everything else
+// Update touches.
+type evalDoneMsg struct{ result evalResult }
+
 type redrawTickMsg struct{}
 
 // redrawInterval balances "fullscreen output shows up promptly" against
@@ -130,12 +157,17 @@ type redrawTickMsg struct{}
 const redrawInterval = 50 * time.Millisecond
 
 // redrawTickCmd self-reschedules (see redrawTickMsg's handling in
-// Update) for as long as a fullscreen attachment is live.
-// widget.Terminal's own doc comment explains why this is needed: a
-// hosted pty's output updates the widget's internal vt.Screen state
+// Update) for as long as a fullscreen attachment is live, or a
+// background evaluate() call is (m.replWidget.busy). widget.Terminal's
+// own doc comment explains why this is needed for the fullscreen case:
+// a hosted pty's output updates the widget's internal vt.Screen state
 // continuously in a background goroutine, but that only becomes
 // visible the next time the App happens to render a frame for any
-// other reason.
+// other reason. The busy case is the same gap for
+// kyuReplWidget.TakePendingMsg: it's only ever drained by a Dispatch
+// call, so without this tick, a foreground %cmd's completion (or an
+// interrupted one, post-Ctrl+C) would only show up whenever the user
+// next happened to press some unrelated key.
 func redrawTickCmd() tui.Cmd {
 	return func() tui.Msg {
 		time.Sleep(redrawInterval)
@@ -158,7 +190,7 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		}
 		m.fullscreen = nil
 	case redrawTickMsg:
-		if m.fullscreen != nil {
+		if m.fullscreen != nil || m.replWidget.busy {
 			return m, redrawTickCmd()
 		}
 		m.tickRunning = false
@@ -166,6 +198,14 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 		m.helpOpen = !m.helpOpen
 	case closeHelpMsg:
 		m.helpOpen = false
+	case evalStartedMsg:
+		if m.tickRunning {
+			return m, nil
+		}
+		m.tickRunning = true
+		return m, redrawTickCmd()
+	case evalDoneMsg:
+		return m, m.replWidget.applyEvalResult(mm.result)
 	}
 	return m, nil
 }

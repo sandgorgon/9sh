@@ -130,13 +130,34 @@ func dispatchAll(app *tui.App, cmds []tui.Cmd) {
 
 // typeLineAndSubmit drives the real HandleInput path (not
 // kyuReplWidget.HandleEvent directly) to submit src as a top-level kyu
-// expression — used below to get something into the transcript/history
-// before exercising the fullscreen round trip.
-func typeLineAndSubmit(app *tui.App, src string) {
+// expression, and waits for it to actually finish, before returning --
+// used below to get something into the transcript/history before
+// exercising the fullscreen round trip. Safe to run every Cmd inline
+// via dispatchAll, even for a foreground %cmd: submit() spawns its own
+// background goroutine for the actual evaluate() call and hands back
+// only a trivial, instantly-resolvable Cmd (evalStartedMsg -- see its
+// own doc comment for why that split matters), so that goroutine is
+// still genuinely in flight when this call returns to dispatchAll --
+// the wait below (polling w.busy, resolved by repeatedly Dispatching a
+// no-op the same way TestFullscreenAttachRendersTerminalAndRestoresOnExit
+// already does for widget.Terminal's own PendingMsgSource, since that's
+// what drains kyuReplWidget.TakePendingMsg -- see its own doc comment)
+// is what makes the transcript actually contain src's result by the
+// time this returns, matching what every caller here expects.
+func typeLineAndSubmit(t *testing.T, app *tui.App, w *kyuReplWidget, src string) {
+	t.Helper()
 	for _, r := range src {
 		dispatchAll(app, app.HandleInput(input.KeyEvent{Rune: r}))
 	}
 	dispatchAll(app, app.HandleInput(input.KeyEvent{Key: input.KeyEnter}))
+	deadline := time.Now().Add(5 * time.Second)
+	for w.busy && time.Now().Before(deadline) {
+		app.Dispatch(struct{}{})
+		time.Sleep(time.Millisecond)
+	}
+	if w.busy {
+		t.Fatalf("typeLineAndSubmit(%q): still busy 5s after submitting", src)
+	}
 }
 
 // TestFullscreenRoundTripPreservesTranscriptAndHistory is the
@@ -156,7 +177,7 @@ func TestFullscreenRoundTripPreservesTranscriptAndHistory(t *testing.T) {
 	app := tui.NewApp(m, 40, 10)
 	defer app.Close()
 
-	typeLineAndSubmit(app, "40 + 2")
+	typeLineAndSubmit(t, app, m.replWidget, "40 + 2")
 	forceRenders(app, 1)
 	if buf := app.Buffer().String(); !strings.Contains(buf, "42") {
 		t.Fatalf("setup: expected 42 in the transcript before fullscreen:\n%s", buf)
@@ -211,6 +232,73 @@ func TestFullscreenAttachRendersTerminalAndRestoresOnExit(t *testing.T) {
 	forceRenders(app, 1)
 	if buf := app.Buffer().String(); !strings.Contains(buf, "9sh>") {
 		t.Fatalf("expected the kyu-repl prompt back on screen after the fullscreen program exited:\n%s", buf)
+	}
+}
+
+// TestCtrlCInterruptsRunningForegroundCommand is the end-to-end
+// regression test for real gap #1 (the TUI's Ctrl+C freeze): submitting
+// a long-running foreground %cmd must not block the event loop from
+// handling further input, and Ctrl+C must reach the running process's
+// real interrupt handler and end it well before it would finish on its
+// own -- see kyurepl.go's busy/submit/evaluate/TakePendingMsg doc
+// comments for the mechanism (Env.InterruptHandler, already wired by
+// runExternalDirect/runExternalViaJob for every foreground %cmd; the
+// only thing that was ever missing was the TUI actually calling it).
+// `sleep 20` is run with a nil namespace (Namespace() == nil), so this
+// exercises runExternalDirect's interrupt handler specifically -- the
+// same one `9sh -repl`'s own real SIGINT already used.
+func TestCtrlCInterruptsRunningForegroundCommand(t *testing.T) {
+	skipUnlessOnPath(t, "sleep")
+	m := New(eval.NewGlobalEnv(nil))
+	app := tui.NewApp(m, 40, 10)
+	defer app.Close()
+
+	for _, r := range `%sleep 20` {
+		dispatchAll(app, app.HandleInput(input.KeyEvent{Rune: r}))
+	}
+	// submit()'s background goroutine (see its own doc comment) is
+	// spawned here, inline, before HandleInput even returns -- so busy
+	// is already true and the subprocess is already starting by the
+	// time this call does.
+	dispatchAll(app, app.HandleInput(input.KeyEvent{Key: input.KeyEnter}))
+
+	if !m.replWidget.busy {
+		t.Fatal("expected busy=true immediately after submitting, before evaluate() has finished")
+	}
+
+	// The event loop must stay responsive while sleep runs in the
+	// background -- this dispatch (an ordinary keystroke, a no-op while
+	// busy) is what used to be impossible until the whole command
+	// finished, back when evaluate() ran inline on this goroutine (or,
+	// in an earlier version of this fix, inside the widget's own
+	// returned Cmd -- see evalStartedMsg's doc comment for why that's
+	// just as bad).
+	dispatchAll(app, app.HandleInput(input.KeyEvent{Rune: 'x'}))
+
+	// Retried, not sent once: Env.SetInterruptHandler only gets called
+	// once the background goroutine has actually reached cmd.Start()
+	// inside runExternalDirect (see its own doc comment), which racing
+	// this test goroutine can easily still be a few scheduler ticks away
+	// from -- a Ctrl+C that lands before then is simply dropped (matching
+	// a real shell's "Ctrl-C at an idle prompt does nothing"), the same
+	// as a user's first keypress sometimes losing that exact race. Each
+	// dispatched Ctrl+C's own Dispatch call (inside app.HandleInput's
+	// underlying handling) is also what picks up TakePendingMsg's
+	// evalDoneMsg once the interrupted sleep actually exits (see its own
+	// doc comment) -- there's no real App.Run loop or redraw tick running
+	// in this test to do that automatically.
+	deadline := time.Now().Add(5 * time.Second)
+	for m.replWidget.busy && time.Now().Before(deadline) {
+		dispatchAll(app, app.HandleInput(input.KeyEvent{Rune: 'c', Mod: input.ModCtrl}))
+		time.Sleep(10 * time.Millisecond)
+	}
+	if m.replWidget.busy {
+		t.Fatal("Ctrl+C did not interrupt `sleep 20` within 5s")
+	}
+
+	forceRenders(app, 1)
+	if buf := app.Buffer().String(); !strings.Contains(buf, "9sh>") {
+		t.Fatalf("expected the prompt back after the interrupt:\n%s", buf)
 	}
 }
 

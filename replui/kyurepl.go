@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
@@ -121,12 +122,37 @@ type kyuReplWidget struct {
 	cursor  int // rune index into []rune(input), 0..len(runes(input))
 	focused bool
 
-	// pendingFullscreen is set by attachFullscreen (registered as this
-	// widget's eval.FullscreenHandlerFunc for the duration of each
-	// evaluate() call) when the source just evaluated turned out to be a
-	// fullscreen %cmd (see kyu/eval's runExternalFullscreen). handleKey's
-	// Enter case consumes it right after submit() returns, turning it
-	// into a startFullscreenMsg Cmd -- see consumeFullscreenCmd.
+	// busy is true from the moment submit() hands a non-blank source off
+	// to a background evaluate() call until its result comes back
+	// through TakePendingMsg/applyEvalResult (see submit's and
+	// TakePendingMsg's own doc comments). handleKey checks this before
+	// anything else: while busy, every key except Ctrl+C (which calls
+	// Env.InterruptHandler instead of its usual clipboard-copy binding)
+	// is a no-op. That's what makes a second concurrent evaluate() call
+	// impossible -- Env's fullscreen/output-sink/history hooks are
+	// process-wide, single-slot fields (see evaluate's own doc comment)
+	// that assume evaluate() calls never overlap; busy is the thing that
+	// now actually guarantees that, since evaluate() no longer runs on
+	// the same goroutine as key handling.
+	busy bool
+
+	// mu guards pendingEval, the one piece of state submit()'s
+	// background goroutine and TakePendingMsg (called from App's own
+	// goroutine) both touch -- see TakePendingMsg's own doc comment for
+	// why a plain field can't be used here the way w.lines etc. are
+	// (those are only ever touched by whichever single goroutine
+	// currently owns w; pendingEval is the sole exception, mirroring
+	// widget.Terminal's own exited/exitErr/mu).
+	mu          sync.Mutex
+	pendingEval *evalResult
+
+	// pendingFullscreen is set by applyEvalResult, from evalResult.
+	// fullscreen, when the source just evaluated turned out to be a
+	// fullscreen %cmd (see kyu/eval's runExternalFullscreen and
+	// evaluate's own doc comment for how that reaches evalResult without
+	// evaluate touching w directly). applyEvalResult itself consumes it
+	// right after, turning it into a startFullscreenMsg Cmd -- see
+	// consumeFullscreenCmd.
 	pendingFullscreen *fullscreenAttach
 
 	// history is every submitted top-level input (the full, possibly
@@ -431,6 +457,23 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	ctrl := ke.Mod&input.ModCtrl != 0
 	alt := ke.Mod&input.ModAlt != 0
 
+	// While a background evaluate() is in flight, every key except
+	// Ctrl+C is a no-op -- see busy's own doc comment for why this also
+	// has to hold for Ctrl-R/search, not just ordinary editing. Ctrl+C
+	// here reaches Env.InterruptHandler directly (a decoded keystroke,
+	// not a real SIGINT: raw mode means the kernel never raises one for
+	// Ctrl+C while this widget owns the terminal), the same interrupt
+	// path `-repl`'s real SIGINT already uses for a foreground %cmd --
+	// see Env.SetInterruptHandler's doc comment.
+	if w.busy {
+		if ctrl && ke.Rune == 'c' && w.env != nil {
+			if fn := w.env.InterruptHandler(); fn != nil {
+				fn()
+			}
+		}
+		return nil
+	}
+
 	if ctrl && ke.Rune == 'r' {
 		w.searchStep()
 		return nil
@@ -470,10 +513,7 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	case ke.Key == input.KeyTab && !ctrl && !alt:
 		w.completeTab()
 	case ke.Key == input.KeyEnter:
-		w.submit()
-		if cmd := w.consumeFullscreenCmd(); cmd != nil {
-			return cmd
-		}
+		return w.submit()
 	case ke.Key == input.KeyBackspace:
 		w.backspace()
 	case ke.Key == input.KeyDelete:
@@ -510,11 +550,15 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	case ctrl && ke.Rune == 'l':
 		w.clearTranscript()
 	case ctrl && ke.Rune == 'c':
-		// Not Ctrl+Shift+C: most terminals (including VTE/gnome-
-		// terminal, this project's own standing verification target —
-		// see the "Real-terminal testing technique" design-doc section)
-		// send the identical byte for Ctrl+C and Ctrl+Shift+C on a
-		// plain letter key, only genuinely distinguishable with a
+		// Only reached while idle (w.busy's case above returns first
+		// otherwise, calling InterruptHandler instead) -- the
+		// conventional terminal split: Ctrl+C interrupts a running
+		// foreground job, and is free for something else when there
+		// isn't one. Not Ctrl+Shift+C: most terminals (including VTE/
+		// gnome-terminal, this project's own standing verification
+		// target — see the "Real-terminal testing technique" design-doc
+		// section) send the identical byte for Ctrl+C and Ctrl+Shift+C
+		// on a plain letter key, only genuinely distinguishable with a
 		// kitty-keyboard-protocol-aware terminal (term.Capabilities.
 		// KittyKeyboard, not assumable). Alt+C for "just what's on
 		// screen" instead avoids that ambiguity entirely — Alt+<letter>
@@ -869,10 +913,7 @@ func (w *kyuReplWidget) searchFrom(start int) {
 func (w *kyuReplWidget) handleSearchKey(ke input.KeyEvent) tui.Cmd {
 	switch {
 	case ke.Key == input.KeyEnter:
-		w.exitSearch(true)
-		if cmd := w.consumeFullscreenCmd(); cmd != nil {
-			return cmd
-		}
+		return w.exitSearch(true)
 	case ke.Key == input.KeyEsc:
 		w.exitSearch(false)
 	case ke.Key == input.KeyBackspace:
@@ -891,12 +932,14 @@ func (w *kyuReplWidget) handleSearchKey(ke input.KeyEvent) tui.Cmd {
 // loaded as the input (if there was ever a match — otherwise w.input
 // is simply whatever it already was before search started, since
 // searchStep never touches it). doSubmit (Enter) additionally runs it
-// through the real submit()/evaluate() path, matching bash's
-// reverse-i-search, where Enter runs the found command immediately;
-// Esc (doSubmit false) just leaves it in the input line for further
-// editing, cursor at the end, the same placement historyPrev already
-// uses.
-func (w *kyuReplWidget) exitSearch(doSubmit bool) {
+// through the real submit() path (see submit's own doc comment),
+// matching bash's reverse-i-search, where Enter runs the found command
+// immediately -- its returned Cmd is passed through so a fullscreen
+// attach from that submission still reaches Model the same way a plain
+// Enter's does. Esc (doSubmit false) just leaves it in the input line
+// for further editing, cursor at the end, the same placement
+// historyPrev already uses.
+func (w *kyuReplWidget) exitSearch(doSubmit bool) tui.Cmd {
 	w.searchMode = false
 	if w.searchIndex < len(w.history) {
 		w.input = w.history[w.searchIndex]
@@ -904,8 +947,9 @@ func (w *kyuReplWidget) exitSearch(doSubmit bool) {
 	}
 	w.searchQuery = ""
 	if doSubmit {
-		w.submit()
+		return w.submit()
 	}
+	return nil
 }
 
 // submit inserts a newline at the cursor and keeps editing if the
@@ -915,7 +959,21 @@ func (w *kyuReplWidget) exitSearch(doSubmit bool) {
 // mid-line (e.g. Home, then Enter, to open a new line above what's
 // already there) — append-only was fine when this widget had no cursor
 // movement at all.
-func (w *kyuReplWidget) submit() {
+//
+// The actual evaluation does not happen inline, and — a real trap,
+// see evalStartedMsg's own doc comment for the full story — it does
+// NOT happen inside the returned tui.Cmd either: submit spawns a real
+// goroutine itself and returns only a trivial, already-computed
+// evalStartedMsg for the caller to run. w.busy blocks handleKey from
+// calling submit() again (or touching anything evaluate's Env hooks
+// touch) until the matching evalDoneMsg comes back through
+// TakePendingMsg/applyEvalResult -- see busy's own doc comment.
+// Callers that already know a Cmd here is meaningless (in particular
+// the widget-only tests in kyurepl_test.go, which construct a bare
+// *kyuReplWidget with no Model/App to drive TakePendingMsg for them)
+// call applyEvalResult(w.evaluate(src)) directly instead of going
+// through submit() -- see TestHistoryBuiltinsReachThisWidget.
+func (w *kyuReplWidget) submit() tui.Cmd {
 	rs := w.runes()
 	withNewline := make([]rune, 0, len(rs)+1)
 	withNewline = append(withNewline, rs[:w.cursor]...)
@@ -925,12 +983,11 @@ func (w *kyuReplWidget) submit() {
 	if parser.BracketDepth(candidate) > 0 {
 		w.input = candidate
 		w.cursor++
-		return
+		return nil
 	}
 	lines, _, _ := w.renderInput()
 	w.lines = append(w.lines, lines...)
 	src := w.input
-	w.evaluate(src)
 	if trimmedNonEmpty(src) {
 		if w.historyUnique() {
 			w.removeHistoryOccurrences(src)
@@ -949,6 +1006,44 @@ func (w *kyuReplWidget) submit() {
 	// scrollOffset's own doc comment) this needs to be unconditional:
 	// you just typed something, you want to see what happened.
 	w.scrollOffset = 0
+	if !trimmedNonEmpty(src) {
+		// Matches evaluate()'s own no-op-on-blank-input guard -- no
+		// point spinning up a goroutine (and going busy) for an Enter
+		// that evaluate() would immediately no-op on anyway.
+		return nil
+	}
+	w.busy = true
+	go func() {
+		res := w.evaluate(src)
+		w.mu.Lock()
+		w.pendingEval = &res
+		w.mu.Unlock()
+	}()
+	// This Cmd's own closure does no blocking work -- see
+	// evalStartedMsg's doc comment for why that specifically matters
+	// here, unlike an ordinary Cmd.
+	return func() tui.Msg { return evalStartedMsg{} }
+}
+
+// TakePendingMsg implements tui.PendingMsgSource, the same mechanism
+// widget.Terminal uses to report a background goroutine's result with
+// no HandleEvent call of its own to return a Cmd from (see its own doc
+// comment): App.Dispatch calls this on every widget in the tree after
+// every render, so whatever submit()'s goroutine placed in pendingEval
+// surfaces as an evalDoneMsg on the next Dispatch that happens to run --
+// a real keystroke's own Dispatch, or the redraw tick Model starts
+// while w.busy is true (see redrawTickMsg's doc comment) so completion
+// doesn't have to wait for the user to press an unrelated key. Must
+// consume pendingEval so it's never reported twice.
+func (w *kyuReplWidget) TakePendingMsg() tui.Msg {
+	w.mu.Lock()
+	res := w.pendingEval
+	w.pendingEval = nil
+	w.mu.Unlock()
+	if res == nil {
+		return nil
+	}
+	return evalDoneMsg{result: *res}
 }
 
 // nativeProgramLookup builds the `func(string) bool` lexer.Lexer/
@@ -965,37 +1060,98 @@ func (w *kyuReplWidget) nativeProgramLookup() func(string) bool {
 	return func(name string) bool { return eval.IsNativeProgram(w.env, name) }
 }
 
-func (w *kyuReplWidget) evaluate(src string) {
+// evalResult is what evaluate produces -- the replLines to append to the
+// transcript (any stderr the command captured, in the order it arrived,
+// followed by the successful result or the error) and a fullscreen
+// attachment if the command that just ran needs one. It's a plain
+// returned value rather than something evaluate applies to w directly,
+// so evaluate can run safely on the background goroutine submit()
+// spawns for it (see submit's own doc comment): w.lines and
+// w.pendingFullscreen are also read by Paint on the UI goroutine, so
+// only applyEvalResult, always called from whichever single goroutine
+// owns w, may touch them.
+type evalResult struct {
+	lines      []replLine
+	fullscreen *fullscreenAttach
+}
+
+// applyEvalResult appends res's transcript lines, clears w.busy, and --
+// if res carries a fullscreen attachment -- stages it and returns the
+// Cmd that hands it to Model, the same way this widget always has (see
+// consumeFullscreenCmd). This is exactly the tail end evaluate() itself
+// used to run inline, before evaluate had to move off the UI goroutine
+// (see evalResult's doc comment) -- callers are Model.Update, handling
+// the evalDoneMsg TakePendingMsg reports once submit()'s background
+// goroutine finishes, and a handful of kyurepl_test.go tests that call
+// evaluate() directly with no Model/App in play to apply its result for
+// them (e.g. TestHistoryBuiltinsReachThisWidget).
+func (w *kyuReplWidget) applyEvalResult(res evalResult) tui.Cmd {
+	w.lines = append(w.lines, res.lines...)
+	w.busy = false
+	if res.fullscreen == nil {
+		return nil
+	}
+	w.pendingFullscreen = res.fullscreen
+	return w.consumeFullscreenCmd()
+}
+
+// evaluate parses and evaluates src, returning what happened as an
+// evalResult rather than mutating w directly -- see evalResult's own
+// doc comment for why. Called from the background goroutine submit()
+// spawns, so this runs on a goroutine of its own, concurrently with
+// Paint on the UI goroutine:
+// it must never touch w.lines or w.pendingFullscreen itself (only
+// applyEvalResult may, once this returns). w.history, via the
+// SetHistoryAccess hooks below, stays fine to touch directly exactly as
+// before: Paint never reads it, and handleKey's busy gate (see busy's
+// own doc comment) keeps every history-editing key (Up/Down/Ctrl-R)
+// from running while an evaluate() is in flight, so nothing else
+// touches it concurrently either.
+func (w *kyuReplWidget) evaluate(src string) evalResult {
 	if !trimmedNonEmpty(src) {
-		return
+		return evalResult{}
 	}
 	p := parser.New(src, parser.WithNativeProgramLookup(w.nativeProgramLookup()))
 	prog := p.ParseProgram()
 	if errs := p.Errors(); len(errs) > 0 {
+		var res evalResult
 		for _, e := range errs {
-			w.lines = append(w.lines, replLine{text: e.Error(), style: errorStyle})
+			res.lines = append(res.lines, replLine{text: e.Error(), style: errorStyle})
 		}
-		return
+		return res
 	}
-	// Registered only for this one synchronous Eval call, same
-	// set-before/clear-after pattern Env.SetInterruptHandler already
-	// uses -- safe because evaluate() calls never overlap (one dispatch
-	// goroutine). See attachFullscreen's doc comment for what this
-	// actually does. w.env is nil in a handful of widget-behavior-only
-	// tests that don't exercise evaluation semantics -- guarded the same
-	// way eval.Eval below already tolerates a nil Env for those.
+	// Registered only for this one Eval call, same set-before/clear-after
+	// pattern Env.SetInterruptHandler already uses -- safe because
+	// evaluate() calls never overlap: w.busy keeps handleKey from
+	// starting a second one (see busy's own doc comment) while Env's
+	// fullscreen/output-sink/history hooks are process-wide, single-slot
+	// fields that assume exactly that. w.env is nil in a handful of
+	// widget-behavior-only tests that don't exercise evaluation
+	// semantics -- guarded the same way eval.Eval below already
+	// tolerates a nil Env for those.
 	//
-	// SetExternalOutputSink is registered the same way, for the same
-	// reason a bare %cmd's stderr must never reach the real fd directly
-	// while this widget owns the screen -- see Env.SetExternalOutputSink
-	// and appendExternalStderr's own doc comments. SetHistoryAccess is
-	// registered identically, so history()/history_delete/history_clear
-	// (kyu/eval/history.go) can reach this widget's own w.history -- see
-	// Env.HistoryAccess's own doc comment for why this needs to be a
-	// hook at all.
+	// The fullscreen and stderr hooks close over a local *evalResult
+	// (res, below) instead of writing into w the way they used to --
+	// see this method's own doc comment for why. A foreground %cmd's
+	// captured stderr lands in res.lines the same styled-as-an-ordinary-
+	// result way it always has (resultStyle, not errorStyle: stderr
+	// isn't necessarily an error in kyu's sense, plenty of real CLI
+	// tools use it for progress/informational output) instead of being
+	// written to the real os.Stderr, which would otherwise corrupt this
+	// widget's own screen -- replui owns the terminal via a diffed cell
+	// renderer (see package doc comment), and a raw write outside that
+	// renderer's own "what's on screen" bookkeeping desyncs it from
+	// reality. SetHistoryAccess is the one hook still wired directly to
+	// w's own methods, exactly as before: see this method's doc comment
+	// for why that stays safe.
+	var res evalResult
 	if w.env != nil {
-		w.env.SetFullscreenHandler(w.attachFullscreen)
-		w.env.SetExternalOutputSink(w.appendExternalStderr)
+		w.env.SetFullscreenHandler(func(cmd *exec.Cmd, onDone func(err error)) {
+			res.fullscreen = &fullscreenAttach{cmd: cmd, onDone: onDone}
+		})
+		w.env.SetExternalOutputSink(func(stderr []byte) {
+			res.lines = append(res.lines, textLines(string(stderr), resultStyle)...)
+		})
 		w.env.SetHistoryAccess(&eval.HistoryAccess{
 			List:   w.historySnapshot,
 			Delete: w.deleteHistoryEntry,
@@ -1009,46 +1165,19 @@ func (w *kyuReplWidget) evaluate(src string) {
 		w.env.SetHistoryAccess(nil)
 	}
 	if err != nil {
-		w.lines = append(w.lines, replLine{text: err.Error(), style: errorStyle})
-		return
+		res.lines = append(res.lines, replLine{text: err.Error(), style: errorStyle})
+		return res
 	}
 	if v.Kind() != "null" {
-		w.lines = append(w.lines, resultLines(v)...)
+		res.lines = append(res.lines, resultLines(v)...)
 	}
-}
-
-// appendExternalStderr is w's Env.ExternalOutputSink for the duration of
-// each evaluate() call (see the set-before/clear-after registration
-// above) -- a foreground %cmd's captured stderr lands here instead of
-// being written to the real os.Stderr, which would otherwise corrupt
-// this widget's own screen: replui owns the terminal via a diffed cell
-// renderer (see package doc comment), and a raw write outside that
-// renderer's own "what's on screen" bookkeeping desyncs it from reality.
-// Styled the same as an ordinary result (resultStyle, not errorStyle):
-// stderr isn't necessarily an error in kyu's sense (plenty of real CLI
-// tools use it for progress/informational output), and this is relaying
-// whatever bytes the child wrote, unstyled, the same as a direct
-// terminal write would have shown them -- not editorializing based on
-// which fd they came from.
-func (w *kyuReplWidget) appendExternalStderr(stderr []byte) {
-	w.lines = append(w.lines, textLines(string(stderr), resultStyle)...)
-}
-
-// attachFullscreen is registered as eval.FullscreenHandlerFunc for the
-// duration of each evaluate() call (see evaluate). It doesn't start cmd
-// itself -- it just records the attachment so handleKey's Enter case
-// (see consumeFullscreenCmd) can turn it into a startFullscreenMsg once
-// evaluate() returns, handing the whole screen over to a
-// widget.Terminal in Model.View — the same real-pty machinery
-// 9mux's Terminal pane kind uses, just hosted directly here.
-func (w *kyuReplWidget) attachFullscreen(cmd *exec.Cmd, onDone func(err error)) {
-	w.pendingFullscreen = &fullscreenAttach{cmd: cmd, onDone: onDone}
+	return res
 }
 
 // consumeFullscreenCmd returns a tui.Cmd yielding startFullscreenMsg if
-// the evaluation that just ran (via submit(), Enter, or exitSearch's own
-// Enter-triggered submit) attached a fullscreen program, clearing
-// pendingFullscreen so it's only ever consumed once; nil otherwise.
+// the evaluation that just ran attached a fullscreen program (staged by
+// applyEvalResult into pendingFullscreen), clearing pendingFullscreen so
+// it's only ever consumed once; nil otherwise.
 func (w *kyuReplWidget) consumeFullscreenCmd() tui.Cmd {
 	if w.pendingFullscreen == nil {
 		return nil

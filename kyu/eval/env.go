@@ -22,7 +22,7 @@ type Env struct {
 	proxyRecorder      ProxyRecorderFunc            // process-wide, like ns; see ProxyRecorder
 	passthroughBlocked string                       // process-wide, like ns; see SetPassthroughBlocked
 	cwd                string                       // process-wide, like ns; see SetCwd
-	interruptHandler   func()                       // process-wide, like ns; see SetInterruptHandler
+	interruptHandler   atomic.Pointer[func()]       // process-wide, like ns, but see SetInterruptHandler for why this one field alone needs real cross-goroutine safety
 	lastExitCode       *int                         // process-wide, like ns; see SetLastExitCode
 	fullscreenHandler  FullscreenHandlerFunc        // process-wide, like ns; see SetFullscreenHandler
 	externalOutputSink ExternalOutputSinkFunc       // process-wide, like ns; see SetExternalOutputSink
@@ -261,26 +261,39 @@ func (e *Env) Cwd() string {
 	return e.root().cwd
 }
 
-// SetInterruptHandler registers the function a `-repl` SIGINT (Ctrl-C)
-// should call to interrupt whatever foreground %cmd is currently
-// running — process-wide like the namespace. Callers (runExternalViaJob,
-// runExternalDirect, runExternalFullscreen's direct-stdio path) set this
-// once their subprocess has actually started and clear it (nil) once it
-// returns, via defer, so a signal arriving before start or after
-// completion is simply ignored — matching a normal shell's "Ctrl-C at an
-// idle prompt does nothing." Only meaningful in cmd/9sh's repl(): the
-// TUI can't safely deliver SIGINT-driven interrupts at all yet (see
-// SetPassthroughBlocked's doc comment on the same underlying
-// single-goroutine/raw-mode hazard), so runTUI never calls
-// InterruptHandler.
+// SetInterruptHandler registers the function a Ctrl-C should call to
+// interrupt whatever foreground %cmd is currently running — process-wide
+// like the namespace. Callers (runExternalViaJob, runExternalDirect,
+// runExternalFullscreen's direct-stdio path) set this once their
+// subprocess has actually started and clear it (nil) once it returns,
+// via defer, so a signal arriving before start or after completion is
+// simply ignored — matching a normal shell's "Ctrl-C at an idle prompt
+// does nothing." Two callers reach this: cmd/9sh's repl() forwards a
+// real SIGINT from signal.Notify; the TUI (replui/kyurepl.go's handleKey)
+// calls it directly from a decoded Ctrl+C keystroke instead, since raw
+// mode means the kernel never raises a real SIGINT there (see
+// SetPassthroughBlocked's doc comment on that same raw-mode hazard).
+// That second caller is exactly why this one field, alone among Env's
+// other process-wide fields, needs real synchronization rather than
+// relying on evaluate() calls never overlapping: it can now be read from
+// the UI goroutine while a still-running evaluate(), on its own
+// goroutine, concurrently sets or clears it via defer.
 func (e *Env) SetInterruptHandler(fn func()) {
-	e.root().interruptHandler = fn
+	root := e.root()
+	if fn == nil {
+		root.interruptHandler.Store(nil)
+		return
+	}
+	root.interruptHandler.Store(&fn)
 }
 
 // InterruptHandler returns the function set by SetInterruptHandler, or
 // nil if nothing interruptible is currently running.
 func (e *Env) InterruptHandler() func() {
-	return e.root().interruptHandler
+	if fn := e.root().interruptHandler.Load(); fn != nil {
+		return *fn
+	}
+	return nil
 }
 
 // SetLastExitCode records a foreground %cmd's exit code — bash's $?

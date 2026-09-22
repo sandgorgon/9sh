@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
 	"github.com/sandgorgon/tui/input"
@@ -55,8 +56,40 @@ func sendRunes(w *kyuReplWidget, s string) {
 	}
 }
 
+// sendEnter drives Enter and, if that went busy (submit() spawning a
+// background evaluate() call for a non-blank source -- see its own doc
+// comment), waits for and applies that result immediately via
+// waitForEvalDone -- these tests talk to a bare *kyuReplWidget with no
+// Model/App in play to drive TakePendingMsg for them the way production
+// does (via the redraw tick -- see redrawTickCmd's doc comment), so
+// every existing test that checks w.lines right after sendEnter keeps
+// seeing the result show up synchronously, from this test's own point
+// of view, even though it's genuinely computed on another goroutine.
 func sendEnter(w *kyuReplWidget) {
 	w.HandleEvent(input.KeyEvent{Key: input.KeyEnter})
+	if w.busy {
+		waitForEvalDone(w)
+	}
+}
+
+// waitForEvalDone polls w.TakePendingMsg (see its own doc comment) for
+// submit()'s background evaluate() call to finish, and applies the
+// result via applyEvalResult the moment it does -- a short poll instead
+// of a real synchronization primitive is enough here since every
+// pending evaluate() call is either pure in-memory kyu code or, in the
+// handful of tests that actually run a real subprocess, one that's
+// expected to finish quickly (see e.g. skipUnlessOnPath-gated tests).
+func waitForEvalDone(w *kyuReplWidget) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if msg := w.TakePendingMsg(); msg != nil {
+			if done, ok := msg.(evalDoneMsg); ok {
+				w.applyEvalResult(done.result)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func sendKey(w *kyuReplWidget, k input.Key) {
@@ -393,7 +426,9 @@ func TestKyuReplHistoryModeAllKeepsDuplicates(t *testing.T) {
 // code uses (see evaluate()) -- rather than calling
 // historySnapshot/deleteHistoryEntry/clearHistoryEntries directly, so a
 // regression in the wiring itself (not just the underlying methods)
-// would be caught here. Calling w.evaluate directly, not sendEnter,
+// would be caught here. Calling w.evaluate directly (via
+// applyEvalResult, applied immediately rather than through submit()'s
+// background goroutine and TakePendingMsg), not sendEnter,
 // deliberately keeps history_delete/history_clear's own call text out
 // of w.history (only submit(), sendEnter's target, appends to it), so
 // each assertion below reflects only what the two real submissions put
@@ -405,12 +440,12 @@ func TestHistoryBuiltinsReachThisWidget(t *testing.T) {
 	sendRunes(w, `"second"`)
 	sendEnter(w)
 
-	w.evaluate(`history() | count`)
+	w.applyEvalResult(w.evaluate(`history() | count`))
 	if got := w.lines[len(w.lines)-1].text; got != "2" {
 		t.Fatalf("history() | count after 2 submissions = %q, want \"2\"", got)
 	}
 
-	w.evaluate(`history_delete(0)`)
+	w.applyEvalResult(w.evaluate(`history_delete(0)`))
 	if got := w.lines[len(w.lines)-1].text; got != "true" {
 		t.Fatalf("history_delete(0) = %q, want \"true\"", got)
 	}
@@ -421,7 +456,7 @@ func TestHistoryBuiltinsReachThisWidget(t *testing.T) {
 		t.Fatalf("history[0] after deleting index 0 = %q, want %q", w.history[0], `"second"`)
 	}
 
-	w.evaluate(`history_clear()`)
+	w.applyEvalResult(w.evaluate(`history_clear()`))
 	if len(w.history) != 0 {
 		t.Fatalf("history after history_clear() = %v, want empty", w.history)
 	}
@@ -933,6 +968,92 @@ func TestKyuReplCtrlCCopiesAllText(t *testing.T) {
 	}
 	if !strings.Contains(msg.Text, "early") || !strings.Contains(msg.Text, "late") {
 		t.Fatalf("copy-all text = %q, want both early and late scrolled-out-of-view content included", msg.Text)
+	}
+}
+
+// TestKyuReplCtrlCInterruptsWhileBusy confirms handleKey's busy gate
+// (see busy's own doc comment) routes Ctrl+C to Env.InterruptHandler
+// instead of the clipboard-copy binding TestKyuReplCtrlCCopiesAllText
+// exercises above -- the actual fix for the TUI's Ctrl+C freeze. A real
+// foreground %cmd's interrupt handler is wired by runExternalViaJob/
+// runExternalDirect, not simulated here -- see
+// TestCtrlCInterruptsRunningForegroundCommand in model_test.go for the
+// real-subprocess end-to-end version of this.
+func TestKyuReplCtrlCInterruptsWhileBusy(t *testing.T) {
+	w := newTestReplWidget(t)
+	var interrupted bool
+	w.env.SetInterruptHandler(func() { interrupted = true })
+	w.busy = true
+
+	if cmd := w.HandleEvent(input.KeyEvent{Rune: 'c', Mod: input.ModCtrl}); cmd != nil {
+		t.Fatalf("Ctrl+C while busy should not also copy to clipboard, got Cmd %T", cmd())
+	}
+	if !interrupted {
+		t.Fatal("Ctrl+C while busy should call Env.InterruptHandler")
+	}
+}
+
+// TestKyuReplBusyBlocksOtherKeysExceptCtrlC confirms the rest of busy's
+// gate: every key except Ctrl+C is a no-op while an evaluate() is in
+// flight -- this is what makes a second, overlapping evaluate() call
+// (and the Env hook clobbering that would cause -- see evaluate's own
+// doc comment) impossible.
+func TestKyuReplBusyBlocksOtherKeysExceptCtrlC(t *testing.T) {
+	w := newTestReplWidget(t)
+	w.busy = true
+	w.input = "abc"
+	w.cursor = 3
+
+	sendRunes(w, "XYZ")
+	if w.input != "abc" {
+		t.Fatalf("typing while busy should be a no-op, input = %q", w.input)
+	}
+
+	if cmd := w.HandleEvent(input.KeyEvent{Key: input.KeyEnter}); cmd != nil {
+		t.Fatalf("Enter while busy should be a no-op, got Cmd %T", cmd())
+	}
+	if w.input != "abc" {
+		t.Fatalf("Enter while busy mutated input to %q", w.input)
+	}
+	if w.busy != true {
+		t.Fatal("busy should stay true -- only applyEvalResult clears it")
+	}
+}
+
+// TestKyuReplSubmitOfNonBlankSourceGoesBusy confirms submit() goes busy
+// and spawns a background evaluate() for a non-blank source, but not
+// for a blank one (matching evaluate()'s own no-op-on-blank-input
+// guard) -- see submit's own doc comment. The Cmd it hands back is
+// deliberately NOT the eval result (see evalStartedMsg's doc comment
+// for why that would silently reintroduce the freeze this whole fix is
+// for) -- it's checked here too, so a regression back to that shape
+// would fail loudly.
+func TestKyuReplSubmitOfNonBlankSourceGoesBusy(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, "1 + 2")
+	cmd := w.HandleEvent(input.KeyEvent{Key: input.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a Cmd for a non-blank submission")
+	}
+	if !w.busy {
+		t.Fatal("expected busy=true right after submitting, before evaluate() has finished")
+	}
+	if _, ok := cmd().(evalStartedMsg); !ok {
+		t.Fatalf("expected submit()'s Cmd to be the trivial evalStartedMsg, got %T -- "+
+			"a real evaluate() call belongs on submit()'s own background goroutine, "+
+			"never inside a widget-returned Cmd (see evalStartedMsg's doc comment)", cmd())
+	}
+	waitForEvalDone(w)
+	if w.busy {
+		t.Fatal("expected busy=false once the background evaluate() result was applied")
+	}
+
+	w2 := newTestReplWidget(t)
+	if cmd := w2.HandleEvent(input.KeyEvent{Key: input.KeyEnter}); cmd != nil {
+		t.Fatalf("expected no Cmd for a blank submission, got %T", cmd())
+	}
+	if w2.busy {
+		t.Fatal("a blank submission should never go busy")
 	}
 }
 

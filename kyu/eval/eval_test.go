@@ -1240,6 +1240,52 @@ j`, env)
 	}
 }
 
+// TestBackgroundPtyResize is the kyu-level counterpart to
+// job.TestPtyJobResize: `&pty` opts a backgrounded %cmd into a real
+// pty, status.pty reports it, and ctl resize actually changes what the
+// child sees, proven against the real stty(1) binary. There's no kyu
+// syntax yet to feed a backgrounded job's stdin (see
+// evalBackgroundSubprocess's own doc comment), so this can't use the
+// job-level test's "block on a stdin read, then resize, then unblock"
+// synchronization; instead the child busy-polls stty size in a loop
+// until it's no longer the pty's all-zero default, which is
+// deterministic (not a sleep-and-hope) regardless of exactly when the
+// resize call reaches it.
+func TestBackgroundPtyResize(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	skipUnlessOnPath(t, "stty")
+	env := jobsEnv(t)
+	runEnv(t, `j := %sh "-c" "while [ \"$(stty size)\" = \"0 0\" ]; do :; done; stty size" &pty`, env)
+	status := runEnv(t, `j.status`, env).(*value.Record)
+	pty, ok := status.Get("pty")
+	if !ok || pty != value.Bool(true) {
+		t.Fatalf("status.pty = %v (ok=%v), want true", pty, ok)
+	}
+	runEnv(t, `j.ctl = "resize 40 120"`, env)
+
+	v := runEnv(t, `j | wait
+j.stdout`, env)
+	if got := strings.TrimSpace(string(v.(value.Bytes))); got != "40 120" {
+		t.Fatalf("stty size = %q, want %q", got, "40 120")
+	}
+}
+
+// TestBackgroundPtyRejectedForInprocJob: `&pty` only makes sense for a
+// subprocess job (job.SetPty itself rejects an inproc job — there's no
+// OS process to attach a pty to), so evalBackground must reject it
+// before ever reaching evalBackgroundInproc, with a clear error rather
+// than a silent no-op or a confusing job.go-level failure.
+func TestBackgroundPtyRejectedForInprocJob(t *testing.T) {
+	env := jobsEnv(t)
+	err := runEnvErr(t, `{ 6 * 7 } &pty`, env)
+	if err == nil {
+		t.Fatal("want an error backgrounding in-process kyu code with &pty")
+	}
+	if !strings.Contains(err.Error(), "in-process") {
+		t.Errorf("error %q should say &pty isn't supported for in-process jobs", err)
+	}
+}
+
 func TestBackgroundJobKillViaCtlField(t *testing.T) {
 	skipUnlessOnPath(t, "sleep")
 	env := jobsEnv(t)

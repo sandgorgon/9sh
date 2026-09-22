@@ -175,6 +175,13 @@ func (p *Parser) parseDefineStmt() ast.Stmt {
 // be backgrounded now — an *ast.ExternalCall becomes a subprocess job
 // (evalBackground), anything else an in-process one (evalBackgroundInproc,
 // local-only) — see ast.Background's own doc comment.
+//
+// '&' may be immediately followed by the plain identifier "pty" (not a
+// keyword — LookupIdent has no "pty" entry, so this is a parser-level
+// convention, the same way '%' before an IDENT is what makes something
+// an external call rather than a new token kind) to request
+// job/job.go's opt-in pty instead of plain pipes — see ast.Background's
+// Pty field.
 func (p *Parser) parseValueExpr() ast.Expr {
 	expr := p.parseExpr(LOWEST)
 	if expr == nil {
@@ -184,7 +191,12 @@ func (p *Parser) parseValueExpr() ast.Expr {
 		return expr
 	}
 	p.next() // cur: expr's last token -> '&'
-	return &ast.Background{Tok: p.cur, Expr: expr}
+	bg := &ast.Background{Tok: p.cur, Expr: expr}
+	if p.peek.Kind == token.IDENT && p.peek.Literal == "pty" {
+		p.next() // cur: '&' -> 'pty'
+		bg.Pty = true
+	}
+	return bg
 }
 
 // parseBindStmt parses `bind SRC, DST[, before|after|replace][, ro]`. SRC and

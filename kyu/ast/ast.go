@@ -204,17 +204,25 @@ type ContinueExpr struct {
 	Tok token.Token
 }
 
-// Background is `expr &`: runs expr as a job and evaluates to a live
-// job record (its fields backed by the job's namespace files) rather
-// than blocking for its value. When Expr is an *ExternalCall, this is a
-// subprocess job (see kyu/eval's evalBackground) — the original, still
-// remote-capable via @host{}. Anything else is an in-process job (see
-// evalBackgroundInproc): local only, since running arbitrary kyu code
-// means sending a live Go closure, not something a 9P wire protocol can
-// carry to a different 9sh process.
+// Background is `expr &` (or `expr &pty`): runs expr as a job and
+// evaluates to a live job record (its fields backed by the job's
+// namespace files) rather than blocking for its value. When Expr is an
+// *ExternalCall, this is a subprocess job (see kyu/eval's
+// evalBackground) — the original, still remote-capable via @host{}.
+// Anything else is an in-process job (see evalBackgroundInproc): local
+// only, since running arbitrary kyu code means sending a live Go
+// closure, not something a 9P wire protocol can carry to a different
+// 9sh process.
+//
+// Pty, set by the `pty` identifier immediately following '&' (see
+// Parser.parseValueExpr), requests job/job.go's opt-in pty (`ctl pty`
+// before `ctl start`) instead of the default plain pipes — subprocess
+// jobs only, rejected at eval time for an in-process job the same way
+// stop/resume/signal/priority already are (see evalBackground).
 type Background struct {
 	Tok  token.Token // the '&'
 	Expr Expr
+	Pty  bool
 }
 
 // AtHost is `@host { ... }` — runs the block's job creation (both `&` and

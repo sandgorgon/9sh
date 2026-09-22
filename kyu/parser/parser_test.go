@@ -625,6 +625,28 @@ func TestBackgroundAcceptsArbitraryExpr(t *testing.T) {
 	}
 }
 
+// TestBackgroundPty confirms `%cmd &pty` sets ast.Background.Pty, and
+// that plain `&` (no trailing "pty" identifier) leaves it false — the
+// zero value, so every existing `&` test above is still exercising the
+// non-pty path unchanged.
+func TestBackgroundPty(t *testing.T) {
+	prog := parseOK(t, `j := %sh &pty`)
+	def := prog.Stmts[0].(*ast.DefineStmt)
+	bg, ok := def.Val.(*ast.Background)
+	if !ok {
+		t.Fatalf("want Background, got %T", def.Val)
+	}
+	if !bg.Pty {
+		t.Fatal("want Pty = true")
+	}
+
+	prog = parseOK(t, `j := %sh &`)
+	bg = prog.Stmts[0].(*ast.DefineStmt).Val.(*ast.Background)
+	if bg.Pty {
+		t.Fatal("plain '&' should leave Pty = false")
+	}
+}
+
 // TestGroupedExprEndingInCall guards against a real bug: parseGroupedExpr
 // used to accept cur if it already equaled RPAREN, but RPAREN also closes
 // a Call's own argument list -- a grouped expression whose content ends

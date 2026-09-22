@@ -127,6 +127,14 @@ introspection and safety, regex and collections).
   bounded on their own regardless (an in-process job's recursion can't
   exceed a fixed depth before erroring, so a bug like a missing base
   case fails cleanly instead of crashing the whole session).
+- `%cmd args... &pty` is `&` plus the `pty` opt-in: `pty`, written
+  directly after `&` with no separator required, requests a real
+  pseudo-terminal for the backgrounded subprocess job instead of the
+  default plain pipes — see `ctl pty`'s own entry above for what that
+  changes. Subprocess-only: `&pty` on anything else (an in-process job)
+  is a clear error at background time, the same reason `ctl pty` itself
+  rejects an in-process job. There's no kyu syntax yet to feed a
+  backgrounded job's stdin either way, `&pty` included.
 - A job's `ctl` file takes one command per write: `start` (begin a
   pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
   `signal NAME` (`signal HUP`), `priority N` (the nice value of a running

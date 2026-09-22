@@ -123,13 +123,19 @@ func parseDisposition(s string) (ns.Disposition, error) {
 // evalBackground runs `expr &` (see ast.Background's own doc comment):
 // an *ast.ExternalCall becomes a subprocess job (this function, below,
 // unchanged from before this dispatch existed); anything else becomes
-// an in-process job (evalBackgroundInproc).
+// an in-process job (evalBackgroundInproc). `&pty` (x.Pty) is rejected
+// up front for the in-process case — there's no OS process to attach a
+// pty to, the same reason stop/resume/signal/priority already reject an
+// in-process job in job.go's Ctl.
 func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 	call, ok := x.Expr.(*ast.ExternalCall)
 	if !ok {
+		if x.Pty {
+			return nil, fmt.Errorf("'&pty': not supported for in-process jobs (no OS process to attach a pty to)")
+		}
 		return evalBackgroundInproc(x.Expr, env)
 	}
-	return evalBackgroundSubprocess(call, env)
+	return evalBackgroundSubprocess(call, env, x.Pty)
 }
 
 // evalBackgroundSubprocess runs `%cmd args... &`: allocates a
@@ -146,7 +152,13 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 // call.NameExpr (the %(expr) form -- see ast.ExternalCall's own doc
 // comment) is resolved first, before even that check, the same order
 // runExternal uses for the foreground case.
-func evalBackgroundSubprocess(call *ast.ExternalCall, env *Env) (value.Value, error) {
+//
+// pty, when true (kyu's `&pty` — see ast.Background.Pty), writes `ctl
+// pty` before `ctl start` below, opting the job into job/job.go's real
+// pseudo-terminal instead of plain pipes (merged stdout/stderr,
+// process-group signal/kill, a working `ctl resize`) -- see SetPty's
+// own doc comment for the full behavior change.
+func evalBackgroundSubprocess(call *ast.ExternalCall, env *Env, pty bool) (value.Value, error) {
 	name, err := externalCallName(call, env)
 	if err != nil {
 		return nil, err
@@ -246,6 +258,14 @@ func evalBackgroundSubprocess(call *ast.ExternalCall, env *Env) (value.Value, er
 	ctlFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "ctl")...)
 	if err != nil {
 		return nil, err
+	}
+	if pty {
+		// Must land before "start": SetPty only accepts a still-pending
+		// job (see job.go's own guard), matching every other pending-only
+		// config write (argv/cwd/env) already made above.
+		if _, err := ctlFile.Write(ctx, 0, []byte("pty")); err != nil {
+			return nil, fmt.Errorf("'&pty': opting into a pty: %w", err)
+		}
 	}
 	if _, err := ctlFile.Write(ctx, 0, []byte("start")); err != nil {
 		return nil, fmt.Errorf("'&': starting job: %w", err)

@@ -18,7 +18,12 @@ once a first tagged release is cut.
   `TIOCGWINSZ`, ROWS-then-COLS matching `stty size`'s own output order).
   A plain job's `resize` is unchanged. This is the server-side first
   step toward ssh-less remote terminals over 9P; there is still no
-  client (tui widget, 9mux pane, kyu syntax) that attaches to one yet.
+  client (tui widget, 9mux pane) that attaches to one yet.
+- kyu syntax for the above: `%cmd args... &pty` backgrounds a
+  subprocess job with a pty already opted into (`pty` written directly
+  after `&`, no separator required), same shape as plain `&`. Rejected
+  at eval time for anything that isn't a subprocess job (an
+  in-process `&pty` has no OS process to attach a pty to).
 
 ## [0.9.0] - 2026-09-22
 

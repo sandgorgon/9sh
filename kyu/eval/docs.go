@@ -103,7 +103,7 @@ var builtinDocs = []BuiltinDoc{
 	{"host", "host()",
 		`This machine's real hostname — e.g. for an if host() == "laptop" { ... } conditional inside common.ky/hosts/<hostname>.ky.`},
 	{"wait", "job | wait",
-		"Blocks until a backgrounded job (from %cmd &) reaches a terminal state, then returns it."},
+		"Blocks until a backgrounded job (from &, subprocess or in-process) reaches a terminal state, then returns it."},
 	{"ps", "ps()",
 		"Every job at /jobs as a Table of Records (id, kind, state, argv, pid, exit_code, signal, error, detached, cwd, started_at, finished_at) — the structured, no-checkout-needed view of /jobs' own status files."},
 	{"bind_log", "bind_log()",

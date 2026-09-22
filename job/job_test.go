@@ -456,3 +456,155 @@ func TestCtlResizeExplainsThereIsNoPty(t *testing.T) {
 		}
 	}
 }
+
+// TestPtyJobResize is the "opt-in pty job with resize, proven with stty
+// size" step: a job that opts in via `ctl pty` gets a real pty instead
+// of plain pipes, so `ctl resize` actually changes what the child sees
+// via TIOCGWINSZ — verified by asking the real stty(1) binary, not by
+// inspecting our own ioctl call. The child blocks on a line of stdin
+// before running stty, so the resize (issued right after start, while
+// pty.Start's own synchronous setup has already wired up j.ptyMaster)
+// is guaranteed to land before stty reads the window size — otherwise
+// this would be racing the child's own exec/read against the test.
+func TestPtyJobResize(t *testing.T) {
+	mgr := NewManager()
+	j := mgr.AllocSubprocess()
+	if err := j.SetArgv([]string{"sh", "-c", "read x; stty size"}); err != nil {
+		t.Fatalf("SetArgv: %v", err)
+	}
+	if err := j.Ctl("pty"); err != nil {
+		t.Fatalf("ctl pty: %v", err)
+	}
+	if err := j.Ctl("start"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if !j.Status().Pty {
+		t.Fatalf("status.pty = false, want true once opted in")
+	}
+	if err := j.Ctl("resize 40 120"); err != nil {
+		t.Fatalf("ctl resize: %v", err)
+	}
+	if _, err := j.writeStdin([]byte("\n")); err != nil {
+		t.Fatalf("writeStdin: %v", err)
+	}
+
+	st, err := j.WaitFor(withTimeout(t))
+	if err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	if st.State != StateDone {
+		t.Fatalf("final state = %v, want done (err=%s)", st.State, st.Err)
+	}
+
+	out, err := io.ReadAll(&growBufReader{ctx: withTimeout(t), buf: j.stdout})
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "40 120" {
+		t.Fatalf("stty size = %q, want %q", got, "40 120")
+	}
+}
+
+// TestPtyJobMergesStdoutStderr: a real terminal has one output stream,
+// not two, so a pty job's stderr writes land on the same growBuf as its
+// stdout, and j.stderr (the field a plain job's stderr file reads from)
+// stays untouched.
+func TestPtyJobMergesStdoutStderr(t *testing.T) {
+	mgr := NewManager()
+	j := mgr.AllocSubprocess()
+	if err := j.SetArgv([]string{"sh", "-c", "echo out; echo err >&2"}); err != nil {
+		t.Fatalf("SetArgv: %v", err)
+	}
+	if err := j.Ctl("pty"); err != nil {
+		t.Fatalf("ctl pty: %v", err)
+	}
+	if err := j.Ctl("start"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := j.closeStdin(); err != nil {
+		t.Fatalf("closeStdin: %v", err) // a pty job's closeStdin is a documented no-op, not an error
+	}
+
+	st, err := j.WaitFor(withTimeout(t))
+	if err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	if st.State != StateDone {
+		t.Fatalf("final state = %v, want done (err=%s)", st.State, st.Err)
+	}
+
+	out, err := io.ReadAll(&growBufReader{ctx: withTimeout(t), buf: j.stdout})
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if !strings.Contains(string(out), "out") || !strings.Contains(string(out), "err") {
+		t.Fatalf("stdout = %q, want both \"out\" and \"err\" merged in", out)
+	}
+	stderrOut, err := io.ReadAll(&growBufReader{ctx: withTimeout(t), buf: j.stderr})
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	if len(stderrOut) != 0 {
+		t.Fatalf("stderr = %q, want empty — a pty job merges onto stdout", stderrOut)
+	}
+}
+
+// TestPtyJobSignalIsProcessGroupWide: ctl signal on a pty job delivers
+// via pty.Pty.Signal (kill(2) to the negative pid), not
+// proc.Process.Signal, since pty.Start's Setsid makes the child its own
+// process-group leader — checked indirectly here by confirming the
+// signal actually reaches and terminates the child well before its own
+// sleep would, the same "did the signal really land" shape
+// TestCtlResizeExplainsThereIsNoPty's sibling tests use elsewhere in
+// this file for plain jobs.
+func TestPtyJobSignalIsProcessGroupWide(t *testing.T) {
+	mgr := NewManager()
+	j := mgr.AllocSubprocess()
+	if err := j.SetArgv([]string{"sleep", "30"}); err != nil {
+		t.Fatalf("SetArgv: %v", err)
+	}
+	if err := j.Ctl("pty"); err != nil {
+		t.Fatalf("ctl pty: %v", err)
+	}
+	if err := j.Ctl("start"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	start := time.Now()
+	if err := j.Ctl("signal TERM"); err != nil {
+		t.Fatalf("ctl signal TERM: %v", err)
+	}
+	st, err := j.WaitFor(withTimeout(t))
+	if err != nil {
+		t.Fatalf("WaitFor: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("WaitFor took %v — signal TERM should have ended sleep 30 almost immediately", elapsed)
+	}
+	if st.State != StateDone {
+		t.Fatalf("final state = %v, want done (a signal the job didn't ask for via kill is ordinary termination, not StateKilled)", st.State)
+	}
+}
+
+func TestPtyJobOptInRejectedOnceRunningOrForInproc(t *testing.T) {
+	mgr := NewManager()
+
+	running := mgr.AllocSubprocess()
+	if err := running.SetArgv([]string{"sleep", "30"}); err != nil {
+		t.Fatalf("SetArgv: %v", err)
+	}
+	if err := running.Ctl("start"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer running.Ctl("kill")
+	if err := running.Ctl("pty"); err == nil {
+		t.Fatalf("ctl pty on a running job should error, not silently do nothing")
+	}
+
+	inproc := mgr.AllocInproc(func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
+		return nil
+	})
+	if err := inproc.Ctl("pty"); err == nil || !strings.Contains(err.Error(), "inproc") {
+		t.Fatalf("ctl pty on an inproc job: err = %v, want an error naming inproc jobs unsupported", err)
+	}
+}

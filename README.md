@@ -130,16 +130,31 @@ introspection and safety, regex and collections).
 - A job's `ctl` file takes one command per write: `start` (begin a
   pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
   `signal NAME` (`signal HUP`), `priority N` (the nice value of a running
-  subprocess job), and `detach` (sets the `detached` flag `status` and
+  subprocess job), `pty` (opt a pending subprocess job into a real pty
+  instead of plain pipes), `resize ROWS COLS` (only meaningful once
+  opted into `pty`), and `detach` (sets the `detached` flag `status` and
   `ps()` report; the process itself is unaffected). `stop`/`resume`/
-  `signal`/`priority` are subprocess-only — an in-process job rejects
-  them (there's no real process to pause, signal, or renice), but
-  `start`/`kill`/`detach` work on either kind. An unknown command is
-  an error, never a silent no-op. There is no working `resize`: jobs run
-  over pipes, not a pty, so it is recognized only to answer that there
-  is no terminal to resize. A program that needs a terminal is a
-  `fullscreen_programs` entry, which gets the real screen instead of
-  running as a job.
+  `signal`/`priority`/`pty` are subprocess-only — an in-process job
+  rejects them (there's no real process to pause, signal, renice, or
+  attach a pty to), but `start`/`kill`/`detach` work on either kind. An
+  unknown command is an error, never a silent no-op.
+- A `pty` job (`ctl pty` while still pending, before `ctl start`) gets a
+  real pseudo-terminal instead of plain pipes: `stdout`/`stderr` merge
+  onto one stream (a real terminal has no separate stderr fd —
+  `stderr`'s own growBuf stays empty), `stdin` writes reach the pty's
+  line discipline directly (Ctrl-D sends EOF, Ctrl-C/Ctrl-Z become real
+  signals, exactly like typing at a real terminal, instead of closing a
+  pipe), `ctl signal`/`ctl resize` act on the job's whole process group
+  (`resize ROWS COLS`, matching `stty size`'s own output order, changes
+  what the child sees via `TIOCGWINSZ`; the kernel delivers `SIGWINCH`
+  on its own), and `ctl kill` takes the whole process group with it, not
+  just the one tracked pid. A plain (non-`pty`) job's `resize` is
+  unchanged: recognized only to answer that there is no terminal to
+  resize, since jobs run over pipes by default. There is still no
+  client that attaches a real terminal emulator to a pty job's
+  stdin/stdout yet (a tui widget, a 9mux pane, and kyu syntax to request
+  one are a later phase) — for now a `fullscreen_programs` entry is
+  still how an interactive program like `vim` gets the real screen.
 - `|` is a structured pipe by default (`where`/`select`/`sort_by`/
   `group_by`/`each`/...), not raw bytes — `%` is the sigil that marks
   "this call is bytes, not structured data."

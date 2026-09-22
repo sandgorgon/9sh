@@ -8,6 +8,18 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in pty jobs: `ctl pty` before `ctl start` attaches a subprocess
+  job to a real pseudo-terminal instead of plain pipes (merged
+  stdout/stderr, `stdin` writes reaching a real line discipline — Ctrl-D
+  for EOF, Ctrl-C/Ctrl-Z become real signals — process-group-wide
+  `signal`/`kill`, and a working `ctl resize ROWS COLS` via
+  `TIOCGWINSZ`, ROWS-then-COLS matching `stty size`'s own output order).
+  A plain job's `resize` is unchanged. This is the server-side first
+  step toward ssh-less remote terminals over 9P; there is still no
+  client (tui widget, 9mux pane, kyu syntax) that attaches to one yet.
+
 ## [0.9.0] - 2026-09-22
 
 ### Added

@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/sandgorgon/9sh/pathresolve"
+	"github.com/sandgorgon/tui/pty"
+	"github.com/sandgorgon/tui/term"
 )
 
 type State string
@@ -79,6 +81,7 @@ type Status struct {
 	Signal     string    `json:"signal,omitempty"`
 	Err        string    `json:"error,omitempty"`
 	Detached   bool      `json:"detached,omitempty"`
+	Pty        bool      `json:"pty,omitempty"`
 	Cwd        string    `json:"cwd,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitzero"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
@@ -101,6 +104,9 @@ type Job struct {
 	cwd        string
 	startedAt  time.Time
 	finishedAt time.Time
+
+	usePty    bool     // opted in via SetPty, before start; subprocess-only
+	ptyMaster *pty.Pty // set once startSubprocessPty's pty.Start succeeds; nil until then and for non-pty jobs
 
 	stdinW io.WriteCloser
 	stdinR io.ReadCloser
@@ -140,7 +146,7 @@ func (j *Job) Status() Status {
 		ID: j.ID, Kind: j.kind, State: j.state,
 		Argv: append([]string(nil), j.argv...),
 		Pid:  j.pid, ExitCode: j.exitCode, Signal: j.lastSignal, Err: j.errMsg, Detached: j.detached,
-		Cwd: j.cwd, StartedAt: j.startedAt, FinishedAt: j.finishedAt,
+		Pty: j.usePty, Cwd: j.cwd, StartedAt: j.startedAt, FinishedAt: j.finishedAt,
 	}
 }
 
@@ -210,18 +216,54 @@ func (j *Job) SetCwd(cwd string) error {
 	return nil
 }
 
+// SetPty opts a pending subprocess job into a real pty instead of plain
+// pipes: stdout and stderr merge onto the pty's single stream (a real
+// terminal has no separate stderr fd — see startSubprocessPty), stdin
+// writes reach the pty master so a client can send control characters
+// exactly like a real terminal's line discipline (Ctrl-D for EOF
+// instead of closing a file, Ctrl-C/Ctrl-Z for real signals), and `ctl
+// resize` becomes meaningful instead of erroring. Inproc jobs have no
+// OS process to attach a pty to.
+func (j *Job) SetPty() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.state != StatePending {
+		return fmt.Errorf("job %d: cannot set pty: already %s", j.ID, j.state)
+	}
+	if j.kind != KindSubprocess {
+		return fmt.Errorf("job %d: pty: not supported for inproc jobs", j.ID)
+	}
+	j.usePty = true
+	return nil
+}
+
 func (j *Job) writeStdin(p []byte) (int, error) {
 	j.mu.Lock()
+	master := j.ptyMaster
 	w := j.stdinW
 	j.mu.Unlock()
+	if master != nil {
+		return master.Write(p)
+	}
 	if w == nil {
 		return 0, fmt.Errorf("job %d: stdin closed", j.ID)
 	}
 	return w.Write(p)
 }
 
+// closeStdin closes the plain-pipe stdin's write end, signaling EOF the
+// way an ordinary (non-pty) job's stdin always has. A pty job has no
+// separate stdin fd to close — the pty master is the same handle stdout
+// is read from and resize/signal are delivered through, so closing it
+// here would tear down the whole job, not just stdin. EOF for a pty
+// job's child comes from a real Ctrl-D byte (0x04) written through
+// writeStdin instead, exactly like a real terminal's line discipline.
 func (j *Job) closeStdin() error {
 	j.mu.Lock()
+	if j.ptyMaster != nil {
+		j.mu.Unlock()
+		return nil
+	}
 	w := j.stdinW
 	j.stdinW = nil
 	j.mu.Unlock()
@@ -280,13 +322,21 @@ func (j *Job) Ctl(cmd string) error {
 			return fmt.Errorf("ctl: priority: %w", err)
 		}
 		return j.setPriority(n)
+	case "pty":
+		return j.SetPty()
 	case "resize":
-		// Recognized so the answer is a clear one, not "unknown command":
-		// jobs run over pipes (stdin/stdout/stderr are plain streams), so
-		// there is no terminal to resize, in any state. A program that
-		// needs one is a fullscreen_programs entry, which the shell runs on
-		// its own terminal rather than as a job.
-		return errors.New("ctl: resize: jobs run over pipes, not a pty, so there is no terminal to resize (programs that need one belong in fullscreen_programs)")
+		if len(fields) != 3 {
+			return errors.New("ctl: resize: expected a row count and a column count")
+		}
+		rows, err := strconv.Atoi(fields[1])
+		if err != nil {
+			return fmt.Errorf("ctl: resize: rows: %w", err)
+		}
+		cols, err := strconv.Atoi(fields[2])
+		if err != nil {
+			return fmt.Errorf("ctl: resize: cols: %w", err)
+		}
+		return j.resize(rows, cols)
 	case "detach":
 		j.mu.Lock()
 		j.detached = true
@@ -313,11 +363,15 @@ func (j *Job) start() error {
 	j.cancel = cancel
 	j.state = StateRunning
 	j.startedAt = time.Now()
+	usePty := j.usePty // fixed by now: SetPty only succeeds while state == StatePending, checked under this same lock above
 	j.mu.Unlock()
 	j.appendEvent()
 
 	switch j.kind {
 	case KindSubprocess:
+		if usePty {
+			return j.startSubprocessPty(ctx)
+		}
 		return j.startSubprocess(ctx)
 	case KindInproc:
 		go func() {
@@ -384,6 +438,101 @@ func (j *Job) startSubprocess(ctx context.Context) error {
 		j.finishFromExec(cmd.Wait())
 	}()
 	return nil
+}
+
+// startSubprocessPty is startSubprocess's counterpart for a job that
+// opted in via SetPty: stdin/stdout/stderr attach to a real pty instead
+// of plain pipes, giving real line-discipline behavior (Ctrl-D signals
+// EOF, Ctrl-C/Ctrl-Z become real signals) and a resizable window
+// instead of `ctl resize`'s "jobs run over pipes" answer. stdout and
+// stderr are the same growBuf — a real terminal has one output stream,
+// not two — so j.stderr is left empty for a pty job; a reader wanting
+// the merged stream reads stdout.
+func (j *Job) startSubprocessPty(ctx context.Context) error {
+	j.mu.Lock()
+	argv := append([]string(nil), j.argv...)
+	env := append([]string(nil), j.env...)
+	cwd := j.cwd
+	j.mu.Unlock()
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
+	// See startSubprocess's matching comment: re-resolve against env's
+	// own PATH rather than trusting exec.CommandContext's lookup against
+	// this process's PATH.
+	if resolved, err := pathresolve.LookPath(argv[0], env); err != nil {
+		j.finish(StateFailed, nil, "", err.Error())
+		return nil
+	} else {
+		cmd.Path = resolved
+		cmd.Err = nil
+	}
+	cmd.Dir = cwd
+	// pty.Start sets Stdin/Stdout/Stderr and the Setsid/Setctty
+	// SysProcAttr itself, then calls cmd.Start() — but Cancel must be
+	// overridden *before* that call: exec.CommandContext's default
+	// Cancel only signals the direct child, while pty.Start's Setsid
+	// makes that child its own session and process-group leader, so a
+	// `ctl kill` (ctx cancellation) should take the whole group with it —
+	// the same "process-group signals" behavior `ctl signal`/Job.signal
+	// gets from pty.Pty.Signal below.
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+
+	master, err := pty.Start(cmd)
+	if err != nil {
+		j.finish(StateFailed, nil, "", err.Error())
+		return nil
+	}
+	j.mu.Lock()
+	j.pid = cmd.Process.Pid
+	j.proc = cmd
+	j.ptyMaster = master
+	j.mu.Unlock()
+	j.appendEvent()
+
+	copyDone := make(chan struct{})
+	go func() {
+		defer close(copyDone)
+		_, err := io.Copy(j.stdout, master)
+		// A pty master read returns EIO, not io.EOF, once the child's
+		// last reference to the slave closes on exit — a ptmx quirk (see
+		// tty_ioctl(4)), not a real read error worth surfacing.
+		if err != nil && !errors.Is(err, syscall.EIO) {
+			fmt.Fprintf(os.Stderr, "9sh: job %d: pty read: %v\n", j.ID, err)
+		}
+	}()
+
+	go func() {
+		waitErr := cmd.Wait()
+		<-copyDone // drain whatever pty output is still in flight before declaring the job terminal, so stdout isn't truncated
+		master.Close()
+		j.finishFromExec(waitErr)
+	}()
+	return nil
+}
+
+// resize sets a running pty job's window size, visible to the child via
+// TIOCGWINSZ — the kernel delivers SIGWINCH itself on a real change (see
+// pty.Pty.Resize's own doc comment), so this never sends one directly.
+// "resize <rows> <cols>" deliberately matches stty size's own output
+// order, so a client's resize handler can forward that pair straight
+// through.
+func (j *Job) resize(rows, cols int) error {
+	j.mu.Lock()
+	usePty := j.usePty
+	master := j.ptyMaster
+	j.mu.Unlock()
+	if !usePty {
+		return errors.New("ctl: resize: jobs run over pipes, not a pty, so there is no terminal to resize (opt in with `ctl pty` before start, or use fullscreen_programs for an interactive program)")
+	}
+	if master == nil {
+		return fmt.Errorf("job %d: resize: job has no pty yet (not started)", j.ID)
+	}
+	return master.Resize(term.Size{Rows: rows, Cols: cols})
 }
 
 // finishFromExec classifies cmd.Wait()'s result. StateFailed is reserved
@@ -481,7 +630,11 @@ func (j *Job) kill() error {
 
 // signal delivers an OS signal to a running subprocess job. wantState, if
 // non-empty, is the state to move to on success (used for stop/resume);
-// a plain `signal <name>` passes "" and leaves state alone.
+// a plain `signal <name>` passes "" and leaves state alone. A pty job
+// delivers to its whole process group (pty.Start's Setsid makes the
+// child its own group leader), matching what a real controlling
+// terminal's line discipline does for an ISIG-triggered signal; a plain
+// job signals just the one tracked pid, as before.
 func (j *Job) signal(sig syscall.Signal, label string, wantState State) error {
 	j.mu.Lock()
 	if j.kind != KindSubprocess {
@@ -494,12 +647,19 @@ func (j *Job) signal(sig syscall.Signal, label string, wantState State) error {
 		return fmt.Errorf("job %d: %s: job is %s, not running", j.ID, label, state)
 	}
 	proc := j.proc
+	master := j.ptyMaster
 	j.mu.Unlock()
-	if proc == nil || proc.Process == nil {
-		return fmt.Errorf("job %d: %s: process not started", j.ID, label)
-	}
-	if err := proc.Process.Signal(sig); err != nil {
-		return fmt.Errorf("job %d: %s: %w", j.ID, label, err)
+	if master != nil {
+		if err := master.Signal(sig); err != nil {
+			return fmt.Errorf("job %d: %s: %w", j.ID, label, err)
+		}
+	} else {
+		if proc == nil || proc.Process == nil {
+			return fmt.Errorf("job %d: %s: process not started", j.ID, label)
+		}
+		if err := proc.Process.Signal(sig); err != nil {
+			return fmt.Errorf("job %d: %s: %w", j.ID, label, err)
+		}
 	}
 	if wantState != "" {
 		j.mu.Lock()

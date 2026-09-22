@@ -246,6 +246,20 @@ func (r *Record) SetField(name string, v Value) error {
 	return nil
 }
 
+// Backing returns name's live backing and whether it has one — kyu/eval
+// uses this to reach through to the concrete namespace-file object
+// behind a job record's stdin/stdout/ctl fields (see kyu/eval's
+// attach()), which needs the real server.File handles those fields
+// already opened (correctly rooted even for an @host-remote job,
+// unlike re-deriving a path from the calling Env's current JobRoot),
+// not just their FieldBacking-mediated Value results. This package
+// still has no idea what a backing actually is — it only ever hands
+// the interface back out, same as SetBacking only ever takes it in.
+func (r *Record) Backing(name string) (FieldBacking, bool) {
+	b, ok := r.backing[name]
+	return b, ok
+}
+
 // SetBacking makes name a live-backed field.
 func (r *Record) SetBacking(name string, b FieldBacking) {
 	if _, ok := r.index[name]; !ok {

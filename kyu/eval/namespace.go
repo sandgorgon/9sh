@@ -202,18 +202,26 @@ func evalBackgroundSubprocess(call *ast.ExternalCall, env *Env, pty bool) (value
 	clone.Close()
 	id := strings.TrimSpace(string(idBytes))
 
-	// There's no kyu syntax yet to feed a backgrounded job's stdin, so
-	// close it immediately — matching "no input redirection" — rather
-	// than leaving it open with nothing that will ever write to or close
-	// it. Left open, os/exec's own internal stdin-forwarding goroutine
-	// (spawned because Cmd.Stdin here isn't an *os.File) would block
-	// Wait() forever regardless of whether the child even reads stdin;
-	// see job/job_test.go's note on the same issue.
-	stdinFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "stdin")...)
-	if err != nil {
-		return nil, err
+	// A plain (non-pty) job's stdin is closed immediately -- there's no
+	// kyu syntax to feed one an ongoing byte stream, so "no input
+	// redirection" -- rather than leaving it open with nothing that
+	// will ever write to or close it. Left open, os/exec's own internal
+	// stdin-forwarding goroutine (spawned because Cmd.Stdin here isn't
+	// an *os.File) would block Wait() forever regardless of whether the
+	// child even reads stdin; see job/job_test.go's note on the same
+	// issue. A pty job's Cmd.Stdin *is* a real *os.File (the pty
+	// slave -- see job.startSubprocessPty), so that internal goroutine
+	// doesn't exist and this concern doesn't apply: its stdin is left
+	// open, reachable afterward via the job record's own writable
+	// "stdin" field (buildJobRecord) -- e.g. attach()'s raw passthrough,
+	// or direct `j.stdin = "..."` scripting.
+	if !pty {
+		stdinFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "stdin")...)
+		if err != nil {
+			return nil, err
+		}
+		stdinFile.Close()
 	}
-	stdinFile.Close()
 
 	argvFile, err := openFile(ctx, root, p9.OWRITE, jobPath(jobRoot, id, "argv")...)
 	if err != nil {
@@ -536,6 +544,17 @@ func buildJobRecord(ctx context.Context, base server.File) (*value.Record, error
 		{"cwd", true, true, false, kindText},
 		{"stdout", false, true, false, kindBytes},
 		{"stderr", false, true, false, kindBytes},
+		// stdin is writable, not readable (job/fs.go's stdinFile.Read
+		// itself errors "write-only" — server-enforced, not duplicated
+		// here). Only useful today for a &pty job: evalBackgroundSubprocess
+		// still pre-closes a plain job's stdin immediately, to avoid
+		// stalling os/exec's internal stdin-forwarding goroutine forever
+		// when nothing ever writes to it -- a concern that doesn't apply
+		// to a pty job's real *os.File stdin. A plain job's "stdin" field
+		// is present but already closed, so a write attempt surfaces the
+		// server's own "stdin closed" error, not a silent no-op or a
+		// missing field.
+		{"stdin", true, false, false, kindBytes},
 	}
 	for _, fld := range fields {
 		f, err := openFile(ctx, base, p9.ORDWR, fld.name)
@@ -546,7 +565,7 @@ func buildJobRecord(ctx context.Context, base server.File) (*value.Record, error
 		case kindJSON:
 			rec.SetBacking(fld.name, &jsonField{ctx: ctx, file: f, blocking: fld.blocking})
 		case kindBytes:
-			rec.SetBacking(fld.name, &bytesField{ctx: ctx, file: f})
+			rec.SetBacking(fld.name, &bytesField{ctx: ctx, file: f, writable: fld.writable})
 		default:
 			rec.SetBacking(fld.name, &textField{ctx: ctx, file: f, writable: fld.writable, readable: fld.readable})
 		}
@@ -610,8 +629,9 @@ func (f *textField) DisplayField() string {
 // Read-only: writing to a job's own stdout/stderr isn't a sensible
 // operation.
 type bytesField struct {
-	ctx  context.Context
-	file server.File
+	ctx      context.Context
+	file     server.File
+	writable bool // true only for "stdin" -- see buildJobRecord's own comment on that field
 }
 
 func (f *bytesField) ReadField() (value.Value, error) {
@@ -622,8 +642,16 @@ func (f *bytesField) ReadField() (value.Value, error) {
 	return value.Bytes(b), nil
 }
 
-func (f *bytesField) WriteField(value.Value) error {
-	return fmt.Errorf("field is read-only")
+// WriteField writes v's raw bytes (renderForExternal's conversion --
+// the same one a foreground %cmd's own piped-in stdin already uses, see
+// runExternalViaJob) at offset 0 each call, exactly like argv/env/cwd's
+// textField: a small value written once, not an append-only stream.
+func (f *bytesField) WriteField(v value.Value) error {
+	if !f.writable {
+		return fmt.Errorf("field is read-only")
+	}
+	_, err := f.file.Write(f.ctx, 0, renderForExternal(v))
+	return err
 }
 
 // jsonField backs a field with a namespace file whose content is one

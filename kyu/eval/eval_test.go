@@ -1270,6 +1270,45 @@ j.stdout`, env)
 	}
 }
 
+// TestBackgroundPtyStdinScripting proves the other half of the stdin
+// gap this round closed: a pty job's "stdin" field (buildJobRecord) is
+// writable, unlike a plain job's (pre-closed immediately, see
+// evalBackgroundSubprocess's own comment) -- `j.stdin = "..."` reaches
+// the real child, exactly like typing at a real terminal.
+func TestBackgroundPtyStdinScripting(t *testing.T) {
+	skipUnlessOnPath(t, "sh")
+	env := jobsEnv(t)
+	runEnv(t, `j := %sh "-c" "read x; echo got $x" &pty`, env)
+	runEnv(t, `j.stdin = "hello\n"`, env)
+	v := runEnv(t, `j | wait
+j.stdout`, env)
+	// A pty echoes input back (cooked-mode ECHO), so stdout also
+	// contains the "hello" that was written to stdin, not just the
+	// command's own "got hello" output -- Contains, not an exact match.
+	if got := string(v.(value.Bytes)); !strings.Contains(got, "got hello") {
+		t.Fatalf("stdout = %q, want it to contain %q", got, "got hello")
+	}
+}
+
+// TestBackgroundPlainJobStdinFieldStaysClosed confirms a plain
+// (non-pty) job's writable "stdin" field is present (so `j.stdin =
+// "..."` doesn't fail with "no such field") but errors, since
+// evalBackgroundSubprocess still pre-closes it immediately -- the
+// long-standing "no input redirection" limitation is otherwise
+// unchanged by adding pty jobs.
+func TestBackgroundPlainJobStdinFieldStaysClosed(t *testing.T) {
+	skipUnlessOnPath(t, "true")
+	env := jobsEnv(t)
+	runEnv(t, `j := %true &`, env)
+	err := runEnvErr(t, `j.stdin = "hello\n"`, env)
+	if err == nil {
+		t.Fatal("want an error writing to a plain job's pre-closed stdin")
+	}
+	if !strings.Contains(err.Error(), "closed") {
+		t.Errorf("error %q should say stdin is closed", err)
+	}
+}
+
 // TestBackgroundPtyRejectedForInprocJob: `&pty` only makes sense for a
 // subprocess job (job.SetPty itself rejects an inproc job — there's no
 // OS process to attach a pty to), so evalBackground must reject it

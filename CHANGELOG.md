@@ -23,7 +23,10 @@ once a first tagged release is cut.
   subprocess job with a pty already opted into (`pty` written directly
   after `&`, no separator required), same shape as plain `&`. Rejected
   at eval time for anything that isn't a subprocess job (an
-  in-process `&pty` has no OS process to attach a pty to).
+  in-process `&pty` has no OS process to attach a pty to). A `&pty`
+  job's job-record `stdin` field is writable (`j.stdin = "text\n"`) —
+  the first kyu syntax able to feed a backgrounded job's stdin at all.
+  A plain job's `stdin` still pre-closes immediately as before.
 
 ## [0.9.0] - 2026-09-22
 

@@ -133,8 +133,12 @@ introspection and safety, regex and collections).
   default plain pipes — see `ctl pty`'s own entry above for what that
   changes. Subprocess-only: `&pty` on anything else (an in-process job)
   is a clear error at background time, the same reason `ctl pty` itself
-  rejects an in-process job. There's no kyu syntax yet to feed a
-  backgrounded job's stdin either way, `&pty` included.
+  rejects an in-process job. A `&pty` job's `stdin` field is writable —
+  `j.stdin = "some text\n"` reaches the real child exactly like typing
+  at a real terminal — unlike a plain (non-pty) job, whose `stdin` is
+  still pre-closed immediately once backgrounded (there's still no kyu
+  syntax to feed one an ongoing byte stream): its `stdin` field exists
+  but a write to it errors, since there's nothing left open to write to.
 - A job's `ctl` file takes one command per write: `start` (begin a
   pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
   `signal NAME` (`signal HUP`), `priority N` (the nice value of a running

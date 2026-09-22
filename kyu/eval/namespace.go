@@ -351,7 +351,10 @@ func evalBackgroundInproc(expr ast.Expr, env *Env) (value.Value, error) {
 	}
 
 	j := mgr.AllocInproc(func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer) error {
-		jobEnv.SetCancelContext(ctx)
+		// nil cancel func: this job is cancelled via job.go's own
+		// Ctl("kill") calling ctx's cancel function directly, never
+		// through Env -- see SetCancelContext's own doc comment.
+		jobEnv.SetCancelContext(ctx, nil)
 		var result value.Value
 		var err error
 		if closureLit, ok := expr.(*ast.Closure); ok {

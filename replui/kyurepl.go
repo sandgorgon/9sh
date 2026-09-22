@@ -460,14 +460,22 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 	// While a background evaluate() is in flight, every key except
 	// Ctrl+C is a no-op -- see busy's own doc comment for why this also
 	// has to hold for Ctrl-R/search, not just ordinary editing. Ctrl+C
-	// here reaches Env.InterruptHandler directly (a decoded keystroke,
-	// not a real SIGINT: raw mode means the kernel never raises one for
-	// Ctrl+C while this widget owns the terminal), the same interrupt
-	// path `-repl`'s real SIGINT already uses for a foreground %cmd --
-	// see Env.SetInterruptHandler's doc comment.
+	// here reaches Env.InterruptHandler and Env.CancelFunc directly (a
+	// decoded keystroke, not a real SIGINT: raw mode means the kernel
+	// never raises one for Ctrl+C while this widget owns the terminal),
+	// the same two interrupt paths `-repl`'s real SIGINT already uses.
+	// Both fire unconditionally: InterruptHandler reaches a blocked
+	// foreground %cmd (see Env.SetInterruptHandler's doc comment),
+	// CancelFunc reaches a spinning pure-kyu loop or unbounded recursion
+	// (see Env.SetCancelContext's doc comment and submit()'s own,
+	// above) -- calling whichever one is nil, or already fired, is a
+	// harmless no-op, so both are always tried rather than picking one.
 	if w.busy {
 		if ctrl && ke.Rune == 'c' && w.env != nil {
 			if fn := w.env.InterruptHandler(); fn != nil {
+				fn()
+			}
+			if fn := w.env.CancelFunc(); fn != nil {
 				fn()
 			}
 		}
@@ -1013,8 +1021,24 @@ func (w *kyuReplWidget) submit() tui.Cmd {
 		return nil
 	}
 	w.busy = true
+	// Registered for the duration of this one evaluate() call so a real
+	// Ctrl+C (handleKey's busy-gate branch, below) can actually stop a
+	// foreground `while true {}` or unbounded recursion -- the same
+	// Env.CancelContext/CancelFunc mechanism evalBackgroundInproc uses
+	// for a backgrounded job, just registered here instead. Cleared
+	// before pendingEval is set so a Ctrl+C arriving in the narrow gap
+	// between evaluate() finishing and its result being picked up is a
+	// harmless no-op (CancelFunc() will be nil by then) rather than
+	// re-cancelling an already-finished evaluation.
+	if w.env != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		w.env.SetCancelContext(ctx, cancel)
+	}
 	go func() {
 		res := w.evaluate(src)
+		if w.env != nil {
+			w.env.SetCancelContext(nil, nil)
+		}
 		w.mu.Lock()
 		w.pendingEval = &res
 		w.mu.Unlock()

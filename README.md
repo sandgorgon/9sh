@@ -671,7 +671,7 @@ below is built into 9sh: press `?` at an empty prompt any time.
 | Ctrl+L | Clear the transcript (bash/zsh/readline convention) — history (Up/Down, Ctrl-R) is untouched; `history_clear()` clears that separately |
 | `↑`/`↓` | Recall previous/next submitted input (only outside a multi-line continuation) |
 | `PageUp`/`PageDown`, mouse wheel | Scroll the transcript, independent of the input line |
-| Ctrl+C | Copy the whole transcript |
+| Ctrl+C | Copy the whole transcript — or, while a foreground `%cmd` or kyu evaluation (e.g. `while true {}`) is still running, interrupt it instead |
 | Alt+C | Copy only what's currently visible on screen |
 | paste | Inserts at the cursor |
 | `?` at an empty prompt | Toggle the built-in help screen (`?`, `q` or `Esc` also close it) |
@@ -686,13 +686,17 @@ statement starts with `?` (it's the postfix error-check operator, as in
 `f()?`), and anywhere else on the line, or inside an open multi-line
 block, `?` just types a `?`.
 
-Ctrl+C is "copy all," not the Ctrl+Shift+C you might expect from a
-desktop terminal: most terminal emulators (this one's own standing
-test target, gnome-terminal/VTE, included) send the identical byte for
+Ctrl+C is "copy all" only while idle — the conventional terminal split:
+it interrupts whatever's currently running instead, the same as any
+other shell, and is free for something else (copying) once nothing is.
+This isn't the Ctrl+Shift+C you might expect from a desktop terminal
+either way: most terminal emulators (this one's own standing test
+target, gnome-terminal/VTE, included) send the identical byte for
 Ctrl+C and Ctrl+Shift+C on a plain letter key — only a kitty-keyboard-
 protocol-aware terminal can tell them apart, which isn't something to
 assume. Alt+C for "just the visible part" sidesteps that ambiguity
-entirely.
+entirely (and is unaffected by any of this — it isn't overloaded with
+interrupt the way Ctrl+C is).
 
 The input line is syntax-highlighted live as you type (keywords,
 strings, numbers, paths, and the `%`/`@` sigils each get their own

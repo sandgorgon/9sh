@@ -30,13 +30,15 @@ import (
 // calling it, or any inner closure it in turn calls, walks right back
 // into that original Env's vars and, via root(), the process-wide
 // fields too. Before background jobs existed, "no two evaluate() calls
-// ever overlap" (still true, and still why cancelCtx below stays a
-// plain field) made all of this safe without locking; a background
+// ever overlap" made all of this safe without locking; a background
 // job's own goroutine calling back into the foreground Env it was
 // snapshotted from is exactly the second, genuinely concurrent access
 // that invariant no longer rules out. ns and interruptHandler already
 // used atomics for a narrower version of this same reason (see
 // SetInterruptHandler's own doc comment) -- this generalizes that.
+// cancelCtx/cancelFn joined this group later than the rest, once a real
+// Ctrl-C (not just a background job's own ctl kill) needed to reach them
+// too — see SetCancelContext's own doc comment.
 type Env struct {
 	mu                 sync.RWMutex
 	vars               map[string]value.Value
@@ -55,7 +57,8 @@ type Env struct {
 	sourceDepth        int                          // process-wide, guarded by root().mu; see biSource's maxSourceDepth
 	callDepth          int                          // process-wide, guarded by root().mu; see callClosure's maxCallDepth
 	localJobManager    *job.Manager                 // process-wide; write-once at cmd/9sh's bootstrap, before env is ever shared with another goroutine -- safe unlocked, see SetLocalJobManager
-	cancelCtx          context.Context              // NOT process-wide -- see SetCancelContext
+	cancelCtx          context.Context              // process-wide, guarded by root().mu; see SetCancelContext
+	cancelFn           func()                       // process-wide, guarded by root().mu; see SetCancelContext/CancelFunc
 }
 
 // ExternalOutputSinkFunc receives a foreground %cmd's captured stderr
@@ -432,33 +435,58 @@ func (e *Env) LocalJobManager() *job.Manager {
 	return e.root().localJobManager
 }
 
-// SetCancelContext registers ctx as the cancellation signal evalWhile
-// and callClosure check on every loop iteration/call (see their own
-// doc comments) — how a killed in-process background job
-// (evalBackgroundInproc) actually stops a runaway `while true {}` or
-// unbounded recursion, since Go can't force-kill a goroutine the way a
-// real process can be signaled.
+// SetCancelContext registers ctx, and the function that cancels it, as
+// the cancellation signal evalWhile and callClosure check on every loop
+// iteration/call (see their own doc comments) — how a killed in-process
+// background job (evalBackgroundInproc), or a real Ctrl-C over a
+// foreground evaluation (replui/kyurepl.go's handleKey, cmd/9sh's
+// repl()), actually stops a runaway `while true {}` or unbounded
+// recursion, since Go can't force-kill a goroutine the way a real
+// process can be signaled.
 //
-// Deliberately NOT process-wide like every other Env hook above,
-// despite living on the same struct: those are all safe only because no
-// two evaluate() calls ever overlap on one Env tree (see e.g.
-// SetFullscreenHandler's doc comment) — the opposite of what this is
-// for. Each in-process background job gets its own brand-new root Env
-// (see evalBackgroundInproc), so this is set exactly once, read only by
-// that job's own single goroutine, and never touched by anything else —
-// a plain field is correct here for the same reason a mutex would be
-// pointless: there is no second goroutine to race with. Contrast
-// SetInterruptHandler, which genuinely does need atomics, because the
-// UI goroutine reads that one from outside the evaluating goroutine.
-func (e *Env) SetCancelContext(ctx context.Context) {
-	e.root().cancelCtx = ctx
+// cancel is nil for evalBackgroundInproc's own registration: a
+// background job never needs to trigger its own cancellation through
+// Env, since job.go's Ctl("kill") already calls the same context's
+// cancel function directly. It's only ever non-nil for the foreground
+// case, where there's no job object to call Ctl on — CancelFunc is how
+// a real Ctrl-C reaches it instead, called the same way
+// InterruptHandler already is: `if fn := env.CancelFunc(); fn != nil {
+// fn() }`.
+//
+// Guarded by root().mu like every other process-wide field above
+// (unlike this field's own original design — see git history): once a
+// real Ctrl-C needs to trigger cancellation for a still-running
+// *foreground* evaluation, this is read from the evaluating goroutine
+// and written/triggered from a different one (the TUI's UI goroutine,
+// or repl()'s own SIGINT-forwarding goroutine) at the same time,
+// exactly the hazard SetInterruptHandler's own doc comment already
+// describes for that field.
+func (e *Env) SetCancelContext(ctx context.Context, cancel func()) {
+	root := e.root()
+	root.mu.Lock()
+	root.cancelCtx, root.cancelFn = ctx, cancel
+	root.mu.Unlock()
 }
 
-// CancelContext returns what SetCancelContext registered, or nil for
-// ordinary (non-backgrounded) evaluation — evalWhile/callClosure's
-// cancellation check is a no-op whenever this is nil.
+// CancelContext returns what SetCancelContext registered, or nil when
+// nothing is currently running that this can cancel — evalWhile/
+// callClosure's cancellation check is a no-op whenever this is nil.
 func (e *Env) CancelContext() context.Context {
-	return e.root().cancelCtx
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.cancelCtx
+}
+
+// CancelFunc returns the function SetCancelContext registered alongside
+// its context, or nil if none is currently registered (idle, or a
+// background job, which is never cancelled through Env — see
+// SetCancelContext's own doc comment).
+func (e *Env) CancelFunc() func() {
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.cancelFn
 }
 
 // Get looks up name in this scope, then outward through parents. Each

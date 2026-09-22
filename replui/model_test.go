@@ -302,6 +302,63 @@ func TestCtrlCInterruptsRunningForegroundCommand(t *testing.T) {
 	}
 }
 
+// TestCtrlCInterruptsRunningForegroundKyuLoop is
+// TestCtrlCInterruptsRunningForegroundCommand's counterpart for the
+// residual gap left after items 1 and 2: a *foreground* pure-kyu
+// compute loop (`while true {}` typed directly at the prompt, not
+// backgrounded via &) must also be interruptible now -- via
+// Env.CancelFunc (see submit()'s and handleKey's own doc comments),
+// not Env.InterruptHandler, which stays nil for this case (there's no
+// external command to signal). Unlike the %cmd version, there's no
+// race to retry through here: submit() registers CancelFunc
+// synchronously, on this same goroutine, before the eval goroutine is
+// even spawned -- so it's already set by the time this test's own
+// Enter dispatch returns. The retry loop below is kept anyway, purely
+// for consistency with the %cmd version above; a single Ctrl+C would
+// suffice.
+func TestCtrlCInterruptsRunningForegroundKyuLoop(t *testing.T) {
+	m := New(eval.NewGlobalEnv(nil))
+	app := tui.NewApp(m, 40, 10)
+	defer app.Close()
+
+	// An immediately-invoked closure, not two statements on separate
+	// lines: a bare `{ ... }` typed alone (no &) is just a closure
+	// *literal* -- ordinary kyu semantics, unrelated to
+	// evalBackgroundInproc's own bare-closure auto-invoke special case,
+	// which only applies to the backgrounded path -- so this needs an
+	// explicit `()` call to actually run its body as one single-line
+	// submission.
+	for _, r := range `{ i := 0; while true { i = i + 1 } }()` {
+		dispatchAll(app, app.HandleInput(input.KeyEvent{Rune: r}))
+	}
+	dispatchAll(app, app.HandleInput(input.KeyEvent{Key: input.KeyEnter}))
+
+	if !m.replWidget.busy {
+		t.Fatal("expected busy=true immediately after submitting, before evaluate() has finished")
+	}
+
+	// The event loop must stay responsive while the loop runs.
+	dispatchAll(app, app.HandleInput(input.KeyEvent{Rune: 'x'}))
+
+	deadline := time.Now().Add(5 * time.Second)
+	for m.replWidget.busy && time.Now().Before(deadline) {
+		dispatchAll(app, app.HandleInput(input.KeyEvent{Rune: 'c', Mod: input.ModCtrl}))
+		time.Sleep(10 * time.Millisecond)
+	}
+	if m.replWidget.busy {
+		t.Fatal("Ctrl+C did not interrupt the foreground while-loop within 5s")
+	}
+
+	forceRenders(app, 1)
+	buf := app.Buffer().String()
+	if !strings.Contains(buf, "9sh>") {
+		t.Fatalf("expected the prompt back after the interrupt:\n%s", buf)
+	}
+	if !strings.Contains(buf, "context canceled") {
+		t.Fatalf("expected the transcript to show the cancellation error:\n%s", buf)
+	}
+}
+
 // TestHelpOpensAndClosesWithQuestionMark drives the real input path:
 // `?` at the empty prompt opens the help modal, and `?` again — now handled by the modal's own
 // body, which claims focus while open — closes it.

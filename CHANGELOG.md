@@ -8,6 +8,15 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- Ctrl+C now interrupts a foreground pure-kyu evaluation too — a
+  `while true {}` typed directly at the prompt, or an unbounded
+  self-recursive call, not just a foreground `%cmd` (which it already
+  interrupted). Works in the TUI and in `-repl`. Ctrl+C's clipboard-copy
+  binding in the TUI is otherwise unchanged — it's the conventional
+  terminal split: interrupt while something's running, copy while idle.
+
 ## [0.8.0] - 2026-09-22
 
 ### Added

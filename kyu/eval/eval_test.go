@@ -1306,6 +1306,87 @@ j | wait`, env)
 	}
 }
 
+// TestForegroundCancelStopsWhileLoop is the core-mechanism test for the
+// residual gap left after items 1 and 2: interrupting a *foreground*
+// pure-kyu compute loop (`while true {}` typed directly at the prompt,
+// not backgrounded). Wires Env.SetCancelContext/CancelFunc directly, the
+// same way replui/kyurepl.go's submit() and cmd/9sh's repl() now do,
+// without going through either entry point -- proving the shared
+// mechanism (evalWhile's own cancellation check, unchanged since item 2)
+// works for a live, ordinary Eval() call, not just evalBackgroundInproc's
+// own private Env.
+func TestForegroundCancelStopsWhileLoop(t *testing.T) {
+	env := NewGlobalEnv(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	env.SetCancelContext(ctx, cancel)
+
+	p := parser.New(`i := 0
+while true { i = i + 1 }`)
+	prog := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		t.Fatalf("parse errors: %v", p.Errors())
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := Eval(prog, env)
+		errCh <- err
+	}()
+
+	// Give the loop a moment to actually be running (not merely about
+	// to start) before cancelling it -- a cancel landing before the
+	// goroutine is even scheduled would still be caught by evalWhile's
+	// very first iteration check, so this is about testing a
+	// genuinely-running loop's cancellation, not the mechanism's
+	// correctness (already covered either way).
+	time.Sleep(20 * time.Millisecond)
+	fn := env.CancelFunc()
+	if fn == nil {
+		t.Fatal("CancelFunc() should be set while the loop is running")
+	}
+	fn()
+
+	select {
+	case err := <-errCh:
+		if err == nil || !strings.Contains(err.Error(), "context canceled") {
+			t.Fatalf("err = %v, want a context-canceled error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelling did not stop the loop within 5s")
+	}
+	// Eval itself never clears CancelContext -- only submit()/repl()
+	// do that, themselves, after Eval returns (see their own doc
+	// comments) -- so it's still the same (now-cancelled) ctx here.
+	if env.CancelContext() != ctx {
+		t.Fatal("CancelContext() should still be the ctx this test registered")
+	}
+}
+
+// TestForegroundCancelStopsUnboundedRecursion is
+// TestForegroundCancelStopsWhileLoop's counterpart for the other
+// unbounded-evaluation shape callClosure's cancellation check exists
+// for (see its own doc comment): unbounded self-recursion, not a while
+// loop. maxCallDepth (callable.go) already makes this fail cleanly
+// regardless (see TestUnboundedRecursionFailsCleanlyInForeground) --
+// this confirms an explicit cancel *also* works, stopping it well
+// before maxCallDepth would have.
+func TestForegroundCancelStopsUnboundedRecursion(t *testing.T) {
+	env := NewGlobalEnv(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	env.SetCancelContext(ctx, cancel)
+	cancel() // cancelled up front: even the first call should refuse to run
+
+	p := parser.New(`loop := { loop() }
+loop()`)
+	prog := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		t.Fatalf("parse errors: %v", p.Errors())
+	}
+	_, err := Eval(prog, env)
+	if err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("err = %v, want a context-canceled error", err)
+	}
+}
+
 // TestBackgroundWhileLoopKillIsCooperative is the real regression test
 // for open-item #2's hard part: a backgrounded `while true {}` must
 // actually be killable (evalWhile's cancellation check), landing in

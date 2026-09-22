@@ -483,6 +483,20 @@ func repl(env *eval.Env) {
 			if h := env.InterruptHandler(); h != nil {
 				h()
 			}
+			// A real Ctrl-C reaches a spinning pure-kyu loop or
+			// unbounded recursion through here -- InterruptHandler
+			// above is only ever set for a blocked foreground %cmd
+			// (see Env.SetInterruptHandler's doc comment), so a bare
+			// `while true {}` needs this second, independent signal
+			// instead (see Env.SetCancelContext's doc comment). Both
+			// are tried unconditionally; calling whichever is nil, or
+			// already fired, is a harmless no-op. This goroutine
+			// already runs independent of whatever runSource is doing
+			// below on the main goroutine -- that's exactly why
+			// InterruptHandler already worked for a foreground %cmd.
+			if fn := env.CancelFunc(); fn != nil {
+				fn()
+			}
 		}
 	}()
 
@@ -500,7 +514,17 @@ func repl(env *eval.Env) {
 		}
 
 		if trimmedNonEmpty(buf) {
+			// Registered for the duration of this one call so the
+			// SIGINT-forwarding goroutine above can actually stop a
+			// runaway evaluation -- see its own comment and
+			// Env.SetCancelContext's doc comment. Cleared right after,
+			// same as replui/kyurepl.go's submit() does for the TUI:
+			// a SIGINT arriving after runSource has already returned
+			// is a harmless no-op (CancelFunc() will be nil by then).
+			ctx, cancel := context.WithCancel(context.Background())
+			env.SetCancelContext(ctx, cancel)
 			runSource(buf, env)
+			env.SetCancelContext(nil, nil)
 		}
 		buf = ""
 		fmt.Print(prompt)

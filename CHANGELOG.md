@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-22
+
 ### Added
 
 - `&` backgrounds any kyu expression now, not just `%cmd` — an
@@ -22,6 +24,15 @@ once a first tagged release is cut.
   recursion is additionally depth-bounded on its own, so a missing
   base case fails cleanly instead of crashing the session. `stop`/
   `resume`/`signal`/`priority` remain subprocess-only ctl commands.
+
+### Fixed
+
+- The default TUI no longer freezes solid while a foreground `%cmd`
+  runs: it stays responsive, and Ctrl+C now actually interrupts the
+  running command (the same interrupt `9sh -repl`'s real Ctrl+C
+  already used) instead of doing nothing until the command finished
+  on its own. Ctrl+C at an idle prompt is unchanged (copies the
+  transcript to the clipboard).
 
 ## [0.6.0] - 2026-09-20
 

@@ -988,6 +988,117 @@ func TestPassthroughBlockedByEnv(t *testing.T) {
 	}
 }
 
+// TestExternalCallComputedNameRuns is %(expr)'s basic eval-level test —
+// open item #4, the %-sigil counterpart to @(expr). See
+// externalCallName (external.go) for where the computed name is
+// resolved, before argument evaluation, fullscreen_programs, and
+// native_programs are ever consulted.
+func TestExternalCallComputedNameRuns(t *testing.T) {
+	skipUnlessOnPath(t, "echo")
+	env := jobsEnv(t)
+	v := runEnv(t, `name := "echo"
+%(name) "hi-from-computed-name"`, env)
+	if string(v.(value.Bytes)) != "hi-from-computed-name\n" {
+		t.Fatalf("stdout = %q, want %q", v, "hi-from-computed-name\n")
+	}
+}
+
+// TestExternalCallComputedNameAcceptsAnyExpr confirms the operand isn't
+// limited to a bare variable — any expression works, same as
+// @(expr)'s own operand (see TestExternalCallComputedNameAcceptsArbitraryExpr,
+// the parser-level version of this same check).
+func TestExternalCallComputedNameAcceptsAnyExpr(t *testing.T) {
+	skipUnlessOnPath(t, "echo")
+	env := jobsEnv(t)
+	v := runEnv(t, `prefix := "ec"
+%(prefix + "ho") "hi"`, env)
+	if string(v.(value.Bytes)) != "hi\n" {
+		t.Fatalf("stdout = %q, want %q", v, "hi\n")
+	}
+}
+
+// TestExternalCallComputedNameRejectsNonString confirms a computed name
+// that isn't a String is a clear in-stream error (via externalCallName),
+// not a panic or a confusing failure from deeper in runExternal.
+func TestExternalCallComputedNameRejectsNonString(t *testing.T) {
+	env := jobsEnv(t)
+	err := runEnvErr(t, `%(5) "x"`, env)
+	if !strings.Contains(err.Error(), "command name must be a string") {
+		t.Fatalf("error = %v, want it to mention the name must be a string", err)
+	}
+}
+
+// TestExternalCallComputedNameRespectsFullscreenPrograms mirrors
+// TestPassthroughInheritsRealStdio exactly, but with %(name) in place
+// of %echo — confirming isFullscreenProgram's check (runExternal) sees
+// the *resolved* name, not "" or some placeholder, for the computed
+// form.
+func TestExternalCallComputedNameRespectsFullscreenPrograms(t *testing.T) {
+	skipUnlessOnPath(t, "echo")
+	env, mgr := jobsEnvWithManager(t)
+	markFullscreen(env, "echo")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStdout := os.Stdout
+	os.Stdout = w
+	v := runEnv(t, `name := "echo"
+%(name) "hello-computed-fullscreen"`, env)
+	os.Stdout = origStdout
+	w.Close()
+
+	captured, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading captured stdout: %v", err)
+	}
+	if string(captured) != "hello-computed-fullscreen\n" {
+		t.Fatalf("stdout = %q, want %q", captured, "hello-computed-fullscreen\n")
+	}
+	if _, ok := v.(value.Null); !ok {
+		t.Fatalf("want value.Null (nothing to capture), got %#v", v)
+	}
+	if len(mgr.List()) != 0 {
+		t.Fatalf("a fullscreen %%(...) must not create a job, got %d", len(mgr.List()))
+	}
+}
+
+// TestExternalCallComputedNameFullscreenRejectsBackground confirms
+// evalBackgroundSubprocess's fullscreen guard also sees the resolved
+// name for the computed form, not just the literal %cmd one.
+func TestExternalCallComputedNameFullscreenRejectsBackground(t *testing.T) {
+	env := jobsEnv(t)
+	markFullscreen(env, "echo")
+	err := runEnvErr(t, `name := "echo"
+%(name) &`, env)
+	if !strings.Contains(err.Error(), "needs a live terminal") {
+		t.Fatalf("error = %v, want it to mention a live terminal", err)
+	}
+}
+
+// TestExternalCallComputedNameCanBackground confirms %(expr) & still
+// produces an ordinary subprocess job (evalBackgroundSubprocess), with
+// the resolved name as argv[0] — not the in-process path, and not some
+// placeholder/empty argv0.
+func TestExternalCallComputedNameCanBackground(t *testing.T) {
+	skipUnlessOnPath(t, "true")
+	env := jobsEnv(t)
+	v := runEnv(t, `name := "true"
+j := %(name) &
+j | wait
+j.status`, env)
+	st := v.(*value.Record)
+	state, _ := st.Get("state")
+	if state.(value.String) != "done" {
+		t.Fatalf("state = %v, want done", state)
+	}
+	kind, _ := st.Get("kind")
+	if kind.(value.String) != "subprocess" {
+		t.Fatalf("kind = %v, want subprocess", kind)
+	}
+}
+
 // TestFullscreenTUIAttachedSetsExitCode locks in a real gap found and
 // fixed 2026-09-08: the TUI-attached path (a FullscreenHandler
 // registered, e.g. by package replui) used to never call

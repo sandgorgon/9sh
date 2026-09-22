@@ -35,6 +35,16 @@ inproc_job := { 6 * 7 } &
 inproc_job | wait
 inproc_kind := inproc_job.status.kind
 
+# The command name itself can be computed too: %(expr) evaluates expr
+# to a String at call time, then behaves exactly like a literal %name
+# from there -- the %-sigil counterpart to @(expr) for a job's mount
+# point (see 07_remote_and_local_namespaces.ky). Useful when the
+# command to run isn't known until runtime, e.g. picked from a variable
+# or built from a prefix.
+cmd_name := "echo"
+%(cmd_name) "hi from a computed command name"
+computed_name_exit := exit_code()
+
 # ps() is the structured, no-checkout-needed view of every job at
 # /jobs -- "every command is a job" is load-bearing, not incidental:
 # the background sleep, the in-process job above, and both foreground
@@ -43,10 +53,11 @@ inproc_kind := inproc_job.status.kind
 job_count := ps() | count
 
 format(
-    "background job went from '{}' to '{}'; chained command's exit code was {}; the { 6 * 7 } & job's kind is '{}'; {} job(s) total now recorded at /jobs",
+    "background job went from '{}' to '{}'; chained command's exit code was {}; the { 6 * 7 } & job's kind is '{}'; %(cmd_name) exited {}; {} job(s) total now recorded at /jobs",
     before,
     after,
     chain_result,
     inproc_kind,
+    computed_name_exit,
     job_count,
 )

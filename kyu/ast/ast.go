@@ -125,11 +125,20 @@ type Call struct {
 	Args []Expr
 }
 
-// ExternalCall is `%cmd arg1 arg2 ...` — a legacy/external binary invocation.
+// ExternalCall is `%cmd arg1 arg2 ...` — a legacy/external binary
+// invocation. Name is the literal command name for that form and for
+// the bareword native_programs form (parseNativeCall); NameExpr is set
+// instead for `%(expr) arg1 arg2 ...`, the computed-name counterpart to
+// `@(expr)` (see AtHost) — evaluated to a String at eval time (see
+// kyu/eval's externalCallName), so exactly one of the two is ever set.
+// Native calls have no computed-name form: parsePrefix has to know a
+// bareword is a recognized native program name to route into
+// parseNativeCall at all, which a name only known at runtime rules out.
 type ExternalCall struct {
-	Tok  token.Token
-	Name string
-	Args []Expr
+	Tok      token.Token
+	Name     string
+	NameExpr Expr
+	Args     []Expr
 }
 
 // PipeExpr is `left | right`, where right must evaluate to a callable

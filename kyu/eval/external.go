@@ -38,33 +38,41 @@ import (
 // (bad command name, no permission) becomes a value.ErrorVal — an
 // in-stream failure, per kyu's error model, not a hard Go-level abort.
 //
-// x.Name is checked against fullscreen_programs (see
-// isFullscreenProgram, fullscreen.go) before any of the above: a
-// fullscreen program takes an entirely different path
-// (runExternalFullscreen) — it needs to own the real screen and
-// keyboard, not have its output captured into a job's growBuf, and a
-// namespace-only Path argument is transparently materialized via
-// checkout() rather than erroring, so it's handled before this
-// function's own arg-evaluation loop ever runs.
+// x's command name — x.Name, or x.NameExpr evaluated to a String for
+// the %(expr) form (see ast.ExternalCall's own doc comment) — is
+// checked against fullscreen_programs (see isFullscreenProgram,
+// fullscreen.go) before any of the above: a fullscreen program takes an
+// entirely different path (runExternalFullscreen) — it needs to own the
+// real screen and keyboard, not have its output captured into a job's
+// growBuf, and a namespace-only Path argument is transparently
+// materialized via checkout() rather than erroring, so it's handled
+// before this function's own arg-evaluation loop ever runs. NameExpr,
+// if present, is resolved first, before even that check — there's no
+// name to check fullscreen_programs/native_programs against until it
+// has been.
 //
-// x.Name is also checked against native_programs (see isNativeProgram,
-// fullscreen.go): a native program (9ed is the first) is namespace-aware
-// on its own — it dials 9sh's namespace socket itself, tries an absolute
-// argument as a literal namespace path first, resolves a relative one
-// against /local, and only falls back to opening it as a real filesystem
-// path when the namespace doesn't claim it (see 9ed's cmd/9ed/nsopen.go
-// package doc comment). So unlike an ordinary %cmd, a native program's
-// Path argument is passed through untouched as its literal path text —
-// no checkout/materialize, no checkNamespaceOnlyPath guard — trusting
-// the program's own resolution and fallback instead of 9sh's. Still
-// routed through /jobs like any other foreground command (native
-// programs aren't necessarily fullscreen; that's fullscreen_programs'
-// own, orthogonal, concern).
+// The resolved name is also checked against native_programs (see
+// isNativeProgram, fullscreen.go): a native program (9ed is the first)
+// is namespace-aware on its own — it dials 9sh's namespace socket
+// itself, tries an absolute argument as a literal namespace path first,
+// resolves a relative one against /local, and only falls back to
+// opening it as a real filesystem path when the namespace doesn't claim
+// it (see 9ed's cmd/9ed/nsopen.go package doc comment). So unlike an
+// ordinary %cmd, a native program's Path argument is passed through
+// untouched as its literal path text — no checkout/materialize, no
+// checkNamespaceOnlyPath guard — trusting the program's own resolution
+// and fallback instead of 9sh's. Still routed through /jobs like any
+// other foreground command (native programs aren't necessarily
+// fullscreen; that's fullscreen_programs' own, orthogonal, concern).
 func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, error) {
-	if isFullscreenProgram(env, x.Name) {
-		return runExternalFullscreen(env, x.Name, x.Args, isNativeProgram(env, x.Name))
+	name, err := externalCallName(x, env)
+	if err != nil {
+		return nil, err
 	}
-	native := isNativeProgram(env, x.Name)
+	if isFullscreenProgram(env, name) {
+		return runExternalFullscreen(env, name, x.Args, isNativeProgram(env, name))
+	}
+	native := isNativeProgram(env, name)
 	args := make([]string, len(x.Args))
 	for i, a := range x.Args {
 		v, err := evalExpr(a, env)
@@ -72,21 +80,42 @@ func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, er
 			return nil, err
 		}
 		if p, ok := v.(value.Path); ok && !native {
-			if bad := checkNamespaceOnlyPath(env, "%", x.Name, i, p); bad != nil {
+			if bad := checkNamespaceOnlyPath(env, "%", name, i, p); bad != nil {
 				return *bad, nil
 			}
 		}
 		s, err := argString(v)
 		if err != nil {
-			return nil, fmt.Errorf("%%%s: argument %d: %w", x.Name, i, err)
+			return nil, fmt.Errorf("%%%s: argument %d: %w", name, i, err)
 		}
 		args[i] = s
 	}
 
 	if env.Namespace() != nil {
-		return runExternalViaJob(env, x.Name, args, in)
+		return runExternalViaJob(env, name, args, in)
 	}
-	return runExternalDirect(env, x.Name, args, in)
+	return runExternalDirect(env, name, args, in)
+}
+
+// externalCallName resolves x's command name: the literal x.Name, or
+// x.NameExpr evaluated to a String for the %(expr) form — the
+// computed-name counterpart to @(expr) (see ast.ExternalCall's own doc
+// comment). Evaluated before argument evaluation, matching left-to-
+// right order (the name conceptually comes first, same as an ordinary
+// function call expression would).
+func externalCallName(x *ast.ExternalCall, env *Env) (string, error) {
+	if x.NameExpr == nil {
+		return x.Name, nil
+	}
+	v, err := evalExpr(x.NameExpr, env)
+	if err != nil {
+		return "", err
+	}
+	s, ok := v.(value.String)
+	if !ok {
+		return "", fmt.Errorf("%%(...): command name must be a string, got %s", v.Kind())
+	}
+	return string(s), nil
 }
 
 func runExternalDirect(env *Env, name string, args []string, in value.Value) (value.Value, error) {

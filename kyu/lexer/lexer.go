@@ -161,7 +161,16 @@ func (l *Lexer) Next() token.Token {
 		}
 		return l.emitAt(token.PIPE, "|", line, col)
 	case '%':
-		if !endsValue(l.lastKind) && (isLetter(l.peek()) || isDigit(l.peek())) {
+		// '(' alongside letter/digit: %(expr) ...'s computed-name form
+		// (see ast.ExternalCall's own doc comment), the %-sigil
+		// counterpart to @(expr). Still gated on !endsValue(l.lastKind)
+		// like the bareword form: modulo is strictly binary, so this
+		// can only ever fire in a position modulo could never have used
+		// anyway (nothing to its left to be the operator's left
+		// operand) -- no new ambiguity with `x % (y)`, where lastKind
+		// (x) already ends a value and routes to MOD regardless of
+		// what follows.
+		if !endsValue(l.lastKind) && (isLetter(l.peek()) || isDigit(l.peek()) || l.peek() == '(') {
 			return l.emitAt(token.PERCENT, "%", line, col)
 		}
 		return l.emitAt(token.MOD, "%", line, col)

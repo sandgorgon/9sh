@@ -8,6 +8,16 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `%(expr) arg1 arg2 ...` computes the external command's name at call
+  time — the `%`-sigil counterpart to `@(expr)`. `expr` is evaluated to
+  a `String` first, then behaves exactly like a literal `%name` from
+  there: `fullscreen_programs`/`native_programs` checks, backgrounding,
+  and job routing all see the resolved name. No computed-name form for
+  a bareword `native_programs` call (no `%` sigil) — the parser has to
+  know a bareword names a live native program to route it there at all.
+
 ## [0.7.0] - 2026-09-22
 
 ### Added

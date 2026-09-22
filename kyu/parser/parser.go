@@ -620,6 +620,13 @@ func endsExternalCallArgs(k token.Kind) bool {
 func (p *Parser) parseExternalCall() ast.Expr {
 	tok := p.cur
 	p.next() // consume '%'
+	if p.cur.Kind == token.LPAREN {
+		nameExpr := p.parseGroupedExpr()
+		if nameExpr == nil {
+			return nil
+		}
+		return p.parseExternalCallArgsFor(&ast.ExternalCall{Tok: tok, NameExpr: nameExpr})
+	}
 	if p.cur.Kind != token.IDENT {
 		p.errorf("expected command name after '%%', got %s", p.cur.Kind)
 		return nil
@@ -631,13 +638,15 @@ func (p *Parser) parseExternalCall() ast.Expr {
 // from parsePrefix's IDENT case (see isNativeProgram there) when p.cur
 // is already the command name — a native program (see kyu/eval's
 // isNativeProgram, e.g. 9ed) needs no '%'/'$' sigil to consume first.
-// Deliberately builds the exact same *ast.ExternalCall node
+// Always a literal name, never %(expr)'s computed form — see
+// ast.ExternalCall's own doc comment for why that's not just an
+// oversight. Deliberately builds the exact same *ast.ExternalCall node
 // parseExternalCall does, not a new AST type: that's what makes
 // backgrounding (evalBackground's own *ast.ExternalCall branch, taken
 // over evalBackgroundInproc's for any Background whose Expr is one), the
-// fullscreen guard (isFullscreenProgram(env, x.Expr.(*ast.ExternalCall).Name)
-// in evalBackground), and ordinary job execution (runExternal dispatches
-// on x.Name) all keep working with zero duplicated logic on the eval side.
+// fullscreen guard (isFullscreenProgram in evalBackground/runExternal),
+// and ordinary job execution (runExternal dispatches on the resolved
+// name) all keep working with zero duplicated logic on the eval side.
 func (p *Parser) parseNativeCall() ast.Expr {
 	return p.parseExternalCallArgs(p.cur, p.cur.Literal)
 }
@@ -645,10 +654,18 @@ func (p *Parser) parseNativeCall() ast.Expr {
 // parseExternalCallArgs builds an ExternalCall named name (tok is
 // whichever token the call started at — the '%'/'$' sigil for
 // parseExternalCall, the bare command-name IDENT itself for
-// parseNativeCall) and consumes its space-separated argument list, the
-// shared tail both callers need identically.
+// parseNativeCall) and consumes its space-separated argument list via
+// parseExternalCallArgsFor.
 func (p *Parser) parseExternalCallArgs(tok token.Token, name string) ast.Expr {
-	call := &ast.ExternalCall{Tok: tok, Name: name}
+	return p.parseExternalCallArgsFor(&ast.ExternalCall{Tok: tok, Name: name})
+}
+
+// parseExternalCallArgsFor consumes call's space-separated argument
+// list — the shared tail parseExternalCallArgs (a literal name) and
+// parseExternalCall's %(expr) branch (a computed one) both need
+// identically, once each has built call with whichever of Name/NameExpr
+// applies.
+func (p *Parser) parseExternalCallArgsFor(call *ast.ExternalCall) ast.Expr {
 	for !endsExternalCallArgs(p.peek.Kind) {
 		p.next()
 		arg := p.parsePrefix()

@@ -102,6 +102,14 @@ introspection and safety, regex and collections).
 - `%cmd` calls out to an ordinary Linux binary; a `%cmd ... &` job is a
   live record — `j.status`, `j.ctl = "stop"`, `j | wait` all read/write
   through to real namespace files, not a snapshot.
+- The command name itself can be computed: `%(expr) arg1 arg2 ...`
+  evaluates `expr` to a `String` first, then behaves exactly like a
+  literal `%name` from there — the `%`-sigil counterpart to `@(expr)`
+  for a job's mount point (see `@host`'s own entry below). A bareword
+  `native_programs` call (no `%` sigil, e.g. `9ed`) has no computed-name
+  form — the parser has to know a bareword names a live native program
+  to route it there at all, which a name only known at runtime rules
+  out.
 - `&` isn't only for `%cmd` — any kyu expression can be backgrounded,
   as an in-process job instead of a subprocess one (`status.kind` says
   which, `ps()` lists both together). A bare `{ ... }` block is

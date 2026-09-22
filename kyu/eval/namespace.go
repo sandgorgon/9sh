@@ -143,9 +143,16 @@ func evalBackground(x *ast.Background, env *Env) (value.Value, error) {
 // -- it isn't in the foreground -- so running it via /jobs like an
 // ordinary command would just start it with no controlling terminal at
 // all, not something a user backgrounding vim/ssh/etc. actually wants.
+// call.NameExpr (the %(expr) form -- see ast.ExternalCall's own doc
+// comment) is resolved first, before even that check, the same order
+// runExternal uses for the foreground case.
 func evalBackgroundSubprocess(call *ast.ExternalCall, env *Env) (value.Value, error) {
-	if isFullscreenProgram(env, call.Name) {
-		return nil, fmt.Errorf("'&': %s needs a live terminal, can't run in the background", call.Name)
+	name, err := externalCallName(call, env)
+	if err != nil {
+		return nil, err
+	}
+	if isFullscreenProgram(env, name) {
+		return nil, fmt.Errorf("'&': %s needs a live terminal, can't run in the background", name)
 	}
 	namespace := env.Namespace()
 	if namespace == nil {
@@ -155,7 +162,7 @@ func evalBackgroundSubprocess(call *ast.ExternalCall, env *Env) (value.Value, er
 	jobRoot := env.JobRoot()
 
 	argv := make([]string, len(call.Args)+1)
-	argv[0] = call.Name
+	argv[0] = name
 	for i, a := range call.Args {
 		v, err := evalExpr(a, env)
 		if err != nil {

@@ -217,6 +217,60 @@ func TestExternalCallInPipe(t *testing.T) {
 	}
 }
 
+// TestExternalCallComputedName is %(expr)'s parser-level test, mirroring
+// TestAtHostForms' "parenthesized expression" case for @(expr) -- see
+// ast.ExternalCall's own doc comment on why NameExpr, not Name, is set
+// for this form, and why (unlike @) there's no bare-identifier-as-
+// variable ambiguity to worry about: %ident is already spoken for as a
+// literal command name, so %(expr) is the only way to compute one.
+func TestExternalCallComputedName(t *testing.T) {
+	prog := parseOK(t, `%(cmd_name) "foo" "bar"`)
+	es := prog.Stmts[0].(*ast.ExprStmt)
+	ext, ok := es.X.(*ast.ExternalCall)
+	if !ok {
+		t.Fatalf("want ExternalCall, got %T", es.X)
+	}
+	if ext.Name != "" {
+		t.Errorf("want empty Name (NameExpr set instead), got %q", ext.Name)
+	}
+	id, ok := ext.NameExpr.(*ast.Ident)
+	if !ok || id.Name != "cmd_name" {
+		t.Fatalf("want NameExpr=Ident(cmd_name), got %#v", ext.NameExpr)
+	}
+	if len(ext.Args) != 2 {
+		t.Fatalf("want 2 args, got %d", len(ext.Args))
+	}
+}
+
+// TestExternalCallComputedNameAcceptsArbitraryExpr confirms the operand
+// isn't limited to a bare variable — any expression works, same as
+// @(expr)'s own operand.
+func TestExternalCallComputedNameAcceptsArbitraryExpr(t *testing.T) {
+	prog := parseOK(t, `%(prefix + "grep") "x"`)
+	ext := prog.Stmts[0].(*ast.ExprStmt).X.(*ast.ExternalCall)
+	be, ok := ext.NameExpr.(*ast.BinaryExpr)
+	if !ok || be.Op != token.PLUS {
+		t.Fatalf("want a `+` BinaryExpr NameExpr, got %#v", ext.NameExpr)
+	}
+}
+
+// TestExternalCallComputedNameBackgrounds confirms %(expr) & still
+// reaches ast.Background the same way %cmd & does — the subprocess
+// path (evalBackground's *ast.ExternalCall branch), not the in-process
+// one, since it's still an ExternalCall, just with NameExpr set.
+func TestExternalCallComputedNameBackgrounds(t *testing.T) {
+	prog := parseOK(t, `j := %(cmd_name) &`)
+	def := prog.Stmts[0].(*ast.DefineStmt)
+	bg, ok := def.Val.(*ast.Background)
+	if !ok {
+		t.Fatalf("want Background, got %T", def.Val)
+	}
+	ext, ok := bg.Expr.(*ast.ExternalCall)
+	if !ok || ext.NameExpr == nil {
+		t.Fatalf("want Expr=ExternalCall with NameExpr set, got %#v", bg.Expr)
+	}
+}
+
 // parseOKNative is parseOK's sibling for tests exercising
 // WithNativeProgramLookup.
 func parseOKNative(t *testing.T, src string, isNative func(string) bool) *ast.Program {

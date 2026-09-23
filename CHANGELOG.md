@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-22
+
 ### Added
 
 - Opt-in pty jobs: `ctl pty` before `ctl start` attaches a subprocess

@@ -1,6 +1,6 @@
 # Examples
 
-Ten runnable `.ky` scripts, one feature area each, verified against
+Eleven runnable `.ky` scripts, one feature area each, verified against
 the real binary (not just written prose). Run any of them directly:
 
 ```
@@ -19,6 +19,7 @@ the real binary (not just written prose). Run any of them directly:
 | `08_script_args_and_file_ops.ky` | a script's own `args`, `cp`/`mv`/`rm`/`find`, and `cp`/`mv` *into* an existing directory |
 | `09_namespace_introspection_and_safety.ky` | `write`/`append`, read-only binds (`bind ..., ro`), `binds()`, `which_bind()`, `dev` on `ls`/`stat`, `bind_log()`, `in_ns { ... }`, `source()` |
 | `10_regex_and_collections.ky` | `match`/`capture`/`replace_re`, `range`, `zip`, `keys`/`values` |
+| `11_pty_jobs_and_attach.ky` | `&pty`, `status.pty`, `ctl resize`, a `&pty` job's writable `stdin` field — plus, in a comment at the bottom (not run by the script, see below), the one line to try `attach(job)` yourself |
 
 ## Important: script mode only prints the *last* expression
 
@@ -51,3 +52,9 @@ few statements at a time.
   peer before sourcing it.
 - None of these need `9vcs`, a remote peer, or any config beyond a
   fresh install's defaults.
+- `11` is the one exception to "runs to completion on its own": `attach(job)`
+  itself blocks until you detach or the job exits, so it can't be part of
+  a script meant to finish and print one summary line the way every other
+  example here does. `11` scripts everything *around* it instead (creating
+  the `&pty` job, `ctl resize`, writing to its `stdin`) and documents the
+  one line to actually try `attach()` with, interactively, in a comment.

@@ -139,9 +139,11 @@ introspection and safety, regex and collections).
   still pre-closed immediately once backgrounded (there's still no kyu
   syntax to feed one an ongoing byte stream): its `stdin` field exists
   but a write to it errors, since there's nothing left open to write to.
-- `attach(job)` takes over the terminal and streams raw bytes directly
-  between it and a `&pty` job's real pty — the ssh-less terminal
-  client: works the same whether `job` was created locally or via
+- `attach(job)` (see [`examples/11_pty_jobs_and_attach.ky`](examples/11_pty_jobs_and_attach.ky)
+  for a worked example, including the exact line to try it with) takes
+  over the terminal and streams raw bytes directly between it and a
+  `&pty` job's real pty — the ssh-less terminal client: works the same
+  whether `job` was created locally or via
   `@host{}` (the job record's own files are already correctly rooted
   at whichever host built it). Ctrl-D/Ctrl-C/Ctrl-Z reach the job
   exactly like a real terminal's line discipline would, and its window

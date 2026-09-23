@@ -1,0 +1,56 @@
+# A `&pty` job gets a real pseudo-terminal instead of plain pipes --
+# stdout/stderr merge onto one stream, stdin reaches a real line
+# discipline (Ctrl-D means EOF, Ctrl-C/Ctrl-Z become real signals), and
+# `ctl resize` actually works. Everything below is scriptable and runs
+# to completion just like every other example here -- attach(), the
+# actual interactive client, is the one exception (see the very bottom
+# of this file for why, and the one line to try it yourself).
+
+# `pty` written directly after `&`, no separator required -- same
+# shape as a plain `&` job otherwise. This one waits for one line of
+# stdin, then reports its own terminal size and echoes back what it
+# read -- everything a real interactive program might do.
+j := %sh "-c" "read x; stty size; echo got $x" &pty
+had_pty := j.status.pty
+
+# `ctl resize ROWS COLS` -- matches `stty size`'s own output order --
+# actually changes what the job's own pty reports, since it's a real
+# terminal now, not a pipe. A plain (non-pty) job's resize only ever
+# explains that there's no terminal to resize.
+j.ctl = "resize 40 120"
+
+# A &pty job's stdin field is writable, unlike a plain job's (which
+# pre-closes its stdin immediately, since nothing else would ever
+# close it) -- this reaches the job exactly like typing at a real
+# terminal would.
+j.stdin = "hello from a script\n"
+
+j | wait
+output := j.stdout
+
+format(
+    "job opted into a pty: {}; after resize+stdin scripting, its output was: {}",
+    had_pty,
+    output,
+)
+
+# --- Trying attach() yourself (not run by this script) ---
+#
+# attach(job) is the actual interactive client: it takes over your
+# terminal (or, inside the TUI, the whole screen with a real
+# terminal-emulator widget) and streams bytes directly to/from the
+# job's pty -- Ctrl-D/Ctrl-C/Ctrl-Z behave like a real terminal, window
+# size follows yours, and Ctrl-] detaches back to the prompt without
+# touching the job (typed twice, sends a literal Ctrl-] through
+# instead). It blocks until you detach or the job exits, which is
+# exactly why this script -- meant to run to completion on its own and
+# print one final summary, like every other example here -- doesn't
+# call it.
+#
+# To see it for real, open `9sh` (or `9sh -repl`) and paste:
+#
+#   j := %sh &pty
+#   attach(j)
+#
+# You'll land in a real interactive shell running inside that job's
+# pty. Ctrl-] gets you back.

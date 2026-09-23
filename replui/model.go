@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/sandgorgon/tui/layout"
+	"github.com/sandgorgon/tui/pty"
 	"github.com/sandgorgon/tui/style"
 	"github.com/sandgorgon/tui/tui"
 	"github.com/sandgorgon/tui/widget"
@@ -93,16 +94,22 @@ func New(env *eval.Env) Model {
 
 func (m Model) Init() tui.Cmd { return nil }
 
-// fullscreenAttach is what kyuReplWidget hands Model when a fullscreen
-// %cmd (see kyu/eval's runExternalFullscreen) needs the real screen —
-// built by kyuReplWidget.attachFullscreen. cmd is unstarted (View's
-// widget.Terminal construction starts it, attached to a real pty);
-// onDone is eval's own callback (already closing over whatever
-// namespace paths were checked out for this invocation) and must be
-// called exactly once, when the child exits, so eval can write them
-// back — see fullscreenExitedMsg's handling in Update.
+// fullscreenAttach is what kyuReplWidget hands Model when something
+// needs the real screen: either a fullscreen %cmd (see kyu/eval's
+// runExternalFullscreen — cmd is set, unstarted; View's widget.Terminal
+// construction starts it, attached to a real local pty) or an attach()
+// job (see kyu/eval's biAttach/AttachHandlerFunc — stream is set
+// instead, already live; View's widget.Terminal drives it directly, no
+// local pty involved at all). Exactly one of cmd/stream is set. onDone
+// is eval's own callback — for cmd, already closing over whatever
+// namespace paths were checked out for this invocation and writing them
+// back; for stream, a no-op today (attach() has nothing to write back,
+// detaching never touches the job itself) — either way it must be
+// called exactly once, when the child exits or the stream ends — see
+// fullscreenExitedMsg's handling in Update.
 type fullscreenAttach struct {
 	cmd    *exec.Cmd
+	stream pty.Stream
 	onDone func(err error)
 }
 
@@ -212,16 +219,19 @@ func (m Model) Update(msg tui.Msg) (tui.Model, tui.Cmd) {
 
 func (m Model) View() tui.Node {
 	if m.fullscreen != nil {
-		// A fullscreen %cmd (vim, top, ssh, ...) has temporarily taken
-		// over the whole screen — the same widget.Terminal construction
-		// 9mux's own Terminal pane kind uses, just hosted directly here
-		// instead of inside a pane tree. See fullscreenAttach's doc
-		// comment and fullscreenExitedMsg's handling in Update for how
-		// control comes back. No help overlay while this is up: there's
-		// nothing of this screen's own left to show it over, and the
-		// hosted program owns the keyboard entirely.
+		// A fullscreen %cmd (vim, top, ssh, ...) or an attach() job has
+		// temporarily taken over the whole screen — the same
+		// widget.Terminal construction 9mux's own Terminal pane kind
+		// uses, just hosted directly here instead of inside a pane tree,
+		// and (for attach()) driven from a live pty.Stream instead of a
+		// locally-spawned Command. See fullscreenAttach's doc comment and
+		// fullscreenExitedMsg's handling in Update for how control comes
+		// back. No help overlay while this is up: there's nothing of this
+		// screen's own left to show it over, and the hosted program/job
+		// owns the keyboard entirely.
 		return widget.Terminal(widget.TerminalOptions{
 			Command:     m.fullscreen.cmd,
+			Stream:      m.fullscreen.stream,
 			OnExit:      func(err error) tui.Msg { return fullscreenExitedMsg{err: err} },
 			WantsRawTab: true,
 			Theme:       m.theme,

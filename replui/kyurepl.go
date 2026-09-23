@@ -10,6 +10,7 @@ import (
 
 	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
+	"github.com/sandgorgon/tui/term"
 	"github.com/sandgorgon/tui/tui"
 
 	"github.com/sandgorgon/9sh/kyu/eval"
@@ -1119,6 +1120,20 @@ func (w *kyuReplWidget) applyEvalResult(res evalResult) tui.Cmd {
 	return w.consumeFullscreenCmd()
 }
 
+// attachStreamAdapter adapts eval.AttachStream (Read/Write/Close/
+// Resize(rows, cols int) — deliberately free of any tui dependency, see
+// its own doc comment) to tui/pty.Stream (Resize(term.Size) instead),
+// the shape widget.Terminal's Stream option actually wants. Read/
+// Write/Close are promoted straight through via the embedded interface;
+// only Resize needs translating.
+type attachStreamAdapter struct {
+	eval.AttachStream
+}
+
+func (a attachStreamAdapter) Resize(sz term.Size) error {
+	return a.AttachStream.Resize(sz.Rows, sz.Cols)
+}
+
 // evaluate parses and evaluates src, returning what happened as an
 // evalResult rather than mutating w directly -- see evalResult's own
 // doc comment for why. Called from the background goroutine submit()
@@ -1173,6 +1188,9 @@ func (w *kyuReplWidget) evaluate(src string) evalResult {
 		w.env.SetFullscreenHandler(func(cmd *exec.Cmd, onDone func(err error)) {
 			res.fullscreen = &fullscreenAttach{cmd: cmd, onDone: onDone}
 		})
+		w.env.SetAttachHandler(func(stream eval.AttachStream, onDone func(err error)) {
+			res.fullscreen = &fullscreenAttach{stream: attachStreamAdapter{stream}, onDone: onDone}
+		})
 		w.env.SetExternalOutputSink(func(stderr []byte) {
 			res.lines = append(res.lines, textLines(string(stderr), resultStyle)...)
 		})
@@ -1185,6 +1203,7 @@ func (w *kyuReplWidget) evaluate(src string) evalResult {
 	v, err := eval.Eval(prog, w.env)
 	if w.env != nil {
 		w.env.SetFullscreenHandler(nil)
+		w.env.SetAttachHandler(nil)
 		w.env.SetExternalOutputSink(nil)
 		w.env.SetHistoryAccess(nil)
 	}

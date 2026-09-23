@@ -2,6 +2,7 @@ package eval
 
 import (
 	"context"
+	"io"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -51,6 +52,7 @@ type Env struct {
 	interruptHandler   atomic.Pointer[func()]       // process-wide; see SetInterruptHandler for why this one predates the general fix above and stays a dedicated atomic
 	lastExitCode       *int                         // process-wide, guarded by root().mu; see SetLastExitCode
 	fullscreenHandler  FullscreenHandlerFunc        // process-wide, guarded by root().mu; see SetFullscreenHandler
+	attachHandler      AttachHandlerFunc            // process-wide, guarded by root().mu; see SetAttachHandler
 	externalOutputSink ExternalOutputSinkFunc       // process-wide, guarded by root().mu; see SetExternalOutputSink
 	sourceConfig       SourceConfigFunc             // process-wide, guarded by root().mu; see SetSourceConfig
 	historyAccess      *HistoryAccess               // process-wide, guarded by root().mu; see SetHistoryAccess
@@ -83,6 +85,32 @@ type ExternalOutputSinkFunc func(stderr []byte)
 // actually exits, so the caller can write any checked-out namespace
 // paths back and clean up their scratch directories.
 type FullscreenHandlerFunc func(cmd *exec.Cmd, onDone func(err error))
+
+// AttachStream is the minimal shape attach() (see biAttach, attach.go)
+// needs to hand off to a real terminal-emulator widget instead of this
+// package's own plain-terminal raw passthrough — deliberately not
+// tui/pty.Stream itself, to keep this package free of any UI-toolkit
+// dependency, the same posture FullscreenHandlerFunc's plain *exec.Cmd
+// signature already takes for the fullscreen-%cmd case. jobPtyFiles
+// (attach.go) already has exactly this shape, so biAttach can hand one
+// straight to whatever AttachHandlerFunc is registered without any
+// adapting of its own; the registrant (package replui) is the one that
+// adapts it to whatever its own Terminal widget actually wants.
+type AttachStream interface {
+	io.Reader
+	io.Writer
+	io.Closer
+	Resize(rows, cols int) error
+}
+
+// AttachHandlerFunc is how attach() gets a real terminal-emulator
+// widget inside the TUI, instead of erroring with "not supported inside
+// the TUI yet" — the same "blocking synchronously would freeze the
+// TUI's own render loop" reason FullscreenHandlerFunc exists for a
+// fullscreen %cmd (see its own doc comment). The handler must return
+// immediately without blocking; onDone must be called exactly once,
+// whenever the attachment ends (the job exited, or the user detached).
+type AttachHandlerFunc func(stream AttachStream, onDone func(err error))
 
 // ProxyRecorderFunc is called once a job created via `@host{}` (a "proxy"
 // job — see evalAtHost's doc comment) reaches a terminal state: the
@@ -275,6 +303,29 @@ func (e *Env) FullscreenHandler() FullscreenHandlerFunc {
 	root.mu.RLock()
 	defer root.mu.RUnlock()
 	return root.fullscreenHandler
+}
+
+// SetAttachHandler registers the hook attach() (biAttach, attach.go)
+// calls when PassthroughBlocked() is non-empty — same set-before/
+// clear-after-one-call pattern as SetFullscreenHandler, registered by
+// package replui's kyu-repl widget around each single evaluation. nil
+// (the default) means no handler is registered; biAttach falls back to
+// a plain error mentioning the TUI in that case rather than blocking or
+// corrupting the TUI's own raw-mode terminal state.
+func (e *Env) SetAttachHandler(fn AttachHandlerFunc) {
+	root := e.root()
+	root.mu.Lock()
+	root.attachHandler = fn
+	root.mu.Unlock()
+}
+
+// AttachHandler returns the hook set by SetAttachHandler, or nil if
+// none is currently registered.
+func (e *Env) AttachHandler() AttachHandlerFunc {
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.attachHandler
 }
 
 // SetExternalOutputSink registers where a foreground %cmd's captured

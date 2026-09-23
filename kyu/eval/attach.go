@@ -123,6 +123,23 @@ func (f *jobPtyFiles) Resize(rows, cols int) error {
 	return err
 }
 
+// Close clunks all three of the job's own files. It does not touch the
+// job itself (no kill, no signal) — exactly like detaching, this only
+// ever releases attach's own view of it. Every error is attempted and
+// the first one returned, so one failed clunk doesn't leak the other
+// two.
+func (f *jobPtyFiles) Close() error {
+	var firstErr error
+	for _, file := range []server.File{f.stdin, f.stdout, f.ctl} {
+		if err := file.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+var _ AttachStream = (*jobPtyFiles)(nil)
+
 // attachCopyLoop shuttles bytes between the attaching terminal (in/out
 // — already in whatever mode the caller wants; biAttach's real caller
 // puts them in raw mode first) and a job's pty (job) until in reaches
@@ -210,12 +227,16 @@ func forwardChunk(job io.Writer, chunk []byte) (detached bool) {
 // files are already correctly rooted at whichever host built the job
 // record regardless of where attach() itself is called from.
 //
-// Not yet supported inside the interactive TUI (env.PassthroughBlocked()
-// non-empty): that needs tui's own vt.Screen/vt.Parser wired to
-// something like widget.Terminal's pty seam, a separate, larger piece
-// of work than this plain-terminal raw passthrough — attach() errors
-// clearly there for now rather than silently doing the wrong thing or
-// corrupting the TUI's own raw-mode terminal state.
+// Inside the interactive TUI (env.PassthroughBlocked() non-empty —
+// direct stdio inheritance isn't safe there, see its own doc comment),
+// this hands off to whatever AttachHandlerFunc package replui has
+// registered (a real terminal-emulator widget, via tui's pty.Stream
+// seam) instead of driving os.Stdin/os.Stdout raw-mode passthrough
+// itself, the same "checkout-and-handoff instead of blocking
+// synchronously" shape runExternalFullscreen already uses for a
+// fullscreen %cmd. No handler registered (a plain build without
+// replui's TUI, or a bug in the registration) is a clear error, not a
+// silent no-op or a corrupted terminal.
 func biAttach(env *Env, args []value.Value) (value.Value, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("attach: expected 1 argument (a job), got %d", len(args))
@@ -224,12 +245,17 @@ func biAttach(env *Env, args []value.Value) (value.Value, error) {
 	if !ok {
 		return nil, fmt.Errorf("attach: expected a job record, got %s", args[0].Kind())
 	}
-	if env.PassthroughBlocked() != "" {
-		return nil, errors.New("attach: not supported inside the interactive TUI yet")
-	}
 	files, err := jobPtyFilesFor(rec)
 	if err != nil {
 		return nil, err
+	}
+	if reason := env.PassthroughBlocked(); reason != "" {
+		handler := env.AttachHandler()
+		if handler == nil {
+			return nil, fmt.Errorf("attach: %s", reason)
+		}
+		handler(files, func(err error) {})
+		return value.Null{}, nil
 	}
 	if !term.IsTerminal(os.Stdin) {
 		return nil, errors.New("attach: stdin isn't a terminal")

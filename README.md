@@ -139,21 +139,25 @@ introspection and safety, regex and collections).
   still pre-closed immediately once backgrounded (there's still no kyu
   syntax to feed one an ongoing byte stream): its `stdin` field exists
   but a write to it errors, since there's nothing left open to write to.
-- `attach(job)` takes over the local terminal and streams raw bytes
-  directly between it and a `&pty` job's real pty — the ssh-less
-  terminal client: works the same whether `job` was created locally or
-  via `@host{}` (the job record's own files are already correctly
-  rooted at whichever host built it). Puts the local terminal in raw
-  mode for the duration; Ctrl-D/Ctrl-C/Ctrl-Z reach the job exactly like
-  a real terminal's line discipline would, and its window size is sent
-  over on attach and again on every local resize. Ctrl-] detaches back
-  to the kyu prompt without touching the job itself (typed twice, it
+- `attach(job)` takes over the terminal and streams raw bytes directly
+  between it and a `&pty` job's real pty — the ssh-less terminal
+  client: works the same whether `job` was created locally or via
+  `@host{}` (the job record's own files are already correctly rooted
+  at whichever host built it). Ctrl-D/Ctrl-C/Ctrl-Z reach the job
+  exactly like a real terminal's line discipline would, and its window
+  size follows the attaching terminal's own. Ctrl-] detaches back to
+  the kyu prompt without touching the job itself (typed twice, it
   reaches the job as a literal Ctrl-] instead — the same escape telnet
   uses); the job keeps running either way, exactly like a real detached
-  session. Errors clearly for a non-pty job, when stdin isn't a real
-  terminal, or inside the interactive TUI (not supported there yet —
-  that needs a proper terminal-emulator widget, a separate, larger
-  piece of work than this plain-terminal passthrough).
+  session. Errors clearly for a non-pty job. Outside the interactive
+  TUI (plain `-repl` or a script), this puts the local terminal in raw
+  mode and streams bytes directly, erroring if stdin isn't a real
+  terminal. Inside the interactive TUI, it instead takes over the
+  whole screen with a real terminal-emulator widget — the same
+  screen-takeover a fullscreen `%cmd` (`vim`, `top`, ...) already uses,
+  just driven by the job's pty instead of a locally-spawned process. A
+  9mux pane running `9sh` gets this for free — 9mux already hosts any
+  command generically, no 9mux-side changes were needed.
 - A job's `ctl` file takes one command per write: `start` (begin a
   pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
   `signal NAME` (`signal HUP`), `priority N` (the nice value of a running
@@ -177,11 +181,12 @@ introspection and safety, regex and collections).
   on its own), and `ctl kill` takes the whole process group with it, not
   just the one tracked pid. A plain (non-`pty`) job's `resize` is
   unchanged: recognized only to answer that there is no terminal to
-  resize, since jobs run over pipes by default. There is still no
-  client that attaches a real terminal emulator to a pty job's
-  stdin/stdout yet (a tui widget, a 9mux pane, and kyu syntax to request
-  one are a later phase) — for now a `fullscreen_programs` entry is
-  still how an interactive program like `vim` gets the real screen.
+  resize, since jobs run over pipes by default. `attach(job)` (below)
+  is the client that attaches a real terminal emulator to a pty job's
+  stdin/stdout, `&pty` the kyu syntax to request one — a
+  `fullscreen_programs` entry is still how a *local* interactive
+  program like `vim` gets the real screen, since there's no job/pty
+  involved there at all.
 - `|` is a structured pipe by default (`where`/`select`/`sort_by`/
   `group_by`/`each`/...), not raw bytes — `%` is the sigil that marks
   "this call is bytes, not structured data."

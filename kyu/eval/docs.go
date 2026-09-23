@@ -105,7 +105,7 @@ var builtinDocs = []BuiltinDoc{
 	{"wait", "job | wait",
 		"Blocks until a backgrounded job (from &, subprocess or in-process) reaches a terminal state, then returns it."},
 	{"attach", "attach(job)",
-		"Takes over the local terminal and streams raw bytes directly to/from a &pty job's own pty — Ctrl-D/Ctrl-C/Ctrl-Z reach it like a real terminal, Ctrl-] detaches (typed twice sends a literal Ctrl-]). Works on a remote @host{} job too. Errors if job has no pty, or inside the interactive TUI (not supported yet)."},
+		"Takes over the terminal and streams raw bytes directly to/from a &pty job's own pty — Ctrl-D/Ctrl-C/Ctrl-Z reach it like a real terminal, Ctrl-] detaches (typed twice sends a literal Ctrl-]). Works on a remote @host{} job too. Inside the interactive TUI, takes over the whole screen with a real terminal-emulator widget instead of raw-mode passthrough. Errors if job has no pty."},
 	{"ps", "ps()",
 		"Every job at /jobs as a Table of Records (id, kind, state, argv, pid, exit_code, signal, error, detached, cwd, started_at, finished_at) — the structured, no-checkout-needed view of /jobs' own status files."},
 	{"bind_log", "bind_log()",

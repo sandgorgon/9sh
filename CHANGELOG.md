@@ -16,9 +16,8 @@ once a first tagged release is cut.
   for EOF, Ctrl-C/Ctrl-Z become real signals — process-group-wide
   `signal`/`kill`, and a working `ctl resize ROWS COLS` via
   `TIOCGWINSZ`, ROWS-then-COLS matching `stty size`'s own output order).
-  A plain job's `resize` is unchanged. This is the server-side first
-  step toward ssh-less remote terminals over 9P; there is still no
-  client (tui widget, 9mux pane) that attaches to one yet.
+  A plain job's `resize` is unchanged. The server-side foundation for
+  ssh-less remote terminals over 9P — see `attach(job)`, below.
 - kyu syntax for the above: `%cmd args... &pty` backgrounds a
   subprocess job with a pty already opted into (`pty` written directly
   after `&`, no separator required), same shape as plain `&`. Rejected
@@ -28,16 +27,21 @@ once a first tagged release is cut.
   the first kyu syntax able to feed a backgrounded job's stdin at all.
   A plain job's `stdin` still pre-closes immediately as before.
 - `attach(job)`: the ssh-less remote-terminal client this whole round
-  was building toward. Takes over the local terminal (raw mode) and
-  streams bytes directly to/from a `&pty` job's real pty, local or
-  `@host{}`-remote alike — Ctrl-D/Ctrl-C/Ctrl-Z reach the job like a
-  real terminal, window size is sent on attach and on every local
-  resize, and Ctrl-] detaches back to the kyu prompt without touching
-  the job (typed twice, sends a literal Ctrl-] through instead —
-  telnet's own convention). Not yet supported inside the interactive
-  TUI, or 9mux — those need a real terminal-emulator widget wired to a
-  job's pty instead of this plain-terminal passthrough, a separate,
-  larger piece of work.
+  was building toward. Takes over the terminal and streams bytes
+  directly to/from a `&pty` job's real pty, local or `@host{}`-remote
+  alike — Ctrl-D/Ctrl-C/Ctrl-Z reach the job like a real terminal,
+  window size follows the local terminal's own, and Ctrl-] detaches
+  back to the kyu prompt without touching the job (typed twice, sends a
+  literal Ctrl-] through instead — telnet's own convention). Outside
+  the interactive TUI (plain `-repl` or a script), this puts the local
+  terminal in raw mode and streams bytes directly. Inside the
+  interactive TUI, it instead takes over the whole screen with a real
+  terminal-emulator widget (`widget.Terminal`, via `tui` v0.12.0's new
+  `pty.Stream` seam) — the same screen-takeover a fullscreen `%cmd`
+  (`vim`, `top`, ...) already uses. No 9mux changes were needed for
+  this to work inside a 9mux pane: 9mux already hosts any command
+  generically, `9sh` included, so a pane running `9sh` gets `attach()`'s
+  screen takeover for free.
 
 ## [0.9.0] - 2026-09-22
 

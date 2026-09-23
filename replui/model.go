@@ -13,9 +13,10 @@
 // tui.App root directly — for exactly two pieces of state a lone widget
 // can't hold itself: the built-in help overlay (a widget.Modal
 // composited *over* the REPL, which only something above both nodes in
-// the tree can arrange) and the fullscreen-%cmd handoff (swapping the
+// the tree can arrange) and the screen-takeover handoff (swapping the
 // *entire* screen's root node from the REPL to a widget.Terminal and
-// back — see fullscreenAttach's doc comment).
+// back — used by both a fullscreen %cmd and attach(), see
+// fullscreenAttach's doc comment).
 package replui
 
 import (

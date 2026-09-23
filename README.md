@@ -64,10 +64,23 @@ something this binary hosts itself (see "Design" below for why).
 ```
 
 Prefer to learn by running real programs instead of reading prose? See
-[`examples/`](examples/) — ten small, verified `.ky` scripts, one
+[`examples/`](examples/) — eleven small, verified `.ky` scripts, one
 feature area each (namespace basics, jobs, data pipelines, strings,
 control flow, env/kyu vars, remote namespaces, file ops, namespace
-introspection and safety, regex and collections).
+introspection and safety, regex and collections, pty jobs and
+`attach()`).
+
+What follows is a full language reference, organized by area so you
+can jump to what you need instead of reading it as one wall of text:
+[Namespace and binding](#namespace-and-binding),
+[Jobs and processes](#jobs-and-processes),
+[Pty jobs and remote terminals](#pty-jobs-and-remote-terminals),
+[Language basics](#language-basics),
+[Data, pipelines, and collections](#data-pipelines-and-collections),
+[Environment, cwd, and scripts](#environment-cwd-and-scripts),
+[Remote hosts](#remote-hosts).
+
+## Namespace and binding
 
 - `bind SRC, DST[, before|after|replace][, ro]` grafts something onto the
   namespace — a local directory, a job-control tree, a dialed remote
@@ -99,170 +112,9 @@ introspection and safety, regex and collections).
   a network `-listen` peer keeps seeing the original namespace, never
   the block's. Variables defined inside are block-scoped, like `if`, and
   the block's value is its last value.
-- `%cmd` calls out to an ordinary Linux binary; a `%cmd ... &` job is a
-  live record — `j.status`, `j.ctl = "stop"`, `j | wait` all read/write
-  through to real namespace files, not a snapshot.
-- The command name itself can be computed: `%(expr) arg1 arg2 ...`
-  evaluates `expr` to a `String` first, then behaves exactly like a
-  literal `%name` from there — the `%`-sigil counterpart to `@(expr)`
-  for a job's mount point (see `@host`'s own entry below). A bareword
-  `native_programs` call (no `%` sigil, e.g. `9ed`) has no computed-name
-  form — the parser has to know a bareword names a live native program
-  to route it there at all, which a name only known at runtime rules
-  out.
-- `&` isn't only for `%cmd` — any kyu expression can be backgrounded,
-  as an in-process job instead of a subprocess one (`status.kind` says
-  which, `ps()` lists both together). A bare `{ ... }` block is
-  auto-invoked with zero arguments (`{ slow_thing() } &`, not just
-  `f(x) &`, which was already a call); its result comes back the same
-  way a `%cmd`'s captured stdout does — bytes on the job's own `stdout`
-  field, once it reaches a terminal state. Local only: backgrounding
-  kyu code inside `@host{ ... }` is a clear error, unlike `%cmd &`,
-  which works there — running arbitrary kyu on a remote peer would mean
-  shipping a live closure across the wire, a different, much bigger
-  feature than this. Killing one is cooperative, not a real signal —
-  there's no OS process to send one to, so a backgrounded `while true
-  {}` or unbounded self-recursion only actually stops at its next loop
-  iteration or function call after `j.ctl = "kill"`; both are also
-  bounded on their own regardless (an in-process job's recursion can't
-  exceed a fixed depth before erroring, so a bug like a missing base
-  case fails cleanly instead of crashing the whole session).
-- `%cmd args... &pty` is `&` plus the `pty` opt-in: `pty`, written
-  directly after `&` with no separator required, requests a real
-  pseudo-terminal for the backgrounded subprocess job instead of the
-  default plain pipes — see `ctl pty`'s own entry above for what that
-  changes. Subprocess-only: `&pty` on anything else (an in-process job)
-  is a clear error at background time, the same reason `ctl pty` itself
-  rejects an in-process job. A `&pty` job's `stdin` field is writable —
-  `j.stdin = "some text\n"` reaches the real child exactly like typing
-  at a real terminal — unlike a plain (non-pty) job, whose `stdin` is
-  still pre-closed immediately once backgrounded (there's still no kyu
-  syntax to feed one an ongoing byte stream): its `stdin` field exists
-  but a write to it errors, since there's nothing left open to write to.
-- `attach(job)` (see [`examples/11_pty_jobs_and_attach.ky`](examples/11_pty_jobs_and_attach.ky)
-  for a worked example, including the exact line to try it with) takes
-  over the terminal and streams raw bytes directly between it and a
-  `&pty` job's real pty — the ssh-less terminal client: works the same
-  whether `job` was created locally or via
-  `@host{}` (the job record's own files are already correctly rooted
-  at whichever host built it). Ctrl-D/Ctrl-C/Ctrl-Z reach the job
-  exactly like a real terminal's line discipline would, and its window
-  size follows the attaching terminal's own. Ctrl-] detaches back to
-  the kyu prompt without touching the job itself (typed twice, it
-  reaches the job as a literal Ctrl-] instead — the same escape telnet
-  uses); the job keeps running either way, exactly like a real detached
-  session. Errors clearly for a non-pty job. Outside the interactive
-  TUI (plain `-repl` or a script), this puts the local terminal in raw
-  mode and streams bytes directly, erroring if stdin isn't a real
-  terminal. Inside the interactive TUI, it instead takes over the
-  whole screen with a real terminal-emulator widget — the same
-  screen-takeover a fullscreen `%cmd` (`vim`, `top`, ...) already uses,
-  just driven by the job's pty instead of a locally-spawned process. A
-  9mux pane running `9sh` gets this for free — 9mux already hosts any
-  command generically, no 9mux-side changes were needed.
-- A job's `ctl` file takes one command per write: `start` (begin a
-  pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
-  `signal NAME` (`signal HUP`), `priority N` (the nice value of a running
-  subprocess job), `pty` (opt a pending subprocess job into a real pty
-  instead of plain pipes), `resize ROWS COLS` (only meaningful once
-  opted into `pty`), and `detach` (sets the `detached` flag `status` and
-  `ps()` report; the process itself is unaffected). `stop`/`resume`/
-  `signal`/`priority`/`pty` are subprocess-only — an in-process job
-  rejects them (there's no real process to pause, signal, renice, or
-  attach a pty to), but `start`/`kill`/`detach` work on either kind. An
-  unknown command is an error, never a silent no-op.
-- A `pty` job (`ctl pty` while still pending, before `ctl start`) gets a
-  real pseudo-terminal instead of plain pipes: `stdout`/`stderr` merge
-  onto one stream (a real terminal has no separate stderr fd —
-  `stderr`'s own growBuf stays empty), `stdin` writes reach the pty's
-  line discipline directly (Ctrl-D sends EOF, Ctrl-C/Ctrl-Z become real
-  signals, exactly like typing at a real terminal, instead of closing a
-  pipe), `ctl signal`/`ctl resize` act on the job's whole process group
-  (`resize ROWS COLS`, matching `stty size`'s own output order, changes
-  what the child sees via `TIOCGWINSZ`; the kernel delivers `SIGWINCH`
-  on its own), and `ctl kill` takes the whole process group with it, not
-  just the one tracked pid. A plain (non-`pty`) job's `resize` is
-  unchanged: recognized only to answer that there is no terminal to
-  resize, since jobs run over pipes by default. `attach(job)` (below)
-  is the client that attaches a real terminal emulator to a pty job's
-  stdin/stdout, `&pty` the kyu syntax to request one — a
-  `fullscreen_programs` entry is still how a *local* interactive
-  program like `vim` gets the real screen, since there's no job/pty
-  involved there at all.
-- `|` is a structured pipe by default (`where`/`select`/`sort_by`/
-  `group_by`/`each`/...), not raw bytes — `%` is the sigil that marks
-  "this call is bytes, not structured data."
-- A `%cmd` whose name is listed in `fullscreen_programs` (a kyu
-  variable, defaulted in `/config/config.ky` — `vim`, `top`, `ssh`,
-  `man`, ... out of the box) gets the real screen and keyboard
-  directly instead of a job-tracked buffer, in every mode including the
-  interactive TUI — it hands the whole screen to the program until it
-  exits, then returns to the kyu prompt. A namespace-only `Path`
-  argument is transparently checked out to a real scratch location and
-  written back on exit, instead of erroring the way an ordinary `%cmd`
-  would. No job, no captured value, and it can't be backgrounded with
-  `&` (nothing to hand the real screen to if it isn't in the
-  foreground) — edit `/config/config.ky` (or extend
-  `fullscreen_programs` from `common.ky`) to add your own.
-- `while cond { ... }` loops, with `break`/`continue` — kyu's only loop
-  construct; recursion via a self-referencing closure still works too.
-- `cd(path)` sets the working directory `%cmd` subprocesses run
-  in — per-session state (like `bind`), not a real `chdir`, since every
-  entry point into a session shares one process. `pwd()` reads it back
-  in-process (no `%pwd` subprocess needed), falling back to the real
-  `os.Getwd()` before the first `cd()`.
-- `getenv(name)`/`setenv(name, value)`/`unsetenv(name)` read and write
-  real files under `/env` — Plan 9's own convention (environment
-  variables *are* namespace files), not hidden shell state.
-  `ls("/env/*")` to see what's there (or `glob("/env/*")` for just the
-  paths) — a plain `%ls /env` won't work: `%cmd` hands a `Path`
-  argument to the real external binary as a literal string, with no
-  namespace resolution (`/env` has no real OS path at all). Since
-  `/env` isn't bound from anywhere real, `%ls /env` fails with a clear
-  error pointing at `checkout` rather than running at all; a namespace
-  path that happens to coincide with an unrelated real file is the one
-  case this can't catch (see the Design section's "No FUSE").
-  `setenv("PATH", ...)` genuinely changes which binary `%cmd`
-  resolves, not just what a subprocess sees about its own environment.
-- Regex and collection builtins: `s | match(re)` (bool, matches
-  anywhere — anchor with `^`/`$`), `s | capture(re)` (the first match as
-  a `List` — whole match then each group, a group that didn't
-  participate is null — or null for no match), `s | replace_re(re,
-  repl)` (`$1`/`${name}` expand in `repl`; `replace` stays the literal
-  form). Patterns are Go RE2: linear-time, so a hostile pattern can't
-  hang the shell, with no backreferences or lookaround; a bad pattern
-  is an error. `range(stop)`/`range(start, stop[, step])` builds a
-  half-open `List` of `Int`s, `xs | zip(ys)` pairs by position
-  (stopping at the shorter), and `record | keys`/`record | values` list
-  a record's fields — `keys` never reads a value so it's safe on a live
-  job record, while `values` reads each field fresh like `record.field`
-  (a job's `wait` blocks), so prefer `keys` plus `get_field` there.
-- Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
-  `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
-  `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
-  `trim`/`replace`/`contains`/`join`/`len`/`repeat`/`pad_left`/
-  `pad_right`/`upper`/`lower`/`starts_with`/`ends_with`/`index_of` — the
-  `pad_*`/`repeat`/`len` group is for building an exact line of output
-  (a fixed-width column, a separator rule) rather than free-text
-  templating, which is what `format` is for. `contains`/`index_of` work
-  on a `List`/`Table` too (element equality), not just a substring
-  check. `to_int(str)`/`to_float(str)` parse a String into a number —
-  otherwise there'd be no way to do arithmetic on a script's own `args`,
-  which are always `String`; an unparseable input is an `ErrorVal`, not
-  a hard error. `round(places, number)` rounds to a fixed number of
-  decimal digits (half-away-from-zero, always a `Float`) — pipe into
-  `format` for a String with guaranteed decimal precision, e.g.
-  `number | round(2) | format("{}")`.
-- `vars()` lists your own `:=`-defined kyu variables — name, kind, and
-  live value, as a `Table` (pipeable: `vars() | where { |v| v.kind == "path" }`).
-  Unlike `/env`, kyu variables are plain lexical scope, not namespace
-  state, so there's no `glob()`-able equivalent — `vars()` is the only
-  way to see them, and it filters out builtins (they're `env.Define`d the
-  same way, with no separate registry) so it only ever shows what you
-  actually set. `unset(name)` is its companion, kyu variables' answer to
-  `unsetenv`/`unbind`: removes a binding (reporting whether one existed,
-  not erroring on a no-op — closer to `unsetenv`'s forgiving convention
-  than `unbind`'s strict one) and refuses outright to remove a builtin.
+- `unbind DST` clears whatever's bound at `DST` — the inverse of
+  `bind`, same statement-not-function shape (a namespace-mutating verb
+  stays a keyword). Unbinding something never bound is an error.
 - `glob(pattern)` — e.g. `glob("/local/*.go")` — matches namespace
   entries, not real OS paths (most of the namespace, like `/jobs` or a
   remote `/n/host` mount, has no OS path at all). Returns a `List` of
@@ -319,34 +171,12 @@ introspection and safety, regex and collections).
   `rmdir(path)` removes one empty namespace directory (errors, from the
   real filesystem, if it isn't); `rmdir(path, true)` removes it and
   everything beneath it.
-- `unbind DST` clears whatever's bound at `DST` — the inverse of
-  `bind`, same statement-not-function shape (a namespace-mutating verb
-  stays a keyword). Unbinding something never bound is an error.
-- `help(name)` — e.g. `help("bind")` — returns that builtin/keyword's
-  signature and description as a `Record`; `help()` with no arguments
-  returns every documented entry as a `Table`. The interactive TUI's
-  help screen renders the exact same table as its language-reference
-  section (press `2` there to jump straight to it), so the two can't
-  drift apart.
-- Closures take default parameters: `{ |a, b = 10| a + b }` — a later
-  default may reference an earlier parameter (`{ |a, b = a| ... }`).
-  Named, self-recursive, and mutually-recursive functions already work
-  today via plain `name := { ... }` (a name is resolved when the
-  closure is *called*, not frozen at creation), so there's no separate
-  `func` keyword — default params were the one genuine capability gap.
-- `format("hello {}, you're {}", name, age)` — positional `{}`
-  interpolation, not new string-literal syntax; the placeholder count
-  must exactly match the argument count. Pipeable like anything else:
-  `name | format("hello {}")`.
-- `exit_code()` — bash's `$?`, spelled as a function since kyu has no
-  `$`-prefixed syntax. Tracks only the last *foreground* `%cmd` — a
-  backgrounded `%cmd &`'s exit code is already on its own job record
-  (`j.status.exit_code`, `j | wait`).
-- `ps()` returns every job at `/jobs` as a `Table` of `Record`s (`id`,
-  `kind`, `state`, `argv`, `pid`, `exit_code`, `signal`, `error`,
-  `detached`, `cwd`, `started_at`, `finished_at`) — the structured,
-  no-checkout-needed view of `/jobs`' own `status` files, e.g.
-  `ps() | where { |j| j.state == "running" }`.
+- `write(path, str)` replaces a namespace file's content with a
+  `String`, creating it (in an existing directory) if needed;
+  `append(path, str)` adds to the end. `cat`'s write-side counterpart,
+  through the same namespace as everything else — a real file, a remote
+  `/n/host` path, `/env`, a job's `ctl` (`write(/jobs/3/ctl, "kill")`,
+  the path form of `j.ctl = "kill"`). A failure is an `ErrorVal`.
 - `binds()` returns every layer bound in the namespace as a `Table` of
   `Record`s (`dst`, `src`, `disp`, `ro`, `dev`), in bind order; `binds(path)` keeps
   only layers bound at `path` or beneath it, by whole path segments
@@ -362,12 +192,6 @@ introspection and safety, regex and collections).
   recoverable once a later bind has spliced around it. Reads go
   through the namespace, so a peer's `/n/host/ns/binds` shows its binds
   too.
-- `write(path, str)` replaces a namespace file's content with a
-  `String`, creating it (in an existing directory) if needed;
-  `append(path, str)` adds to the end. `cat`'s write-side counterpart,
-  through the same namespace as everything else — a real file, a remote
-  `/n/host` path, `/env`, a job's `ctl` (`write(/jobs/3/ctl, "kill")`,
-  the path form of `j.ctl = "kill"`). A failure is an `ErrorVal`.
 - `bind_log()` returns every successful `bind` and `unbind` so far,
   oldest first, as a `Table` of `Record`s (`seq`, `time`, `op`, `dst`,
   `src`, `disp`) — what was actually typed, which is the one thing
@@ -425,8 +249,61 @@ introspection and safety, regex and collections).
   kyu (`%cmd` included) with your full authority, so sourcing a peer's
   file (`source(/n/host/ns/binds)`) trusts that peer with your session —
   `cat()` it first, the way you'd read a downloaded shell script.
-- A script's own arguments are visible as `args` (a `List` of `String`)
-  — `9sh script.kyu foo bar` sees `args == ["foo", "bar"]`.
+- `help(name)` — e.g. `help("bind")` — returns that builtin/keyword's
+  signature and description as a `Record`; `help()` with no arguments
+  returns every documented entry as a `Table`. The interactive TUI's
+  help screen renders the exact same table as its language-reference
+  section (press `2` there to jump straight to it), so the two can't
+  drift apart.
+
+## Jobs and processes
+
+- `%cmd` calls out to an ordinary Linux binary; a `%cmd ... &` job is a
+  live record — `j.status`, `j.ctl = "stop"`, `j | wait` all read/write
+  through to real namespace files, not a snapshot.
+- The command name itself can be computed: `%(expr) arg1 arg2 ...`
+  evaluates `expr` to a `String` first, then behaves exactly like a
+  literal `%name` from there — the `%`-sigil counterpart to `@(expr)`
+  for a job's mount point (see [Remote hosts](#remote-hosts) below). A
+  bareword `native_programs` call (no `%` sigil, e.g. `9ed`) has no
+  computed-name form — the parser has to know a bareword names a live
+  native program to route it there at all, which a name only known at
+  runtime rules out.
+- `&` isn't only for `%cmd` — any kyu expression can be backgrounded,
+  as an in-process job instead of a subprocess one (`status.kind` says
+  which, `ps()` lists both together). A bare `{ ... }` block is
+  auto-invoked with zero arguments (`{ slow_thing() } &`, not just
+  `f(x) &`, which was already a call); its result comes back the same
+  way a `%cmd`'s captured stdout does — bytes on the job's own `stdout`
+  field, once it reaches a terminal state. Local only: backgrounding
+  kyu code inside `@host{ ... }` is a clear error, unlike `%cmd &`,
+  which works there — running arbitrary kyu on a remote peer would mean
+  shipping a live closure across the wire, a different, much bigger
+  feature than this. Killing one is cooperative, not a real signal —
+  there's no OS process to send one to, so a backgrounded `while true
+  {}` or unbounded self-recursion only actually stops at its next loop
+  iteration or function call after `j.ctl = "kill"`; both are also
+  bounded on their own regardless (an in-process job's recursion can't
+  exceed a fixed depth before erroring, so a bug like a missing base
+  case fails cleanly instead of crashing the whole session).
+- A job's `ctl` file takes one command per write: `start` (begin a
+  pending job), `stop`/`resume` (`SIGSTOP`/`SIGCONT`), `kill`,
+  `signal NAME` (`signal HUP`), `priority N` (the nice value of a running
+  subprocess job), `pty` (opt a pending subprocess job into a real pty
+  instead of plain pipes — see [Pty jobs and remote
+  terminals](#pty-jobs-and-remote-terminals) below), `resize ROWS COLS`
+  (only meaningful once opted into `pty`), and `detach` (sets the
+  `detached` flag `status` and `ps()` report; the process itself is
+  unaffected). `stop`/`resume`/`signal`/`priority`/`pty` are
+  subprocess-only — an in-process job rejects them (there's no real
+  process to pause, signal, renice, or attach a pty to), but
+  `start`/`kill`/`detach` work on either kind. An unknown command is an
+  error, never a silent no-op.
+- `ps()` returns every job at `/jobs` as a `Table` of `Record`s (`id`,
+  `kind`, `state`, `argv`, `pid`, `exit_code`, `signal`, `error`,
+  `detached`, `cwd`, `started_at`, `finished_at`) — the structured,
+  no-checkout-needed view of `/jobs`' own `status` files, e.g.
+  `ps() | where { |j| j.state == "running" }`.
 - `%cmd1 && %cmd2` / `%cmd1 || %cmd2` chain by real exit status, like a
   shell — `&&`'s right side runs only if the left command exited 0;
   `||`'s only if it didn't. Only a *bare* `%cmd` operand gets this —
@@ -437,6 +314,162 @@ introspection and safety, regex and collections).
   seeing output; use `if exit_code() == 0 { %cmd2 }` when you want the
   latter, since a plain `if`'s block result is what actually gets
   printed at the REPL.
+- `exit_code()` — bash's `$?`, spelled as a function since kyu has no
+  `$`-prefixed syntax. Tracks only the last *foreground* `%cmd` — a
+  backgrounded `%cmd &`'s exit code is already on its own job record
+  (`j.status.exit_code`, `j | wait`).
+- `|` is a structured pipe by default (`where`/`select`/`sort_by`/
+  `group_by`/`each`/...), not raw bytes — `%` is the sigil that marks
+  "this call is bytes, not structured data."
+- A `%cmd` whose name is listed in `fullscreen_programs` (a kyu
+  variable, defaulted in `/config/config.ky` — `vim`, `top`, `ssh`,
+  `man`, ... out of the box) gets the real screen and keyboard
+  directly instead of a job-tracked buffer, in every mode including the
+  interactive TUI — it hands the whole screen to the program until it
+  exits, then returns to the kyu prompt. A namespace-only `Path`
+  argument is transparently checked out to a real scratch location and
+  written back on exit, instead of erroring the way an ordinary `%cmd`
+  would. No job, no captured value, and it can't be backgrounded with
+  `&` (nothing to hand the real screen to if it isn't in the
+  foreground) — edit `/config/config.ky` (or extend
+  `fullscreen_programs` from `common.ky`) to add your own.
+
+## Pty jobs and remote terminals
+
+- `%cmd args... &pty` is `&` plus the `pty` opt-in: `pty`, written
+  directly after `&` with no separator required, requests a real
+  pseudo-terminal for the backgrounded subprocess job instead of the
+  default plain pipes — see the `ctl` vocabulary above (Jobs and
+  processes) for what that changes. Subprocess-only: `&pty` on anything
+  else (an in-process job) is a clear error at background time, the
+  same reason `ctl pty` itself rejects an in-process job. A `&pty`
+  job's `stdin` field is writable — `j.stdin = "some text\n"` reaches
+  the real child exactly like typing at a real terminal — unlike a
+  plain (non-pty) job, whose `stdin` is still pre-closed immediately
+  once backgrounded (there's still no kyu syntax to feed one an ongoing
+  byte stream): its `stdin` field exists but a write to it errors,
+  since there's nothing left open to write to.
+- `attach(job)` (see [`examples/11_pty_jobs_and_attach.ky`](examples/11_pty_jobs_and_attach.ky)
+  for a worked example, including the exact line to try it with) takes
+  over the terminal and streams raw bytes directly between it and a
+  `&pty` job's real pty — the ssh-less terminal client: works the same
+  whether `job` was created locally or via
+  `@host{}` (the job record's own files are already correctly rooted
+  at whichever host built it). Ctrl-D/Ctrl-C/Ctrl-Z reach the job
+  exactly like a real terminal's line discipline would, and its window
+  size follows the attaching terminal's own. Ctrl-] detaches back to
+  the kyu prompt without touching the job itself (typed twice, it
+  reaches the job as a literal Ctrl-] instead — the same escape telnet
+  uses); the job keeps running either way, exactly like a real detached
+  session. Errors clearly for a non-pty job. Outside the interactive
+  TUI (plain `-repl` or a script), this puts the local terminal in raw
+  mode and streams bytes directly, erroring if stdin isn't a real
+  terminal. Inside the interactive TUI, it instead takes over the
+  whole screen with a real terminal-emulator widget — the same
+  screen-takeover a fullscreen `%cmd` (`vim`, `top`, ...) already uses,
+  just driven by the job's pty instead of a locally-spawned process. A
+  9mux pane running `9sh` gets this for free — 9mux already hosts any
+  command generically, no 9mux-side changes were needed.
+- A `pty` job (`ctl pty` while still pending, before `ctl start`) gets a
+  real pseudo-terminal instead of plain pipes: `stdout`/`stderr` merge
+  onto one stream (a real terminal has no separate stderr fd —
+  `stderr`'s own growBuf stays empty), `stdin` writes reach the pty's
+  line discipline directly (Ctrl-D sends EOF, Ctrl-C/Ctrl-Z become real
+  signals, exactly like typing at a real terminal, instead of closing a
+  pipe), `ctl signal`/`ctl resize` act on the job's whole process group
+  (`resize ROWS COLS`, matching `stty size`'s own output order, changes
+  what the child sees via `TIOCGWINSZ`; the kernel delivers `SIGWINCH`
+  on its own), and `ctl kill` takes the whole process group with it, not
+  just the one tracked pid. A plain (non-`pty`) job's `resize` is
+  unchanged: recognized only to answer that there is no terminal to
+  resize, since jobs run over pipes by default. `attach(job)` (above)
+  is the client that attaches a real terminal emulator to a pty job's
+  stdin/stdout, `&pty` the kyu syntax to request one — a
+  `fullscreen_programs` entry is still how a *local* interactive
+  program like `vim` gets the real screen, since there's no job/pty
+  involved there at all.
+
+## Language basics
+
+- `while cond { ... }` loops, with `break`/`continue` — kyu's only loop
+  construct; recursion via a self-referencing closure still works too.
+- Closures take default parameters: `{ |a, b = 10| a + b }` — a later
+  default may reference an earlier parameter (`{ |a, b = a| ... }`).
+  Named, self-recursive, and mutually-recursive functions already work
+  today via plain `name := { ... }` (a name is resolved when the
+  closure is *called*, not frozen at creation), so there's no separate
+  `func` keyword — default params were the one genuine capability gap.
+- `format("hello {}, you're {}", name, age)` — positional `{}`
+  interpolation, not new string-literal syntax; the placeholder count
+  must exactly match the argument count. Pipeable like anything else:
+  `name | format("hello {}")`.
+- `vars()` lists your own `:=`-defined kyu variables — name, kind, and
+  live value, as a `Table` (pipeable: `vars() | where { |v| v.kind == "path" }`).
+  Unlike `/env`, kyu variables are plain lexical scope, not namespace
+  state, so there's no `glob()`-able equivalent — `vars()` is the only
+  way to see them, and it filters out builtins (they're `env.Define`d the
+  same way, with no separate registry) so it only ever shows what you
+  actually set. `unset(name)` is its companion, kyu variables' answer to
+  `unsetenv`/`unbind`: removes a binding (reporting whether one existed,
+  not erroring on a no-op — closer to `unsetenv`'s forgiving convention
+  than `unbind`'s strict one) and refuses outright to remove a builtin.
+
+## Data, pipelines, and collections
+
+- Regex and collection builtins: `s | match(re)` (bool, matches
+  anywhere — anchor with `^`/`$`), `s | capture(re)` (the first match as
+  a `List` — whole match then each group, a group that didn't
+  participate is null — or null for no match), `s | replace_re(re,
+  repl)` (`$1`/`${name}` expand in `repl`; `replace` stays the literal
+  form). Patterns are Go RE2: linear-time, so a hostile pattern can't
+  hang the shell, with no backreferences or lookaround; a bad pattern
+  is an error. `range(stop)`/`range(start, stop[, step])` builds a
+  half-open `List` of `Int`s, `xs | zip(ys)` pairs by position
+  (stopping at the shorter), and `record | keys`/`record | values` list
+  a record's fields — `keys` never reads a value so it's safe on a live
+  job record, while `values` reads each field fresh like `record.field`
+  (a job's `wait` blocks), so prefer `keys` plus `get_field` there.
+- Data-pipeline builtins beyond `where`/`select`/`sort_by`/`group_by`/
+  `each`: `last`/`skip`/`reverse`/`uniq`/`flatten`, `sum`/`min`/`max`/
+  `avg`, `any`/`all`, `to_json`/`from_json`, and string ops `split`/
+  `trim`/`replace`/`contains`/`join`/`len`/`repeat`/`pad_left`/
+  `pad_right`/`upper`/`lower`/`starts_with`/`ends_with`/`index_of` — the
+  `pad_*`/`repeat`/`len` group is for building an exact line of output
+  (a fixed-width column, a separator rule) rather than free-text
+  templating, which is what `format` is for. `contains`/`index_of` work
+  on a `List`/`Table` too (element equality), not just a substring
+  check. `to_int(str)`/`to_float(str)` parse a String into a number —
+  otherwise there'd be no way to do arithmetic on a script's own `args`,
+  which are always `String`; an unparseable input is an `ErrorVal`, not
+  a hard error. `round(places, number)` rounds to a fixed number of
+  decimal digits (half-away-from-zero, always a `Float`) — pipe into
+  `format` for a String with guaranteed decimal precision, e.g.
+  `number | round(2) | format("{}")`.
+
+## Environment, cwd, and scripts
+
+- `cd(path)` sets the working directory `%cmd` subprocesses run
+  in — per-session state (like `bind`), not a real `chdir`, since every
+  entry point into a session shares one process. `pwd()` reads it back
+  in-process (no `%pwd` subprocess needed), falling back to the real
+  `os.Getwd()` before the first `cd()`.
+- `getenv(name)`/`setenv(name, value)`/`unsetenv(name)` read and write
+  real files under `/env` — Plan 9's own convention (environment
+  variables *are* namespace files), not hidden shell state.
+  `ls("/env/*")` to see what's there (or `glob("/env/*")` for just the
+  paths) — a plain `%ls /env` won't work: `%cmd` hands a `Path`
+  argument to the real external binary as a literal string, with no
+  namespace resolution (`/env` has no real OS path at all). Since
+  `/env` isn't bound from anywhere real, `%ls /env` fails with a clear
+  error pointing at `checkout` rather than running at all; a namespace
+  path that happens to coincide with an unrelated real file is the one
+  case this can't catch (see the Design section's "No FUSE").
+  `setenv("PATH", ...)` genuinely changes which binary `%cmd`
+  resolves, not just what a subprocess sees about its own environment.
+- A script's own arguments are visible as `args` (a `List` of `String`)
+  — `9sh script.kyu foo bar` sees `args == ["foo", "bar"]`.
+
+## Remote hosts
 
 Run a job on another 9sh, over mutual TLS, with no separate remote-job
 protocol:

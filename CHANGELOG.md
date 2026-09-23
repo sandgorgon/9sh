@@ -8,6 +8,28 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-22
+
+### Documentation
+
+- Added [`examples/11_pty_jobs_and_attach.ky`](examples/11_pty_jobs_and_attach.ky):
+  `&pty`/`attach()` had no runnable example, unlike every other feature
+  area, despite the README pointing people at `examples/` to learn by
+  running real programs. Scripts everything scriptable (creating a
+  `&pty` job, `ctl resize`, writing to its `stdin`, reading its
+  `stdout`) and documents the one line to try `attach()` with,
+  interactively, in a comment — `attach()` itself blocks until you
+  detach, so it can't be part of a script meant to run to completion.
+- Restructured the language reference: the old "Quick start" section
+  was actually 27 dense, unheaded bullets covering every feature —
+  exactly what made `attach()` hard to find in the first place. Split
+  into eight named, cross-linked sections (Namespace and binding, Jobs
+  and processes, Pty jobs and remote terminals, Language basics, Data
+  pipelines and collections, Environment/cwd/scripts, Remote hosts).
+  Pure reorganization, no wording changes; also fixed one real
+  pre-existing bug found along the way (a "see above" that actually
+  pointed below).
+
 ## [0.10.0] - 2026-09-22
 
 ### Added

@@ -168,7 +168,7 @@ func (f *nsFile) Read(ctx context.Context, offset int64, p []byte) (int, error) 
 	if err != nil {
 		return 0, err
 	}
-	return server.MarshalDir(entries, offset, p)
+	return server.MarshalDirVersion(entries, offset, p, server.UnixFromContext(ctx))
 }
 
 // listLocalDir merges this tree node's explicit children with each
@@ -266,7 +266,7 @@ func ReadDirEntries(ctx context.Context, f server.File) ([]p9.Stat, error) {
 		if total > len(data) {
 			return nil, errors.New("ns: truncated directory entry")
 		}
-		st, err := p9.UnmarshalStat(data[:total])
+		st, err := p9.UnmarshalStatVersion(data[:total], server.UnixFromContext(ctx))
 		if err != nil {
 			return nil, err
 		}

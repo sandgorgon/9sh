@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-29
+
 ### Fixed
 
 - Listing a bind point over a 9P2000.u connection failed with `p9: trailing

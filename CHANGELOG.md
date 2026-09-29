@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-29
+
 ### Added
 
 - `host_path(path)`: the real OS path behind a namespace `Path`, as a

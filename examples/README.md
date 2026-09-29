@@ -1,6 +1,6 @@
 # Examples
 
-Eleven runnable `.ky` scripts, one feature area each, verified against
+Twelve runnable `.ky` scripts, one feature area each, verified against
 the real binary (not just written prose). Run any of them directly:
 
 ```
@@ -20,6 +20,7 @@ the real binary (not just written prose). Run any of them directly:
 | `09_namespace_introspection_and_safety.ky` | `write`/`append`, read-only binds (`bind ..., ro`), `binds()`, `which_bind()`, `dev` on `ls`/`stat`, `bind_log()`, `in_ns { ... }`, `source()` |
 | `10_regex_and_collections.ky` | `match`/`capture`/`replace_re`, `range`, `zip`, `keys`/`values` |
 | `11_pty_jobs_and_attach.ky` | `&pty`, `status.pty`, `ctl resize`, a `&pty` job's writable `stdin` field — plus, in a comment at the bottom (not run by the script, see below), the one line to try `attach(job)` yourself |
+| `12_host_paths.ky` | `host_path()`: a namespace `Path` back to a real OS path `String`, through a `dir()` bind and a path-bind, and handed to a real `%cmd` |
 
 ## Important: script mode only prints the *last* expression
 
@@ -42,7 +43,7 @@ few statements at a time.
 - These are meant to be read, not just run — every non-obvious builtin
   has a one-line comment explaining *why* it works the way it does,
   matching README's own style.
-- `07`, `08` and `09` bind real host locations (`dir("/tmp")`,
+- `07`, `08`, `09` and `12` bind real host locations (`dir("/tmp")`,
   `/local`) so they're fully self-contained and safe to run repeatedly
   — `08` copies `LICENSE` into a scratch path under `/tmp`, renames it,
   then removes it again, and `09` writes two small scratch files under

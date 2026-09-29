@@ -64,11 +64,11 @@ something this binary hosts itself (see "Design" below for why).
 ```
 
 Prefer to learn by running real programs instead of reading prose? See
-[`examples/`](examples/) — eleven small, verified `.ky` scripts, one
+[`examples/`](examples/) — twelve small, verified `.ky` scripts, one
 feature area each (namespace basics, jobs, data pipelines, strings,
 control flow, env/kyu vars, remote namespaces, file ops, namespace
 introspection and safety, regex and collections, pty jobs and
-`attach()`).
+`attach()`, host paths).
 
 What follows is a full language reference, organized by area so you
 can jump to what you need instead of reading it as one wall of text:

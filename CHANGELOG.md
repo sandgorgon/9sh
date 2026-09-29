@@ -14,6 +14,8 @@ once a first tagged release is cut.
   `String`. Works for `dir(...)` binds, `/local`, and path-binds of those
   (`bind /local, /work`); anything without an OS path (`dial()` remotes,
   `/jobs`, `/env`, synthetic directories, union binds) is an `ErrorVal`.
+- [`examples/12_host_paths.ky`](examples/12_host_paths.ky): `host_path()`
+  through a `dir()` bind and a path-bind, handed to a real `%cmd`.
 
 ## [0.10.1] - 2026-09-22
 

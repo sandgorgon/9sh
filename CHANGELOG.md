@@ -8,6 +8,16 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Fixed
+
+- Listing a bind point over a 9P2000.u connection failed with `p9: trailing
+  bytes after message` (seen as `9vcs -C /nb status` under `-listen-unix`,
+  where `/nb` was a bind). The namespace decoded each bound layer's
+  directory listing as plain 9P2000 and re-encoded the merged result the
+  same way, ignoring the version the client had negotiated; both now follow
+  it. Plain 9P2000 clients are unaffected. Regression test:
+  `TestBindPointListingHonorsNegotiatedVersion`.
+
 ## [0.11.0] - 2026-09-29
 
 ### Added

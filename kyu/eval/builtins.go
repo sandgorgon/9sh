@@ -11,10 +11,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sandgorgon/9p/examples/dirfs"
-
 	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/kyu/value"
+	"github.com/sandgorgon/9sh/ns"
 	"github.com/sandgorgon/9sh/remote"
 )
 
@@ -162,7 +161,7 @@ func biDir(args []value.Value) (value.Value, error) {
 	if !strings.HasPrefix(string(path), "/") {
 		return nil, fmt.Errorf("dir: path must be absolute, got %q", string(path))
 	}
-	fs, err := dirfs.New(string(path))
+	fs, err := ns.NewDirFS(string(path))
 	if err != nil {
 		return value.ErrorVal{Msg: fmt.Sprintf("dir: %v", err)}, nil
 	}

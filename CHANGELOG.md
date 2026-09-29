@@ -8,6 +8,13 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- `host_path(path)`: the real OS path behind a namespace `Path`, as a
+  `String`. Works for `dir(...)` binds, `/local`, and path-binds of those
+  (`bind /local, /work`); anything without an OS path (`dial()` remotes,
+  `/jobs`, `/env`, synthetic directories, union binds) is an `ErrorVal`.
+
 ## [0.10.1] - 2026-09-22
 
 ### Documentation

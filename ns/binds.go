@@ -301,13 +301,20 @@ type Resolution struct {
 // the point, so this deliberately does not try to be smarter (a union
 // directory's *listing* merges layers; a Walk into it does not).
 func (ns *Namespace) Resolve(ctx context.Context, path string) (Resolution, error) {
+	res, _, err := ns.resolve(ctx, path)
+	return res, err
+}
+
+// resolve is Resolve plus the serving layer itself (for a "bindpoint",
+// its first layer; nil for a "tree"), for callers like HostPath that need more than the report.
+func (ns *Namespace) resolve(ctx context.Context, path string) (Resolution, *layer, error) {
 	parts := splitPath(path)
 	res := Resolution{Path: "/" + strings.Join(parts, "/"), Layer: -1}
 	n := ns.root
 	cur := ""
 	for i, name := range parts {
 		if name == ".." {
-			return res, errors.New("ns: '..' is not supported at a namespace bind point")
+			return res, nil, errors.New("ns: '..' is not supported at a namespace bind point")
 		}
 		n.mu.RLock()
 		child, hasChild := n.children[name]
@@ -336,7 +343,7 @@ func (ns *Namespace) Resolve(ctx context.Context, path string) (Resolution, erro
 			}
 			for _, p := range parts[i+1:] {
 				if f, err = f.Walk(ctx, p); err != nil {
-					return res, fmt.Errorf("ns: %s: %w", res.Path, err)
+					return res, nil, fmt.Errorf("ns: %s: %w", res.Path, err)
 				}
 			}
 			res.Kind, res.Dst, res.Src, res.RO = "layer", dst, l.spec, l.ro
@@ -348,24 +355,26 @@ func (ns *Namespace) Resolve(ctx context.Context, path string) (Resolution, erro
 			}
 			res.Layer, res.Layers = li, len(layers)
 			res.Inner = "/" + strings.Join(parts[i:], "/")
-			return res, nil
+			return res, l, nil
 		}
 		if lastErr == nil {
 			lastErr = fmt.Errorf("ns: %s: no such file", name)
 		}
-		return res, fmt.Errorf("ns: %s: %w", res.Path, lastErr)
+		return res, nil, fmt.Errorf("ns: %s: %w", res.Path, lastErr)
 	}
+	var first *layer
 	n.mu.RLock()
 	res.Layers = len(n.layers)
 	if res.Layers > 0 {
 		// No single serving layer here; a create at a bind point goes to
 		// the first, so that is the one whose read-only flag matters.
-		res.RO = n.layers[0].ro
+		first = n.layers[0]
+		res.RO = first.ro
 	}
 	n.mu.RUnlock()
 	res.Kind, res.Dst = "tree", res.Path
 	if res.Layers > 0 {
 		res.Kind = "bindpoint"
 	}
-	return res, nil
+	return res, first, nil
 }

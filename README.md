@@ -227,6 +227,15 @@ can jump to what you need instead of reading it as one wall of text:
   the next name succeeds serves the rest, with no fallback to a later
   layer — and, unlike `binds()`, answers only for the local namespace.
   An unresolvable path is an `ErrorVal`.
+- `host_path(path)` is the `Path` → `String` crossing for real files:
+  the OS path behind a namespace path, e.g. `host_path(/work/a.go)` is
+  `"/home/me/proj/a.go"` when `/work` is bound to that directory. It
+  works for `dir(...)` binds, `/local`, and path-binds of those
+  (`bind /local, /work` is followed back to its source, by the source
+  path as it names things now); a bind point itself answers with its
+  first layer's directory. Anything with no OS path — a `dial()` remote,
+  `/jobs`, `/env`, a synthetic directory like `/n`, a union-expression
+  bind — is an `ErrorVal`, never a guess. Local namespace only.
 - `dev` is which server a file lives on, the way Plan 9's `Dir.dev` is
   (`ls -l` prints it there too): every file reached through a bound
   filesystem carries the id of the layer serving it, in `ls`/`stat` and

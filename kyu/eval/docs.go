@@ -116,6 +116,8 @@ var builtinDocs = []BuiltinDoc{
 		"Adds a String to the end of a namespace file, creating it if needed. Needs a file server that reports a real length (every real directory does)."},
 	{"which_bind", "which_bind(path)",
 		"Which bind point and union layer serves a path, as a Record (path, kind, dst, src, layer, layers, dev, inner) — the layer behind one path (ls's dev field gives it per entry). kind is layer, bindpoint or tree; an unresolvable path is an ErrorVal. Local namespace only."},
+	{"host_path", "host_path(path)",
+		"The real OS path behind a namespace Path, as a String — e.g. host_path(/work/a.go) is \"/home/me/proj/a.go\" when /work is bound to that directory. Works for dir() binds, /local, and path-binds of those; anything with no OS path (dial() remotes, /jobs, /env, synthetic directories, union binds) is an ErrorVal. Local namespace only."},
 	{"source", "source(path)",
 		"Runs a kyu file from the namespace against the session, as if typed at the prompt — e.g. source(/ns/binds) replays this namespace's binds. A parse error is an ErrorVal and runs nothing; a runtime error aborts. Runs arbitrary kyu with your full authority, so cat() a peer's file before sourcing it."},
 	{"binds", "binds()  or  binds(path)",
@@ -207,7 +209,7 @@ var namespaceAppNames = map[string]bool{
 	"mkdir": true, "rmdir": true, "source_config": true, "reset_config": true,
 	"history": true, "history_delete": true, "history_clear": true,
 	"dial": true, "dir": true, "getenv": true, "setenv": true, "unsetenv": true,
-	"vars": true, "unset": true, "ps": true, "binds": true, "bind_log": true, "which_bind": true, "source": true, "wait": true,
+	"vars": true, "unset": true, "ps": true, "binds": true, "bind_log": true, "which_bind": true, "host_path": true, "source": true, "wait": true,
 	"%cmd": true, "&": true, "@host": true, "in_ns": true, "attach": true,
 }
 

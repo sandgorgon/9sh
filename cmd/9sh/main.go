@@ -157,7 +157,7 @@ func bootstrap(listenAddr, listenUnixPath string, lo listenOpts) (*eval.Env, *se
 	// not a settled namespace-layout convention — so there's something
 	// checkout-able (and browsable) out of the box.
 	if cwd, err := os.Getwd(); err == nil {
-		if fs, err := dirfs.New(cwd); err == nil {
+		if fs, err := ns.NewDirFS(cwd); err == nil {
 			namespace.BindFS(fs, "", "/local", ns.Replace)
 		}
 	}

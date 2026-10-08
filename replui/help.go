@@ -50,7 +50,7 @@ var keybindingHelp = []string{
 	"                         foreground %cmd or kyu evaluation is still",
 	"                         running, interrupt it instead",
 	"Alt+C                    copy only what's currently visible",
-	"paste                    inserts at the cursor",
+	"paste (Ctrl+Shift+V)     inserts at the cursor (not in this screen)",
 	"? (at an empty prompt)  toggle this help screen",
 	"Ctrl+D (at an empty prompt)  quit 9sh",
 	"",
@@ -299,6 +299,14 @@ func (w *helpWidget) Paint(p *cell.Painter) {
 	}
 }
 
+// visibleText is the slice of helpText Paint currently shows.
+func (w *helpWidget) visibleText() string {
+	maxStart := max0(len(helpText) - w.lastHeight)
+	start := clampInt(w.scrollOffset, 0, maxStart)
+	end := min(start+w.lastHeight, len(helpText))
+	return strings.Join(helpText[start:end], "\n")
+}
+
 func clampInt(v, lo, hi int) int {
 	if v < lo {
 		return lo
@@ -319,7 +327,13 @@ func (w *helpWidget) HandleEvent(e input.Event) tui.Cmd {
 			w.scrollOffset += scrollStep
 		}
 	case input.KeyEvent:
+		ctrl := ev.Mod&input.ModCtrl != 0
+		alt := ev.Mod&input.ModAlt != 0
 		switch {
+		case ctrl && ev.Rune == 'c':
+			return tui.CopyToClipboard(strings.Join(helpText, "\n"))
+		case alt && ev.Rune == 'c':
+			return tui.CopyToClipboard(w.visibleText())
 		case ev.Key == input.KeyEsc, ev.Rune == '?', ev.Rune == 'q':
 			// Safe to claim these here (unlike a global hotkey elsewhere
 			// in this package): widget.Modal claims focus exclusively

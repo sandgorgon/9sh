@@ -9,8 +9,8 @@ import (
 
 	p9 "github.com/sandgorgon/9p"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // statRecord builds the Record shape stat(path) and ls(pattern) both
@@ -21,7 +21,7 @@ import (
 //
 // dev is Plan 9's Dir.dev: the id of the bound layer serving the file (0
 // for a purely synthetic directory), the same number binds() and
-// which_bind() report as their own dev — see ns/dev.go.
+// which_bind() report as their own dev — see 9p/ns/dev.go.
 //
 // mtime/atime are Unix epoch seconds (p9.Stat's own Mtime/Atime are
 // already exactly that, as a uint32) stored as a plain Int, not a

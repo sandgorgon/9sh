@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 	"github.com/sandgorgon/9sh/remote"
 )
 

@@ -40,7 +40,7 @@ import (
 	"github.com/sandgorgon/9p/client"
 	"github.com/sandgorgon/9p/server"
 
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9p/ns"
 )
 
 type peerFPKey struct{}
@@ -157,7 +157,7 @@ func dialUnix(ctx context.Context, path string) (*Conn, error) {
 		c.Close()
 		return nil, fmt.Errorf("remote: attaching to %s: %w", path, err)
 	}
-	return &Conn{client: c, fs: &clientFS{root: rootFid}}, nil
+	return &Conn{client: c, fs: ns.FromFid(rootFid)}, nil
 }
 
 // dialTCP is Dial's TCP+TLS logic against explicit, already-resolved
@@ -201,7 +201,7 @@ func dialTCP(ctx context.Context, id *auth.Identity, knownPeersPath string, know
 		c.Close()
 		return nil, fmt.Errorf("remote: attaching to %s: %w (the peer may have rejected this connection — check its authorized-peers)", addr, err)
 	}
-	return &Conn{client: c, fp: peerFP, fs: &clientFS{root: rootFid}}, nil
+	return &Conn{client: c, fp: peerFP, fs: ns.FromFid(rootFid)}, nil
 }
 
 // verifyPeer decides whether to trust addr's presented fingerprint,

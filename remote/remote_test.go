@@ -18,7 +18,8 @@ import (
 	"github.com/sandgorgon/9p/examples/memfs"
 	"github.com/sandgorgon/9p/server"
 
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9p/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 )
 
 // loadIdentity generates (and persists) a fresh 9auth identity under its
@@ -727,7 +728,7 @@ func TestListenUnixServesOnlyASubtree(t *testing.T) {
 	os.MkdirAll(filepath.Join(work, "sub"), 0755)
 	os.WriteFile(filepath.Join(work, "top.txt"), []byte("top"), 0644)
 	os.WriteFile(filepath.Join(secret, "key.txt"), []byte("hunter2"), 0644)
-	namespace := ns.New()
+	namespace := nsfs.New()
 	for path, dir := range map[string]string{"/work": work, "/secret": secret} {
 		fs, err := dirfs.New(dir)
 		if err != nil {
@@ -822,7 +823,7 @@ func TestBoundRemoteDirectoryListsThroughNamespace(t *testing.T) {
 	}
 	defer conn.Close()
 
-	namespace := ns.New()
+	namespace := nsfs.New()
 	if err := namespace.BindFS(conn.FS(), "", "/i/9ed", ns.Replace); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -868,7 +869,7 @@ func TestServedNamespaceSendsNoDevAndPeerStampsItsOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Burn a few layer ids so the server's and the peer's can't coincide.
-	server := ns.New()
+	server := nsfs.New()
 	for _, dst := range []string{"/pad1", "/pad2", "/pad3"} {
 		server.BindFS(memfs.New(), "", dst, ns.Replace)
 	}
@@ -919,7 +920,7 @@ func TestServedNamespaceSendsNoDevAndPeerStampsItsOwn(t *testing.T) {
 	}
 
 	// Bound on the peer, the same files carry the peer's own layer id.
-	peer := ns.New()
+	peer := nsfs.New()
 	peer.BindFS(memfs.New(), "", "/pad", ns.Replace)
 	if err := peer.BindFS(conn.FS(), "", "/n/srv", ns.Replace); err != nil {
 		t.Fatal(err)

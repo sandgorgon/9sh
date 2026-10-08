@@ -10,7 +10,7 @@ import (
 	"github.com/sandgorgon/9p/examples/dirfs"
 	"github.com/sandgorgon/9p/server"
 
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9p/ns"
 )
 
 // unlistableFS wraps a real directory but fails every read of its root

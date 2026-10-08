@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // Env is a lexical scope: a variable map with a parent link for closures.

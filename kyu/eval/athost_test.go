@@ -12,9 +12,10 @@ import (
 	auth "github.com/sandgorgon/9auth"
 	p9 "github.com/sandgorgon/9p"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 	"github.com/sandgorgon/9sh/remote"
 )
 
@@ -58,7 +59,7 @@ func TestAtHostEndToEnd(t *testing.T) {
 	}
 
 	// The "remote" 9sh: its own namespace and job manager, served over TLS.
-	remoteNamespace := ns.New()
+	remoteNamespace := nsfs.New()
 	if err := remoteNamespace.BindFS(job.New(job.NewManager()), "", "/jobs", ns.Replace); err != nil {
 		t.Fatalf("bootstrapping remote /jobs: %v", err)
 	}
@@ -182,7 +183,7 @@ func setupAtHostTestPeer(t *testing.T) *Env {
 		t.Fatalf("writing authorized-peers: %v", err)
 	}
 
-	remoteNamespace := ns.New()
+	remoteNamespace := nsfs.New()
 	if err := remoteNamespace.BindFS(job.New(job.NewManager()), "", "/jobs", ns.Replace); err != nil {
 		t.Fatalf("bootstrapping remote /jobs: %v", err)
 	}

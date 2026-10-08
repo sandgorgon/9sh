@@ -5,16 +5,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 )
 
 func inNSEnv(t *testing.T) (*Env, string) {
 	t.Helper()
 	env, dir := globEnv(t)
-	if err := env.Namespace().BindFS(ns.NewBindsFS(env.Namespace()), "", "/ns", ns.Replace); err != nil {
+	if err := env.Namespace().BindFS(nsfs.NewBindsFS(env.Namespace()), "", "/ns", ns.Replace); err != nil {
 		t.Fatal(err)
 	}
 	return env, dir

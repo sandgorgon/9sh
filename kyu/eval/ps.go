@@ -8,9 +8,9 @@ import (
 
 	p9 "github.com/sandgorgon/9p"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // biPs implements `ps()`: every job visible at /jobs, as a Table of

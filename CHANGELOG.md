@@ -8,6 +8,15 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-07
+
+### Added
+
+- The `?` help screen now copies like the prompt does: Ctrl+C copies the
+  whole help text and Alt+C copies only what is currently visible. The
+  keybinding list also now says paste is Ctrl+Shift+V and isn't available
+  inside the help screen.
+
 ### Changed
 
 - The namespace implementation moved into the `9p` module as

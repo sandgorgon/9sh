@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-07
+
 ### Added
 
 - The `?` help screen now copies like the prompt does: Ctrl+C copies the

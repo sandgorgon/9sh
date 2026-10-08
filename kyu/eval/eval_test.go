@@ -12,10 +12,11 @@ import (
 
 	"github.com/sandgorgon/9p/examples/dirfs"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 )
 
 func run(t *testing.T, src string) value.Value {
@@ -1580,7 +1581,7 @@ func TestJobStatusFieldIsReadOnly(t *testing.T) {
 func jobsEnvWithManager(t *testing.T) (*Env, *job.Manager) {
 	t.Helper()
 	mgr := job.NewManager()
-	namespace := ns.New()
+	namespace := nsfs.New()
 	if err := namespace.BindFS(job.New(mgr), "", "/jobs", ns.Replace); err != nil {
 		t.Fatalf("bootstrap bind /jobs: %v", err)
 	}

@@ -9,8 +9,8 @@ import (
 
 	p9 "github.com/sandgorgon/9p"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // biGlob implements `glob(pattern)`: pattern is a full namespace path

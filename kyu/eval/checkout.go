@@ -12,8 +12,8 @@ import (
 	p9 "github.com/sandgorgon/9p"
 	"github.com/sandgorgon/9p/server"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // biCheckout implements `checkout(nsPath, closure)` — the explicit

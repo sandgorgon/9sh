@@ -7,8 +7,9 @@ import (
 
 	"github.com/sandgorgon/9p/examples/dirfs"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/job"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 )
 
 // dirfsEnv binds a real dirfs-backed temp directory at /src, the primary
@@ -26,7 +27,7 @@ func dirfsEnv(t *testing.T) (*Env, string) {
 	if err != nil {
 		t.Fatalf("dirfs.New: %v", err)
 	}
-	namespace := ns.New()
+	namespace := nsfs.New()
 	if err := namespace.BindFS(fs, "", "/src", ns.Replace); err != nil {
 		t.Fatalf("bind /src: %v", err)
 	}

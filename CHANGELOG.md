@@ -8,6 +8,19 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Changed
+
+- The namespace implementation moved into the `9p` module as
+  `github.com/sandgorgon/9p/ns` (9p v0.10.0), so other 9P services can
+  maintain and serve their own namespaces too. 9sh now imports it. The
+  `/ns` introspection filesystem and the kyu text for `binds`/`bind_log`
+  stay here, in the new `nsfs` package, which also provides
+  `nsfs.New()` — a namespace with 9sh's identity (`9sh` as the owner of
+  synthetic directories). The dialed-peer adapter (`remote/client_fs.go`)
+  is replaced by the shared `ns.FromFid`. No behavior change; with
+  9p v0.10.0, files cloned by a zero-name walk no longer share open state
+  with the original.
+
 ## [0.11.1] - 2026-09-29
 
 ### Fixed

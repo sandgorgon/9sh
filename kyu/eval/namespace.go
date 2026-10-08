@@ -15,9 +15,9 @@ import (
 	p9 "github.com/sandgorgon/9p"
 	"github.com/sandgorgon/9p/server"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 func evalBindStmt(st *ast.BindStmt, env *Env) (value.Value, error) {

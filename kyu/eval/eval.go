@@ -4,10 +4,10 @@ package eval
 import (
 	"fmt"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/token"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // NewGlobalEnv returns a root Env pre-populated with the built-in

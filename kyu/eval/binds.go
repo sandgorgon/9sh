@@ -7,8 +7,8 @@ import (
 
 	p9 "github.com/sandgorgon/9p"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // biBinds implements `binds()`: every layer bound in the namespace, as a
@@ -20,7 +20,7 @@ import (
 //
 // disp is the canonical replay disposition, not the one a layer was
 // originally bound with — see ns.Bind. dev is the id ls/stat stamp on the
-// layer's files, 0 for a layer that binds an existing path (see ns/dev.go).
+// layer's files, 0 for a layer that binds an existing path (see 9p/ns/dev.go).
 //
 // With a Path argument, only layers bound at that path or anywhere
 // beneath it are returned (`binds(/n)` is every remote mount; `/nfs`

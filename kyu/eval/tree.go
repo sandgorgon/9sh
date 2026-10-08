@@ -6,7 +6,7 @@ import (
 	p9 "github.com/sandgorgon/9p"
 	"github.com/sandgorgon/9p/server"
 
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9p/ns"
 )
 
 // removeTree recursively removes every entry inside dir, then dir

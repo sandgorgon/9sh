@@ -11,9 +11,10 @@ import (
 	"github.com/sandgorgon/tui/input"
 	"github.com/sandgorgon/tui/tui"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/eval"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 )
 
 func newTestReplWidget(t *testing.T) *kyuReplWidget {
@@ -43,7 +44,7 @@ func newNamespaceTestEnv(t *testing.T) *eval.Env {
 	if err != nil {
 		t.Fatalf("dirfs.New: %v", err)
 	}
-	namespace := ns.New()
+	namespace := nsfs.New()
 	if err := namespace.BindFS(fs, "", "/x", ns.Replace); err != nil {
 		t.Fatalf("bind /x: %v", err)
 	}

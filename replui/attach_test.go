@@ -12,9 +12,10 @@ import (
 	"github.com/sandgorgon/tui/term"
 	"github.com/sandgorgon/tui/tui"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/eval"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 )
 
 // jobsEnv is eval_test.go's own jobsEnvWithManager, minimally
@@ -25,7 +26,7 @@ import (
 func jobsEnv(t *testing.T) *eval.Env {
 	t.Helper()
 	mgr := job.NewManager()
-	namespace := ns.New()
+	namespace := nsfs.New()
 	if err := namespace.BindFS(job.New(mgr), "", "/jobs", ns.Replace); err != nil {
 		t.Fatalf("bootstrap bind /jobs: %v", err)
 	}

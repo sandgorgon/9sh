@@ -7,8 +7,8 @@ import (
 
 	p9 "github.com/sandgorgon/9p"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // biBindLog implements `bind_log()`: every successful bind and unbind so

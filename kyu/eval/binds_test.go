@@ -6,14 +6,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 )
 
 func bindsEnv(t *testing.T) *Env {
 	t.Helper()
-	n := ns.New()
-	if err := n.BindFS(ns.NewBindsFS(n), "", "/ns", ns.Replace); err != nil {
+	n := nsfs.New()
+	if err := n.BindFS(nsfs.NewBindsFS(n), "", "/ns", ns.Replace); err != nil {
 		t.Fatal(err)
 	}
 	return NewGlobalEnv(n)
@@ -100,7 +101,7 @@ func TestBindsPathFilterIsAtOrUnderBySegment(t *testing.T) {
 }
 
 func TestBindsWithoutNSMountIsErrorValue(t *testing.T) {
-	env := NewGlobalEnv(ns.New())
+	env := NewGlobalEnv(nsfs.New())
 	v := runEnv(t, `binds()`, env)
 	if _, ok := v.(value.ErrorVal); !ok {
 		t.Fatalf("want ErrorVal when /ns isn't bound, got %#v", v)
@@ -209,7 +210,7 @@ func TestBindLogRejectsArguments(t *testing.T) {
 
 func TestReadOnlyBindEndToEnd(t *testing.T) {
 	env, dir := globEnv(t)
-	if err := env.Namespace().BindFS(ns.NewBindsFS(env.Namespace()), "", "/ns", ns.Replace); err != nil {
+	if err := env.Namespace().BindFS(nsfs.NewBindsFS(env.Namespace()), "", "/ns", ns.Replace); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(dir+"/f.txt", []byte("keep"), 0644)

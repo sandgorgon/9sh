@@ -28,13 +28,14 @@ import (
 	"github.com/sandgorgon/tui/term"
 	"github.com/sandgorgon/tui/tui"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/config"
 	"github.com/sandgorgon/9sh/dotfiles"
 	"github.com/sandgorgon/9sh/job"
 	"github.com/sandgorgon/9sh/kyu/eval"
 	"github.com/sandgorgon/9sh/kyu/parser"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 	"github.com/sandgorgon/9sh/remote"
 	"github.com/sandgorgon/9sh/replui"
 	"github.com/sandgorgon/9sh/session"
@@ -144,7 +145,7 @@ type listenOpts struct {
 }
 
 func bootstrap(listenAddr, listenUnixPath string, lo listenOpts) (*eval.Env, *session.Recorder, string, string) {
-	namespace := ns.New()
+	namespace := nsfs.New()
 	mgr := job.NewManager()
 	// Bootstrap binds: 9sh's own Go-level setup, not something kyu's
 	// `bind` (which only reshapes what's already in the namespace) can
@@ -238,9 +239,9 @@ func bootstrap(listenAddr, listenUnixPath string, lo listenOpts) (*eval.Env, *se
 	}
 
 	// /ns describes this namespace's own binds (binds, binds.json) — see
-	// ns.BindsFS. It reads the live namespace on every open, so where it
+	// nsfs.BindsFS. It reads the live namespace on every open, so where it
 	// sits in this sequence doesn't affect what it reports.
-	if err := namespace.BindFS(ns.NewBindsFS(namespace), "", "/ns", ns.Replace); err != nil {
+	if err := namespace.BindFS(nsfs.NewBindsFS(namespace), "", "/ns", ns.Replace); err != nil {
 		fmt.Fprintln(os.Stderr, "9sh: bootstrapping /ns:", err)
 		os.Exit(1)
 	}

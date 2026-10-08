@@ -16,7 +16,7 @@ import (
 // ns.Resolution); dst (the bind point); src (the serving layer's source
 // expression, null for a bootstrap bind or a non-layer path); layer
 // (0-based union position, null when none); layers (how many layers dst
-// has); dev (the id ls/stat stamp on that layer's files — see ns/dev.go;
+// has); dev (the id ls/stat stamp on that layer's files — see 9p/ns/dev.go;
 // 0 unless kind is "layer"); ro (whether the serving layer refuses writes
 // — for a bindpoint, its first layer, where a create would go); inner (the
 // path within the layer, null unless kind is "layer").

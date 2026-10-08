@@ -10,7 +10,7 @@ import (
 // biRm implements `rm(path)`: removes one namespace file — read side
 // mirrors biCp/biCat (walkAll to the target), the op itself is
 // server.File.Remove(ctx), already implemented by every backend a
-// namespace can bind (ns/file.go, remote/client_fs.go, remote/auth_fs.go,
+// namespace can bind (9p/ns/file.go, 9p/ns/fid.go, remote/auth_fs.go,
 // job/fs.go) for exactly this, just never exposed to kyu directly before.
 //
 // path must be a regular file, not a directory -- use rmdir (empty

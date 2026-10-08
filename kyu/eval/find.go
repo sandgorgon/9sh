@@ -8,8 +8,8 @@ import (
 
 	"github.com/sandgorgon/9p/server"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // biFind implements `find(dir, pattern)`: like glob(pattern), but walks

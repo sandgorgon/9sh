@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
 )
 
 // protectedNamespaceRoots is the set of top-level namespace entries

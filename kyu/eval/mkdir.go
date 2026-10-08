@@ -21,7 +21,7 @@ import (
 //
 // Every backend a namespace can bind already implements the one
 // primitive this needs generically (dirfs's own Create branches on
-// perm.IsDir() before ever reaching its file-open logic; ns/file.go's
+// perm.IsDir() before ever reaching its file-open logic; 9p/ns/file.go's
 // Create passes perm through untouched) -- this just exposes it to kyu
 // directly, mirroring rm/mv's "already-there primitive, never wired up"
 // story.

@@ -4,15 +4,16 @@ import (
 	"os"
 	"testing"
 
+	"github.com/sandgorgon/9p/ns"
 	"github.com/sandgorgon/9sh/kyu/value"
-	"github.com/sandgorgon/9sh/ns"
+	"github.com/sandgorgon/9sh/nsfs"
 )
 
 // ls/stat's dev, which_bind's dev and binds()'s dev are one number: the
 // id of the layer serving the file, so an entry can be matched to its bind.
 func TestDevTiesLsStatWhichBindAndBindsTogether(t *testing.T) {
 	env, dir := globEnv(t)
-	if err := env.Namespace().BindFS(ns.NewBindsFS(env.Namespace()), "", "/ns", ns.Replace); err != nil {
+	if err := env.Namespace().BindFS(nsfs.NewBindsFS(env.Namespace()), "", "/ns", ns.Replace); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(dir+"/f.txt", []byte("x"), 0644); err != nil {

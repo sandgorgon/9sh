@@ -8,6 +8,26 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-15
+
+### Added
+
+- Long lines in the REPL now wrap onto the next row instead of being cut
+  off at the right edge. Alt+Z toggles wrapping off and on. Wrapping is
+  display only: toggling it or resizing the screen rewraps everything
+  already shown, and copying (Ctrl+C, Alt+C) never adds a line break
+  where a line wrapped.
+- `exit()` and `quit()` (the same thing under two names). At the prompt
+  they quit 9sh like Ctrl+D; in a script they end the script; in a file
+  run by `source()` or a startup file they end just that file and the
+  caller carries on; in a background `&` job they end the job. A script
+  can set its exit status with `exit(3)` (0 to 255), or fail with a
+  reason Plan 9 style with `exit("disk full")`, which prints the reason
+  to stderr and exits with status 1; `exit("")` is success.
+- `wrap(on)` turns wrapping on or off and `wrap()` reports whether it
+  is on, for terminals or desktops where something else claims Alt+Z
+  first.
+
 ## [0.13.0] - 2026-11-15
 
 ### Added

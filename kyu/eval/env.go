@@ -56,6 +56,7 @@ type Env struct {
 	externalOutputSink ExternalOutputSinkFunc       // process-wide, guarded by root().mu; see SetExternalOutputSink
 	sourceConfig       SourceConfigFunc             // process-wide, guarded by root().mu; see SetSourceConfig
 	historyAccess      *HistoryAccess               // process-wide, guarded by root().mu; see SetHistoryAccess
+	wrapAccess         *WrapAccess                  // process-wide, guarded by root().mu; see SetWrapAccess
 	sourceDepth        int                          // process-wide, guarded by root().mu; see biSource's maxSourceDepth
 	callDepth          int                          // process-wide, guarded by root().mu; see callClosure's maxCallDepth
 	localJobManager    *job.Manager                 // process-wide; write-once at cmd/9sh's bootstrap, before env is ever shared with another goroutine -- safe unlocked, see SetLocalJobManager
@@ -222,6 +223,33 @@ func (e *Env) HistoryAccess() *HistoryAccess {
 	root.mu.RLock()
 	defer root.mu.RUnlock()
 	return root.historyAccess
+}
+
+// WrapAccess is wrap()'s hook (kyu/eval/wrap.go) into the REPL's
+// line-wrapping setting — replui's kyuReplWidget, for the same
+// import-direction reason as HistoryAccess, and registered the same
+// set-before/clear-after way around each evaluate() call. Get reports
+// whether wrapping is on; Set turns it on or off.
+type WrapAccess struct {
+	Get func() bool
+	Set func(on bool)
+}
+
+// SetWrapAccess registers the hook wrap() calls. nil (the default, and
+// every non-TUI entry point) means wrap() isn't available.
+func (e *Env) SetWrapAccess(a *WrapAccess) {
+	root := e.root()
+	root.mu.Lock()
+	root.wrapAccess = a
+	root.mu.Unlock()
+}
+
+// WrapAccess returns the hook set by SetWrapAccess, or nil.
+func (e *Env) WrapAccess() *WrapAccess {
+	root := e.root()
+	root.mu.RLock()
+	defer root.mu.RUnlock()
+	return root.wrapAccess
 }
 
 // SetProxyRecorder configures the hook evalBackground/runExternalViaJob

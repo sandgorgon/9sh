@@ -154,6 +154,18 @@ func NewGlobalEnv(namespace *ns.Namespace) *Env {
 	env.Define("history_clear", &Builtin{Name: "history_clear", Fn: func(args []value.Value) (value.Value, error) {
 		return biHistoryClear(env, args)
 	}})
+	// exit/quit stop the current script, or the session at the prompt —
+	// see exit.go's ExitSignal.
+	for _, name := range []string{"exit", "quit"} {
+		env.Define(name, &Builtin{Name: name, Fn: func(args []value.Value) (value.Value, error) {
+			return biExit(name, args)
+		}})
+	}
+	// wrap reaches the REPL's Env.WrapAccess hook the same way — see
+	// wrap.go's biWrap.
+	env.Define("wrap", &Builtin{Name: "wrap", Fn: func(args []value.Value) (value.Value, error) {
+		return biWrap(env, args)
+	}})
 	// ps needs the calling Env's namespace — same closure-capture shape
 	// as glob/checkout above. See ps.go's biPs doc comment.
 	env.Define("ps", &Builtin{Name: "ps", Fn: func(args []value.Value) (value.Value, error) {

@@ -394,7 +394,9 @@ func evalBackgroundInproc(expr ast.Expr, env *Env) (value.Value, error) {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			io.WriteString(stderr, err.Error())
+			if !IsExit(err) { // exit() just ends the job
+				io.WriteString(stderr, err.Error())
+			}
 			return nil
 		}
 		if result.Kind() != "null" {

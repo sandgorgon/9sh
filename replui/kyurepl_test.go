@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sandgorgon/9p/examples/dirfs"
+	"github.com/sandgorgon/tui/cell"
 	"github.com/sandgorgon/tui/input"
 	"github.com/sandgorgon/tui/tui"
 
@@ -1229,5 +1230,96 @@ func TestKyuReplQuestionMarkOpensHelpOnlyAtAnEmptyPrompt(t *testing.T) {
 		if cmd := w.HandleEvent(input.KeyEvent{Rune: '?', Mod: mod}); cmd != nil {
 			t.Errorf("modified ? (mod %v) must not open help, got Cmd %T", mod, cmd())
 		}
+	}
+}
+
+// displayBacking is a live-backed field that must never be read when
+// its record is printed -- valueSpans has to honor FieldDisplay the
+// same way Record.String() does.
+type displayBacking struct{ t *testing.T }
+
+func (b displayBacking) ReadField() (value.Value, error) {
+	b.t.Error("ReadField called while rendering a FieldDisplay field")
+	return value.Null{}, nil
+}
+func (displayBacking) WriteField(value.Value) error { return nil }
+func (displayBacking) DisplayField() string         { return "<wait>" }
+
+// TestResultLinesMatchPlainRendering is the invariant valueSpans' doc
+// comment promises: colored or not, a result's rows and their text are
+// exactly what textLines(v.String(), ...) produced before results were
+// colored.
+func TestResultLinesMatchPlainRendering(t *testing.T) {
+	rec := value.RecordFrom([]value.RecordField{
+		{Name: "name", Value: value.String(`say "if" true`)},
+		{Name: "n", Value: value.Int(3)},
+		{Name: "note", Value: value.String("two\nlines")},
+		{Name: "err", Value: value.ErrorVal{Msg: "boom"}},
+	})
+	rec.SetBacking("wait", displayBacking{t})
+	cases := []value.Value{
+		value.Null{}, value.Bool(true), value.Int(-7), value.Float(1.5),
+		value.Duration(1500 * time.Millisecond), value.Path("/local/bin"),
+		value.Ref{Path: "/jobs/1", Host: "h"},
+		value.NSUnion{Paths: []value.Path{"/a", "/b"}},
+		value.ErrorVal{Msg: "bad"},
+		rec,
+		value.NewList(nil),
+		value.NewList([]value.Value{rec, value.NewList([]value.Value{value.String("x\n")}), value.Bytes("hi")}),
+	}
+	for _, v := range cases {
+		want := textLines(v.String(), resultStyle)
+		got := resultLines(v)
+		if len(got) != len(want) {
+			t.Errorf("%s: %d lines, want %d (%#v)", v.String(), len(got), len(want), got)
+			continue
+		}
+		for i := range want {
+			if got[i].text != want[i].text {
+				t.Errorf("%s: line %d text = %q, want %q", v.String(), i, got[i].text, want[i].text)
+			}
+			if s := spansText(got[i].spans); s != want[i].text {
+				t.Errorf("%s: line %d spans reconstruct to %q, want %q", v.String(), i, s, want[i].text)
+			}
+		}
+	}
+}
+
+func TestResultLinesColorsByKind(t *testing.T) {
+	v := value.NewList([]value.Value{
+		value.Int(1), value.String("s"), value.Bool(false), value.Path("/p"), value.ErrorVal{Msg: "e"},
+	})
+	lines := resultLines(v)
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want 1: %#v", len(lines), lines)
+	}
+	want := map[string]cell.Style{
+		"1": numberStyle, "s": stringStyle, "false": keywordStyle, "/p": pathStyle, "error: e": errorStyle,
+		"[": resultStyle, ", ": resultStyle, "]": resultStyle,
+	}
+	for _, sp := range lines[0].spans {
+		if st, ok := want[sp.text]; !ok || st != sp.style {
+			t.Errorf("span %q styled %v, want %v", sp.text, sp.style, want[sp.text])
+		}
+	}
+}
+
+func TestResultLinesTopLevelTextStaysPlain(t *testing.T) {
+	for _, v := range []value.Value{value.String("hello 42"), value.Bytes("out\n")} {
+		for _, ln := range resultLines(v) {
+			if ln.spans != nil || ln.style != resultStyle {
+				t.Errorf("%q: want a plain line, got %#v", v.String(), ln)
+			}
+		}
+	}
+}
+
+func TestKyuReplRecordResultIsColored(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, `{a: 1, b: "x"}`)
+	sendEnter(w)
+	got := lastLine(t, w)
+	if got.text != "{a: 1, b: x}" || got.spans == nil {
+		t.Fatalf("last line = %#v, want colored {a: 1, b: x}", got)
 	}
 }

@@ -91,11 +91,12 @@ type replLine struct {
 	style cell.Style
 	// spans, when non-nil, overrides text/style for rendering (see
 	// Paint): per-token styling for a live (not-yet-submitted) input
-	// line — see highlightSpans. nil for every transcript line
-	// (results/errors already evaluated), which render exactly as
-	// before this existed; concatenating a spans slice's own text
-	// fields always reconstructs the line's plain text exactly, so
-	// text/style stay meaningful fallbacks even on a spans line.
+	// line — see highlightSpans — or per-element styling for a
+	// structured evaluation result — see valueSpans. nil for every
+	// other transcript line (errors, plain String/Bytes results);
+	// concatenating a spans slice's own text fields always
+	// reconstructs the line's plain text exactly, so text/style stay
+	// meaningful fallbacks even on a spans line.
 	spans []replSpan
 }
 
@@ -259,8 +260,8 @@ func (w *kyuReplWidget) Paint(p *cell.Painter) {
 	}
 }
 
-// ---- live syntax highlighting (renderInput's input lines only — see
-// replLine.spans' own doc comment on why transcript lines are untouched) ----
+// ---- live syntax highlighting (renderInput's input lines; results
+// are colored separately by valueSpans, from values rather than tokens) ----
 
 // tokenStyle maps a lexed token.Kind to its highlight color. Anything
 // not listed (identifiers, operators, punctuation) renders unstyled,
@@ -1240,12 +1241,116 @@ func (w *kyuReplWidget) consumeFullscreenCmd() tui.Cmd {
 // value.Bytes.String() deliberately stays a "<N bytes>" summary everywhere
 // else, but a bare %cmd at the REPL is exactly the case where real output
 // is wanted, not a summary.
+//
+// A top-level String or Bytes renders plain: it's text the user built
+// or another program printed, so any color would be a guess. Every
+// other kind is colored per element with the live-input palette (see
+// valueSpans), so a color means the same thing in a result as it does
+// while typing.
 func resultLines(v value.Value) []replLine {
-	text := v.String()
-	if b, ok := v.(value.Bytes); ok {
-		text = string(b)
+	switch b := v.(type) {
+	case value.String:
+		return textLines(v.String(), resultStyle)
+	case value.Bytes:
+		return textLines(string(b), resultStyle)
 	}
-	return textLines(text, resultStyle)
+	return spanLines(valueSpans(nil, v))
+}
+
+// valueSpans appends v's rendering to spans, one span per scalar,
+// field name, or bit of punctuation. It mirrors the String() methods in
+// kyu/value exactly — concatenating the spans' text always reproduces
+// v.String() — but walks the value itself rather than re-lexing that
+// string, which would misread a string value containing quotes or
+// keywords. Kinds it doesn't know (functions, mount handles) fall back
+// to their own String() unstyled.
+func valueSpans(spans []replSpan, v value.Value) []replSpan {
+	switch v := v.(type) {
+	case value.Null, value.Bool:
+		return append(spans, replSpan{text: v.String(), style: keywordStyle})
+	case value.Int, value.Float, value.Duration:
+		return append(spans, replSpan{text: v.String(), style: numberStyle})
+	case value.String:
+		return append(spans, replSpan{text: v.String(), style: stringStyle})
+	case value.Path, value.Ref:
+		return append(spans, replSpan{text: v.String(), style: pathStyle})
+	case value.ErrorVal:
+		return append(spans, replSpan{text: v.String(), style: errorStyle})
+	case value.NSUnion:
+		for i, p := range v.Paths {
+			if i > 0 {
+				spans = append(spans, replSpan{text: " + ", style: resultStyle})
+			}
+			spans = append(spans, replSpan{text: string(p), style: pathStyle})
+		}
+		return spans
+	case *value.Record:
+		spans = append(spans, replSpan{text: "{", style: resultStyle})
+		for i, k := range v.Keys() {
+			sep := ""
+			if i > 0 {
+				sep = ", "
+			}
+			spans = append(spans, replSpan{text: sep + k + ": ", style: resultStyle})
+			// Same display-without-reading rule as Record.String(): a
+			// field whose real read blocks or fails by design shows its
+			// summary instead.
+			if b, ok := v.Backing(k); ok {
+				if d, ok := b.(value.FieldDisplay); ok {
+					spans = append(spans, replSpan{text: d.DisplayField(), style: resultStyle})
+					continue
+				}
+			}
+			fv, _ := v.Get(k)
+			spans = valueSpans(spans, fv)
+		}
+		return append(spans, replSpan{text: "}", style: resultStyle})
+	case *value.List:
+		spans = append(spans, replSpan{text: "[", style: resultStyle})
+		for i, e := range v.Elems {
+			if i > 0 {
+				spans = append(spans, replSpan{text: ", ", style: resultStyle})
+			}
+			spans = valueSpans(spans, e)
+		}
+		return append(spans, replSpan{text: "]", style: resultStyle})
+	}
+	return append(spans, replSpan{text: v.String(), style: resultStyle})
+}
+
+// spanLines splits a styled rendering into one replLine per visual row
+// the same way textLines splits plain text (a string value nested in a
+// record can carry real newlines), so the rows and their text are
+// identical to textLines(v.String(), ...) — only the colors differ.
+func spanLines(spans []replSpan) []replLine {
+	if n := len(spans); n > 0 {
+		spans[n-1].text = strings.TrimSuffix(spans[n-1].text, "\n")
+	}
+	var lines []replLine
+	var cur []replSpan
+	flush := func() {
+		var b strings.Builder
+		for _, sp := range cur {
+			b.WriteString(sp.text)
+		}
+		lines = append(lines, replLine{text: b.String(), style: resultStyle, spans: cur})
+		cur = nil
+	}
+	for _, sp := range spans {
+		for i, part := range strings.Split(sp.text, "\n") {
+			if i > 0 {
+				flush()
+			}
+			if part != "" {
+				cur = append(cur, replSpan{text: part, style: sp.style})
+			}
+		}
+	}
+	flush()
+	if len(lines) == 1 && lines[0].text == "" {
+		return nil
+	}
+	return lines
 }
 
 // textLines splits text into one replLine per line, in style -- the

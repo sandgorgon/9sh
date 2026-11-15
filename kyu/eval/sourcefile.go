@@ -99,6 +99,9 @@ func biSource(env *Env, args []value.Value) (value.Value, error) {
 		return value.ErrorVal{Msg: fmt.Sprintf("source: %s: %s", p, strings.Join(msgs, "; "))}, nil
 	}
 	if _, err := Eval(prog, global); err != nil {
+		if IsExit(err) {
+			return value.Null{}, nil // exit() ends this file, not its caller
+		}
 		return nil, fmt.Errorf("source: %s: %w", p, err)
 	}
 	return value.Null{}, nil

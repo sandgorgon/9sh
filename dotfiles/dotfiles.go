@@ -82,7 +82,7 @@ func runIfExists(path string, env *eval.Env) {
 		}
 		return
 	}
-	if _, err := eval.Eval(prog, env); err != nil {
+	if _, err := eval.Eval(prog, env); err != nil && !eval.IsExit(err) { // exit() ends just this file
 		fmt.Fprintf(os.Stderr, "9sh: %s: %v\n", path, err)
 	}
 }

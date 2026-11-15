@@ -477,6 +477,16 @@ can jump to what you need instead of reading it as one wall of text:
   resolves, not just what a subprocess sees about its own environment.
 - A script's own arguments are visible as `args` (a `List` of `String`)
   — `9sh script.kyu foo bar` sees `args == ["foo", "bar"]`.
+- `exit()` (or `quit()`) stops whatever is running: at the prompt it
+  quits 9sh; in a script it ends the script; in a file run by
+  `source()` or a startup file it ends just that file and the caller
+  carries on; in a background `&` job it ends the job. In a script, the
+  argument sets the exit status: none means 0, `exit(3)` exits 3 (0 to
+  255), and `exit("disk full")` follows Plan 9's `exits()` — an empty
+  string is success, any other string is the reason for a failure. A
+  Unix status can't hold a string, so the reason is printed to stderr
+  and the status is 1. Elsewhere the argument is accepted and ignored,
+  so a file behaves the same whether it's run as a script or sourced.
 
 ## Remote hosts
 
@@ -764,9 +774,10 @@ below is built into 9sh: press `?` at an empty prompt any time.
 | `PageUp`/`PageDown`, mouse wheel | Scroll the transcript, independent of the input line |
 | Ctrl+C | Copy the whole transcript — or, while a foreground `%cmd` or kyu evaluation (e.g. `while true {}`) is still running, interrupt it instead |
 | Alt+C | Copy only what's currently visible on screen |
+| Alt+Z | Toggle wrapping long lines — on by default; off cuts them off at the right edge instead. Display only: it rewraps everything already on screen, and copied text never gets a line break at a wrap point. If something else claims Alt+Z first (macOS's Option key typing `Ω` unless set to act as Meta, the NVIDIA overlay on Windows), `wrap(false)` / `wrap(true)` do the same thing and `wrap()` reports the current setting |
 | paste | Inserts at the cursor |
 | `?` at an empty prompt | Toggle the built-in help screen (`?`, `q` or `Esc` also close it) |
-| Ctrl+D (at an empty prompt) | Quit 9sh — bash/zsh's own "EOF at an empty prompt exits" convention |
+| Ctrl+D (at an empty prompt) | Quit 9sh — bash/zsh's own "EOF at an empty prompt exits" convention. Typing `exit()` or `quit()` does the same |
 
 Help is bound to `?` rather than a function key on purpose: terminal
 emulators keep function keys for themselves (xfce4-terminal binds `F1`
@@ -791,9 +802,9 @@ interrupt the way Ctrl+C is).
 
 The input line is syntax-highlighted live as you type (keywords,
 strings, numbers, paths, and the `%`/`@` sigils each get their own
-color) — the already-submitted transcript above it doesn't, by design;
-this is a live editing aid, not a retroactive recolor of everything
-ever printed.
+color). Once submitted, an input line is shown plain. Results use the
+same colors, except a plain string result or a `%cmd`'s raw output,
+which stay plain.
 
 No undo/redo, and no multi-line-aware history recall (Up/Down inside
 an open multi-line continuation navigate lines, not history) —

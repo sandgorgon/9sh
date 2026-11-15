@@ -106,7 +106,16 @@ func run() int {
 		// argument list, kyu-visible as `args` (a List of String) --
 		// `9sh script.kyu foo bar` sees args = ["foo", "bar"].
 		env.Define("args", scriptArgsList(args[1:]))
-		if !runSource(string(src), env) {
+		// exit()/quit() ends the script early with its own status, and
+		// exit("reason") also prints the reason -- see eval's biExit.
+		ok, exit := runSource(string(src), env)
+		if exit != nil {
+			if exit.Reason != "" {
+				fmt.Fprintln(os.Stderr, exit.Reason)
+			}
+			return exit.Code
+		}
+		if !ok {
 			return 1
 		}
 		return 0
@@ -415,7 +424,12 @@ func scriptArgsList(scriptArgs []string) *value.List {
 	return value.NewList(out)
 }
 
-func runSource(src string, env *eval.Env) bool {
+// runSource parses and evaluates src, reporting whether it succeeded,
+// and, if exit()/quit() stopped it, that call's signal (its status and
+// reason) — which counts as ok, since ending early on purpose isn't a
+// failure of the source itself; the caller decides what the status
+// means.
+func runSource(src string, env *eval.Env) (ok bool, exit *eval.ExitSignal) {
 	// Covers both script/-c execution (line ~95) and the plain line
 	// REPL's per-line parse (repl(), below) -- native_programs (see
 	// kyu/eval's IsNativeProgram) is already loaded into env by the time
@@ -429,17 +443,20 @@ func runSource(src string, env *eval.Env) bool {
 		for _, e := range errs {
 			fmt.Fprintln(os.Stderr, e)
 		}
-		return false
+		return false, nil
 	}
 	v, err := eval.Eval(prog, env)
+	if sig, ok := eval.AsExit(err); ok {
+		return true, &sig
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return false
+		return false, nil
 	}
 	if v.Kind() != "null" {
 		printResult(v)
 	}
-	return true
+	return true, nil
 }
 
 // printResult prints a top-level evaluation result. Bytes is special-cased:
@@ -524,8 +541,11 @@ func repl(env *eval.Env) {
 			// is a harmless no-op (CancelFunc() will be nil by then).
 			ctx, cancel := context.WithCancel(context.Background())
 			env.SetCancelContext(ctx, cancel)
-			runSource(buf, env)
+			_, exit := runSource(buf, env)
 			env.SetCancelContext(nil, nil)
+			if exit != nil {
+				break
+			}
 		}
 		buf = ""
 		fmt.Print(prompt)

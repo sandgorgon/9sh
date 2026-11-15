@@ -36,7 +36,7 @@ func TestRunSourceSeesScriptArgs(t *testing.T) {
 	}
 	origStdout := os.Stdout
 	os.Stdout = w
-	ok := runSource(`args | join(" ")`, env)
+	ok, _ := runSource(`args | join(" ")`, env)
 	os.Stdout = origStdout
 	w.Close()
 	if !ok {
@@ -84,5 +84,22 @@ func TestBootstrapLeavesUnixSocketEnvUnsetWhenNotListening(t *testing.T) {
 
 	if _, ok := os.LookupEnv("_9SH_UNIX_SOCK"); ok {
 		t.Fatal("expected _9SH_UNIX_SOCK to remain unset when -listen-unix wasn't passed")
+	}
+}
+
+// TestRunSourceExitEndsScript: exit() stops a script early, nothing
+// after it runs, and its status/reason come back for main to use.
+func TestRunSourceExitEndsScript(t *testing.T) {
+	env := eval.NewGlobalEnv(nil)
+	ok, exit := runSource("x := 1\nexit()\nx := 2", env)
+	if !ok || exit == nil || *exit != (eval.ExitSignal{}) {
+		t.Fatalf("runSource = (%v, %v), want (true, status 0)", ok, exit)
+	}
+	if v, _ := env.Get("x"); v != value.Int(1) {
+		t.Fatalf("x = %v, want 1", v)
+	}
+	_, exit = runSource(`exit("disk full")`, env)
+	if exit == nil || *exit != (eval.ExitSignal{Code: 1, Reason: "disk full"}) {
+		t.Fatalf(`exit("disk full") = %v, want status 1 with the reason`, exit)
 	}
 }

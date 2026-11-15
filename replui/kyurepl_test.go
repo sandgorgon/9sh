@@ -1323,3 +1323,202 @@ func TestKyuReplRecordResultIsColored(t *testing.T) {
 		t.Fatalf("last line = %#v, want colored {a: 1, b: x}", got)
 	}
 }
+
+// rowTexts flattens layoutRows' output to plain text per row.
+func rowTexts(rows []replRow) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = spansText(r.spans)
+	}
+	return out
+}
+
+func TestLayoutRowsWrapsAndKeepsStyles(t *testing.T) {
+	lines := []replLine{
+		{text: "abcdefghij", spans: []replSpan{{text: "abc", style: numberStyle}, {text: "defghij", style: stringStyle}}},
+		{text: ""},
+		{text: "xy", style: errorStyle},
+	}
+	rows := layoutRows(lines, 4, true)
+	want := []string{"abcd", "efgh", "ij", "", "xy"}
+	if got := rowTexts(rows); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("rows = %q, want %q", got, want)
+	}
+	wantLine := []int{0, 0, 0, 1, 2}
+	for i, r := range rows {
+		if r.line != wantLine[i] {
+			t.Errorf("row %d line = %d, want %d", i, r.line, wantLine[i])
+		}
+	}
+	// "d" is split off the stringStyle span onto row 0 but keeps its style.
+	if sp := rows[0].spans; len(sp) != 2 || sp[0].style != numberStyle || sp[1] != (replSpan{text: "d", style: stringStyle}) {
+		t.Errorf("row 0 spans = %#v, want abc as number + d as string", sp)
+	}
+	if rows[4].spans[0].style != errorStyle {
+		t.Errorf("plain line's style lost: %#v", rows[4].spans)
+	}
+}
+
+func TestLayoutRowsWideRuneMovesWhole(t *testing.T) {
+	rows := layoutRows([]replLine{{text: "ab中c"}}, 3, true)
+	if got := rowTexts(rows); strings.Join(got, "|") != "ab|中c" {
+		t.Fatalf("rows = %q, want [ab 中c]", got)
+	}
+}
+
+func TestLayoutRowsUnwrappedIsOneRowPerLine(t *testing.T) {
+	lines := []replLine{{text: "abcdefghij"}, {text: "k"}}
+	if got := rowTexts(layoutRows(lines, 4, false)); strings.Join(got, "|") != "abcdefghij|k" {
+		t.Fatalf("rows = %q, want each line whole", got)
+	}
+}
+
+func TestPlaceCursorAfterFullRowGetsOwnRow(t *testing.T) {
+	rows := layoutRows([]replLine{{text: "old"}, {text: "9sh> abc"}}, 4, true)
+	// "9sh> abc" wraps as "9sh>", " abc"; the cursor after "c" (off 8)
+	// is past a full row, so it needs a new row of its own.
+	rows, r, c := placeCursor(rows, 1, 8, 4, true)
+	if r != 3 || c != 0 || len(rows) != 4 || rows[3].line != 1 {
+		t.Fatalf("cursor at row %d col %d with %d rows, want row 3 col 0 of 4", r, c, len(rows))
+	}
+	_, r, c = placeCursor(layoutRows([]replLine{{text: "old"}, {text: "9sh> abc"}}, 4, true), 1, 5, 4, true)
+	if r != 2 || c != 1 {
+		t.Fatalf("cursor on 'a' at row %d col %d, want row 2 col 1", r, c)
+	}
+}
+
+// paintRows paints w into a width x height buffer and returns each
+// row's text with trailing blanks trimmed.
+func paintRows(w *kyuReplWidget, width, height int) []string {
+	buf := cell.NewBuffer(width, height)
+	w.Paint(cell.NewPainter(buf))
+	out := make([]string, height)
+	for y := range height {
+		var b strings.Builder
+		for x := range width {
+			c := buf.At(x, y)
+			if c.IsContinuation() {
+				continue
+			}
+			r := c.Rune
+			if r == 0 {
+				r = ' '
+			}
+			b.WriteRune(r)
+		}
+		out[y] = strings.TrimRight(b.String(), " ")
+	}
+	return out
+}
+
+// TestWrapIsDisplayOnly is the rule noWrap's doc comment promises: wrapping
+// changes what's drawn, never the transcript itself or what's copied.
+func TestWrapIsDisplayOnly(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, `"0123456789abcdefghij"`)
+	sendEnter(w)
+	before := append([]replLine(nil), w.lines...)
+
+	got := paintRows(w, 8, 8)
+	want := []string{`9sh> "01`, `23456789`, `abcdefgh`, `ij"`, "01234567", "89abcdef", "ghij", "9sh>"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("painted %q, want %q", got, want)
+	}
+	if len(w.lines) != len(before) {
+		t.Fatalf("painting changed the transcript: %d lines, was %d", len(w.lines), len(before))
+	}
+	for i := range before {
+		if w.lines[i].text != before[i].text {
+			t.Fatalf("painting changed line %d: %q, was %q", i, w.lines[i].text, before[i].text)
+		}
+	}
+	if s := w.allText(); !strings.Contains(s, "0123456789abcdefghij\n9sh> ") {
+		t.Fatalf("allText split a wrapped line: %q", s)
+	}
+	// A 4-row window two rows up shows rows 2-5: the tail of the echo
+	// and the first two rows of the result -- both lines only partly.
+	w.lastHeight, w.scrollOffset = 4, 2
+	want2 := `9sh> "0123456789abcdefghij"` + "\n0123456789abcdefghij"
+	if s := w.visibleText(); s != want2 {
+		t.Fatalf("visibleText = %q, want partly visible lines copied whole: %q", s, want2)
+	}
+}
+
+func TestAltZTogglesWrapAndRedrawsExistingLines(t *testing.T) {
+	w := newTestReplWidget(t)
+	sendRunes(w, `"0123456789abcdefghij"`)
+	sendEnter(w)
+	paintRows(w, 8, 6)
+	w.HandleEvent(input.KeyEvent{Rune: 'z', Mod: input.ModAlt})
+	if !w.noWrap {
+		t.Fatal("Alt+Z should turn wrapping off")
+	}
+	got := paintRows(w, 8, 3)
+	want := []string{`9sh> "01`, "01234567", "9sh>"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("unwrapped paint = %q, want %q", got, want)
+	}
+	w.HandleEvent(input.KeyEvent{Rune: 'z', Mod: input.ModAlt})
+	if w.noWrap {
+		t.Fatal("second Alt+Z should turn wrapping back on")
+	}
+}
+
+func TestAltZKeepsScrolledViewOnSameLine(t *testing.T) {
+	w := newTestReplWidget(t)
+	w.lines = []replLine{{text: "first"}, {text: "0123456789abcdefghij"}, {text: "after1"}, {text: "after2"}, {text: "after3"}}
+	paintRows(w, 8, 2)
+	// wrapped rows: first, 01234567, 89abcdef, ghij, after1..3, prompt = 8
+	w.scrollOffset = 5 // top row is "01234567" (row 1)
+	if got := paintRows(w, 8, 2); got[0] != "01234567" {
+		t.Fatalf("setup: top row = %q", got[0])
+	}
+	w.toggleWrap()
+	if got := paintRows(w, 8, 2); got[0] != "01234567" {
+		t.Fatalf("after unwrapping, top row = %q, want the same line (cut off)", got[0])
+	}
+}
+
+// TestWrapBuiltinReachesThisWidget is wrap()'s fallback for Alt+Z,
+// through a real evaluate() call -- the change only lands when
+// applyEvalResult runs, never from evaluate's own goroutine.
+func TestWrapBuiltinReachesThisWidget(t *testing.T) {
+	w := newTestReplWidget(t)
+	res := w.evaluate(`wrap(false)`)
+	if w.noWrap {
+		t.Fatal("evaluate itself must not change the wrap setting")
+	}
+	w.applyEvalResult(res)
+	if !w.noWrap {
+		t.Fatal("wrap(false) should turn wrapping off once applied")
+	}
+	w.applyEvalResult(w.evaluate(`wrap()`))
+	if got := lastLine(t, w); got.text != "false" {
+		t.Fatalf("wrap() = %q, want false", got.text)
+	}
+	// A change earlier in the same submission is what wrap() reports.
+	w.applyEvalResult(w.evaluate("wrap(true)\nwrap()"))
+	if got := lastLine(t, w); got.text != "true" || w.noWrap {
+		t.Fatalf("wrap() after wrap(true) = %q (noWrap %v), want true", got.text, w.noWrap)
+	}
+}
+
+// TestExitAndQuitLeaveTheTUI: at the prompt, exit()/quit() quit 9sh
+// the same way Ctrl+D does, once the result is applied.
+func TestExitAndQuitLeaveTheTUI(t *testing.T) {
+	for _, src := range []string{"exit()", "quit()"} {
+		w := newTestReplWidget(t)
+		cmd := w.applyEvalResult(w.evaluate(src))
+		if cmd == nil {
+			t.Fatalf("%s: no Cmd, want tui.Quit", src)
+		}
+		if _, ok := cmd().(tui.QuitMsg); !ok {
+			t.Fatalf("%s: Cmd produced %T, want tui.QuitMsg", src, cmd())
+		}
+		for _, ln := range w.lines {
+			if ln.style == errorStyle {
+				t.Fatalf("%s: printed an error line %q", src, ln.text)
+			}
+		}
+	}
+}

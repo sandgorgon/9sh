@@ -168,19 +168,30 @@ type kyuReplWidget struct {
 	historyIndex int
 	historyDraft string
 
-	// scrollOffset is how many lines back from the bottom the
+	// scrollOffset is how many screen rows back from the bottom the
 	// transcript view is scrolled — 0 means pinned to the latest
-	// output. Not clamped here: Paint's own max0 already makes
-	// scrolling arbitrarily far past the top a harmless no-op (start
-	// just floors at 0), so callers don't need to know the
-	// transcript's current length to stay safe. lastHeight is Paint's
-	// most recent height, remembered so PgUp/PgDown can scroll by a
-	// real page — the same "widget remembers its own last geometry for
+	// output. Rows, not lines: with wrapping on, one line can take
+	// several rows (see layoutRows). Not clamped here: Paint's own max0
+	// already makes scrolling arbitrarily far past the top a harmless
+	// no-op (start just floors at 0), so callers don't need to know the
+	// transcript's current length to stay safe. lastHeight/lastWidth
+	// are Paint's most recent size, remembered so PgUp/PgDown can
+	// scroll by a real page and Alt+C/Alt+Z can work out what's on
+	// screen — the same "widget remembers its own last geometry for
 	// later event handling" shape widget.Terminal already uses
 	// (lastCols/lastRows), just for scroll math instead of pty
 	// resizing.
 	scrollOffset int
 	lastHeight   int
+	lastWidth    int
+
+	// noWrap is Alt+Z's toggle: false (the default) wraps a line longer
+	// than the screen onto as many rows as it needs, true cuts it off
+	// at the right edge instead. Wrapping happens only in layoutRows,
+	// at draw time — w.lines always holds each line whole, so toggling
+	// or resizing re-lays out everything already on screen, and copy
+	// never sees a wrap point as a line break.
+	noWrap bool
 
 	// searchMode is Ctrl-R (reverse history search, bash's
 	// reverse-i-search). While true, handleKey routes almost every key
@@ -215,24 +226,25 @@ func (w *kyuReplWidget) Paint(p *cell.Painter) {
 		return
 	}
 	w.lastHeight = height
+	w.lastWidth = width
 
 	inputLines, cursorLine, cursorCol := w.renderInput()
 	visible := append(append([]replLine(nil), w.lines...), inputLines...)
-	// scrollOffset counts lines back from the very bottom of visible —
-	// see its own doc comment on why this needs no clamping here beyond
-	// max0 itself.
-	start := max0(len(visible) - height - w.scrollOffset)
-	end := min(start+height, len(visible))
-	shown := visible[start:end]
-	for y, ln := range shown {
-		if ln.spans != nil {
-			x := 0
-			for _, sp := range ln.spans {
-				x += p.Text(x, y, sp.text, sp.style)
-			}
-			continue
+	rows := layoutRows(visible, width, !w.noWrap)
+	cursorRow := -1
+	if w.focused && w.scrollOffset == 0 {
+		rows, cursorRow, cursorCol = placeCursor(rows, len(w.lines)+cursorLine, cursorCol, width, !w.noWrap)
+	}
+	// scrollOffset counts rows back from the very bottom — see its own
+	// doc comment on why this needs no clamping here beyond max0 itself.
+	start := max0(len(rows) - height - w.scrollOffset)
+	end := min(start+height, len(rows))
+	shown := rows[start:end]
+	for y, row := range shown {
+		x := 0
+		for _, sp := range row.spans {
+			x += p.Text(x, y, sp.text, sp.style)
 		}
-		p.Text(0, y, ln.text, ln.style)
 	}
 
 	// tui.App's real terminal cursor is unconditionally hidden (see its
@@ -247,8 +259,8 @@ func (w *kyuReplWidget) Paint(p *cell.Painter) {
 	// always a blank space, now that the cursor can sit mid-line, not
 	// just past the end) so moving the cursor over existing text
 	// doesn't visually erase it.
-	if w.focused && w.scrollOffset == 0 {
-		cy := len(w.lines) + cursorLine - start
+	if cursorRow >= 0 {
+		cy := cursorRow - start
 		if cy >= 0 && cy < len(shown) && cursorCol < width {
 			glyph := ' '
 			rs := w.runes()
@@ -258,6 +270,134 @@ func (w *kyuReplWidget) Paint(p *cell.Painter) {
 			p.SetCell(cursorCol, cy, glyph, cursorStyle)
 		}
 	}
+}
+
+// ---- wrapping (draw-time only — see noWrap's doc comment) ----
+
+// replRow is one screen row as Paint draws it: some or all of one
+// replLine's spans, plus the index of the line it came from. Rows are
+// rebuilt from whole lines on every paint and never stored.
+type replRow struct {
+	spans []replSpan
+	line  int
+}
+
+// lineSpans returns ln's spans, treating a plain line as one span.
+func lineSpans(ln replLine) []replSpan {
+	if ln.spans != nil {
+		return ln.spans
+	}
+	return []replSpan{{text: ln.text, style: ln.style}}
+}
+
+// runeCols reports how many columns r takes when drawn, measured by
+// cell.Painter.Text itself (its return value counts columns even past
+// the clip) so wrap points always agree with what Paint actually draws.
+func runeCols(measure *cell.Painter, r rune) int {
+	return measure.Text(0, 0, string(r), cell.Style{})
+}
+
+// layoutRows turns lines into screen rows. Unwrapped (or with no width
+// to wrap to), each line is exactly one row and Paint's clipping cuts
+// it off at the edge. Wrapped, a line is split into as many rows as it
+// needs, breaking at the column limit (a wide rune that wouldn't fit
+// moves whole to the next row); styles carry across the break. An
+// empty line still gets one (empty) row.
+func layoutRows(lines []replLine, width int, wrap bool) []replRow {
+	rows := make([]replRow, 0, len(lines))
+	if !wrap || width <= 0 {
+		for i, ln := range lines {
+			rows = append(rows, replRow{spans: lineSpans(ln), line: i})
+		}
+		return rows
+	}
+	measure := cell.NewPainter(cell.NewBuffer(1, 1))
+	for i, ln := range lines {
+		var cur []replSpan
+		col := 0
+		for _, sp := range lineSpans(ln) {
+			from := 0 // byte offset of sp.text not yet placed in cur
+			for j, r := range sp.text {
+				n := runeCols(measure, r)
+				if col > 0 && col+n > width {
+					if j > from {
+						cur = append(cur, replSpan{text: sp.text[from:j], style: sp.style})
+					}
+					rows = append(rows, replRow{spans: cur, line: i})
+					cur, col, from = nil, 0, j
+				}
+				col += n
+			}
+			if from < len(sp.text) {
+				cur = append(cur, replSpan{text: sp.text[from:], style: sp.style})
+			}
+		}
+		rows = append(rows, replRow{spans: cur, line: i})
+	}
+	return rows
+}
+
+// placeCursor finds the screen row and column for the soft cursor,
+// which sits off runes into line (renderInput's cursorCol: prompt
+// included, one per rune). Unwrapped, rows map 1:1 to lines and off is
+// used as the column directly, as before wrapping existed. Wrapped, it
+// walks that line's rows; a cursor just past a line that exactly fills
+// its last row gets a fresh empty row after it to sit on, the way a
+// terminal moves to the next line — that row is returned in the
+// updated rows and exists only for this paint.
+func placeCursor(rows []replRow, line, off, width int, wrap bool) ([]replRow, int, int) {
+	if !wrap || width <= 0 {
+		return rows, line, off
+	}
+	measure := cell.NewPainter(cell.NewBuffer(1, 1))
+	last, col := -1, 0
+	for r := range rows {
+		if rows[r].line != line {
+			if last >= 0 {
+				break
+			}
+			continue
+		}
+		last, col = r, 0
+		for _, sp := range rows[r].spans {
+			for _, ru := range sp.text {
+				if off == 0 {
+					return rows, r, col
+				}
+				off--
+				col += runeCols(measure, ru)
+			}
+		}
+	}
+	if last < 0 {
+		return rows, -1, 0
+	}
+	if col < width {
+		return rows, last, col
+	}
+	rows = append(rows[:last+1], append([]replRow{{line: line}}, rows[last+1:]...)...)
+	return rows, last + 1, 0
+}
+
+// toggleWrap implements Alt+Z. Scrolled up, the view stays on the same
+// transcript line rather than jumping, since the row count above it
+// changes; at the bottom it simply stays at the bottom.
+func (w *kyuReplWidget) toggleWrap() {
+	if w.scrollOffset > 0 && w.lastHeight > 0 {
+		all := w.allLines()
+		before := layoutRows(all, w.lastWidth, !w.noWrap)
+		if start := max0(len(before) - w.lastHeight - w.scrollOffset); start < len(before) {
+			top := before[start].line
+			after := layoutRows(all, w.lastWidth, w.noWrap)
+			for i, row := range after {
+				if row.line == top {
+					w.scrollOffset = max0(len(after) - w.lastHeight - i)
+					break
+				}
+			}
+		}
+	}
+	w.noWrap = !w.noWrap
 }
 
 // ---- live syntax highlighting (renderInput's input lines; results
@@ -577,6 +717,11 @@ func (w *kyuReplWidget) handleKey(ke input.KeyEvent) tui.Cmd {
 		return tui.CopyToClipboard(w.allText())
 	case alt && ke.Rune == 'c':
 		return tui.CopyToClipboard(w.visibleText())
+	case alt && ke.Rune == 'z':
+		// Alt+Z, after the common editor "toggle word wrap" binding;
+		// Alt+<letter> decodes unambiguously everywhere (see Ctrl+C's
+		// comment above), and Ctrl+W is already delete-word.
+		w.toggleWrap()
 	case ke.Rune != 0 && ke.Key == input.KeyNone && !ctrl && !alt:
 		w.insertRune(ke.Rune)
 	}
@@ -748,13 +893,18 @@ func (w *kyuReplWidget) clearTranscript() {
 
 // ---- copy (Ctrl+C / Alt+C — see handleKey) ----
 
+// allLines is the whole transcript plus the in-progress input, as
+// whole lines — what Paint lays out and what both copies read from.
+func (w *kyuReplWidget) allLines() []replLine {
+	inputLines, _, _ := w.renderInput()
+	return append(append([]replLine(nil), w.lines...), inputLines...)
+}
+
 // allText is the entire transcript (every evaluated line, plus the
 // in-progress input if any) joined with '\n', regardless of scroll
 // position — "copy all of the content on screen".
 func (w *kyuReplWidget) allText() string {
-	inputLines, _, _ := w.renderInput()
-	all := append(append([]replLine(nil), w.lines...), inputLines...)
-	return joinLineText(all)
+	return joinLineText(w.allLines())
 }
 
 // visibleText is only the lines currently in the scrolled viewport —
@@ -763,17 +913,26 @@ func (w *kyuReplWidget) allText() string {
 // since this only runs on an explicit copy keypress (not a hot path)
 // and keeping it independent means a future change to Paint's own
 // windowing can't silently change what a screenshot-style copy grabs
-// without that being a deliberate, visible diff here too.
+// without that being a deliberate, visible diff here too. With
+// wrapping on, any line with at least one row on screen is copied
+// whole: a wrap point is a drawing detail, not a line break, so it
+// never ends up in the copied text.
 func (w *kyuReplWidget) visibleText() string {
-	inputLines, _, _ := w.renderInput()
-	all := append(append([]replLine(nil), w.lines...), inputLines...)
+	all := w.allLines()
+	rows := layoutRows(all, w.lastWidth, !w.noWrap)
 	height := w.lastHeight
 	if height <= 0 {
-		height = len(all)
+		height = len(rows)
 	}
-	start := max0(len(all) - height - w.scrollOffset)
-	end := min(start+height, len(all))
-	return joinLineText(all[start:end])
+	start := max0(len(rows) - height - w.scrollOffset)
+	end := min(start+height, len(rows))
+	var shown []replLine
+	for i, row := range rows[start:end] {
+		if i == 0 || row.line != rows[start+i-1].line {
+			shown = append(shown, all[row.line])
+		}
+	}
+	return joinLineText(shown)
 }
 
 func joinLineText(lines []replLine) string {
@@ -1099,6 +1258,14 @@ func (w *kyuReplWidget) nativeProgramLookup() func(string) bool {
 type evalResult struct {
 	lines      []replLine
 	fullscreen *fullscreenAttach
+	// wrap is wrap(on)'s request, if this evaluation made one (the last
+	// call wins). Carried back here rather than set on w directly
+	// because Paint reads w.noWrap on the UI goroutine while evaluate
+	// runs on its own.
+	wrap *bool
+	// quit is set when exit()/quit() ended this evaluation: at the
+	// prompt that means leaving 9sh, the same as Ctrl+D.
+	quit bool
 }
 
 // applyEvalResult appends res's transcript lines, clears w.busy, and --
@@ -1114,6 +1281,12 @@ type evalResult struct {
 func (w *kyuReplWidget) applyEvalResult(res evalResult) tui.Cmd {
 	w.lines = append(w.lines, res.lines...)
 	w.busy = false
+	if res.wrap != nil && *res.wrap == w.noWrap {
+		w.toggleWrap()
+	}
+	if res.quit {
+		return tui.Quit()
+	}
 	if res.fullscreen == nil {
 		return nil
 	}
@@ -1200,6 +1373,18 @@ func (w *kyuReplWidget) evaluate(src string) evalResult {
 			Delete: w.deleteHistoryEntry,
 			Clear:  w.clearHistoryEntries,
 		})
+		// wrap() only reads w.noWrap (nothing writes it while busy —
+		// Alt+Z is gated like every other key) and records a change in
+		// res for applyEvalResult, so it never races Paint.
+		w.env.SetWrapAccess(&eval.WrapAccess{
+			Get: func() bool {
+				if res.wrap != nil {
+					return *res.wrap
+				}
+				return !w.noWrap
+			},
+			Set: func(on bool) { res.wrap = &on },
+		})
 	}
 	v, err := eval.Eval(prog, w.env)
 	if w.env != nil {
@@ -1207,6 +1392,11 @@ func (w *kyuReplWidget) evaluate(src string) evalResult {
 		w.env.SetAttachHandler(nil)
 		w.env.SetExternalOutputSink(nil)
 		w.env.SetHistoryAccess(nil)
+		w.env.SetWrapAccess(nil)
+	}
+	if eval.IsExit(err) {
+		res.quit = true
+		return res
 	}
 	if err != nil {
 		res.lines = append(res.lines, replLine{text: err.Error(), style: errorStyle})

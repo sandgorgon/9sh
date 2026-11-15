@@ -8,6 +8,17 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-15
+
+### Added
+
+- REPL results are now syntax-highlighted with the same colors as typed
+  input: numbers yellow, strings green, `true`/`false`/`null` magenta,
+  paths blue, and in-stream errors red, including inside records and
+  lists. A result that is a plain string, or a `%cmd`'s raw output, stays
+  uncolored. The text and line breaks are unchanged; only colors are
+  added.
+
 ## [0.12.0] - 2026-10-07
 
 ### Added

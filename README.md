@@ -770,7 +770,7 @@ below is built into 9sh: press `?` at an empty prompt any time.
 | Key | Does |
 |---|---|
 | `Enter` | Submit, or keep editing if brackets are still open |
-| `Tab` | Complete the identifier before the cursor (variables, builtins, keywords) — right after a `%` sigil, an external command name from `PATH`; inside a bare `Path` literal, entries from both the real filesystem and the attached namespace, merged — fills the longest common match, cycles through candidates on repeated `Tab` |
+| `Tab` | Complete the identifier before the cursor (variables, builtins, keywords) — right after a `%` sigil, an external command name from `PATH`, or for a path-form name (`%./`, `%../`, `%/`) directories and executables from the real filesystem, relative ones against `cd()`'s directory; inside a bare `Path` literal, entries from both the real filesystem and the attached namespace, merged — fills the longest common match, cycles through candidates on repeated `Tab` |
 | Ctrl+R | Reverse history search (bash's reverse-i-search) — type to search, `Enter` runs the match immediately, `Esc` loads it into the input line without running it, repeated Ctrl+R searches further back |
 | `←`/`→`, Ctrl+`←`/`→` | Move the cursor by character / by word |
 | `Home`/`End`, Ctrl+A/Ctrl+E | Jump to the start/end of the current line |
@@ -892,7 +892,7 @@ A Unix socket path is capped at 108 bytes by the OS
 
 ## Status
 
-Pre-1.0 (`v0.15.0`). The full v1 build-order plan (namespace
+Pre-1.0 (`v0.16.0`). The full v1 build-order plan (namespace
 core, jobs, kyu, an interactive TUI, session history, remote namespace/
 auth, dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real

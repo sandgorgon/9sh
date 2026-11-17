@@ -774,6 +774,80 @@ func TestKyuReplTabExternalCommandIgnoresNonExecutableFile(t *testing.T) {
 	}
 }
 
+// seedCommandPathDir fills dir with one executable (my-app), one
+// non-executable file (my-notes) and one subdirectory (my-dir) — the
+// three entry kinds path-form command completion has to tell apart.
+func seedCommandPathDir(t *testing.T, dir string) {
+	t.Helper()
+	writeFakeExecutable(t, dir, "my-app")
+	if err := os.WriteFile(filepath.Join(dir, "my-notes"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "my-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tabFrom types src into a fresh widget over env, presses Tab, and
+// returns the resulting input.
+func tabFrom(env *eval.Env, src string) string {
+	w := &kyuReplWidget{env: env}
+	sendRunes(w, src)
+	sendKey(w, input.KeyTab)
+	return w.input
+}
+
+// TestKyuReplTabCompletesAbsoluteCommandPath covers %/abs/path: an
+// executable completes, a directory completes with a trailing '/', and
+// a non-executable file is never offered (it can't be run).
+func TestKyuReplTabCompletesAbsoluteCommandPath(t *testing.T) {
+	dir := t.TempDir()
+	seedCommandPathDir(t, dir)
+	env := eval.NewGlobalEnv(nil)
+	for _, c := range []struct{ in, want string }{
+		{"%" + dir + "/my-a", "%" + dir + "/my-app"},
+		{"%" + dir + "/my-d", "%" + dir + "/my-dir/"},
+		{"%" + dir + "/my-n", "%" + dir + "/my-n"},
+	} {
+		if got := tabFrom(env, c.in); got != c.want {
+			t.Errorf("Tab on %q = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestKyuReplTabCompletesRelativeCommandPathAgainstCwd covers %./ and
+// %../: listed against cd()'s directory (Env.Cwd), not the test
+// process's own cwd, and completed in the fragment's own relative
+// spelling.
+func TestKyuReplTabCompletesRelativeCommandPathAgainstCwd(t *testing.T) {
+	dir := t.TempDir()
+	seedCommandPathDir(t, dir)
+	env := eval.NewGlobalEnv(nil)
+	env.SetCwd(dir)
+	if got := tabFrom(env, "%./my-a"); got != "%./my-app" {
+		t.Errorf("Tab on %%./my-a = %q, want %%./my-app", got)
+	}
+	env.SetCwd(filepath.Join(dir, "my-dir"))
+	if got := tabFrom(env, "%../my-a"); got != "%../my-app" {
+		t.Errorf("Tab on %%../my-a = %q, want %%../my-app", got)
+	}
+}
+
+// TestKyuReplTabCommandPathIgnoresNamespace confirms a path-form
+// command name doesn't complete from the namespace (/x/a.txt exists
+// only there — see TestKyuReplTabCompletesNamespacePath, which does
+// complete it as an ordinary Path): exec can't run anything out of it.
+func TestKyuReplTabCommandPathIgnoresNamespace(t *testing.T) {
+	env := newNamespaceTestEnv(t)
+	if got := tabFrom(env, "%/x/a"); got != "%/x/a" {
+		t.Errorf("Tab on %%/x/a = %q, want it unchanged", got)
+	}
+	// ...while the same path as an argument still completes from it
+	if got := tabFrom(env, "%cat /x/a"); got != "%cat /x/a.txt" {
+		t.Errorf("Tab on %%cat /x/a = %q, want %%cat /x/a.txt", got)
+	}
+}
+
 // TestKyuReplTabCompletesRealFilesystemPath locks in pathCandidates'
 // real-filesystem source: a bare Path fragment (no namespace involved at
 // all -- newTestReplWidget's Env has a nil namespace) completes against

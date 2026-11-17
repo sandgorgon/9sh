@@ -17,7 +17,7 @@ import (
 // %cat would otherwise get a confusing ENOENT from inside its own
 // process instead of a clear kyu-level hint. Written as a direct bareword
 // argument (%cat /src/greeting.txt) rather than through a variable --
-// this exercises lexSlashOrPath's lastWasExternalName exemption
+// this exercises lexSlashOrPath's extArgs exemption
 // (kyu/lexer) at the same time, so a regression in either fix shows up
 // here.
 func TestExternalCallNamespaceOnlyPathIsGuardedErrorVal(t *testing.T) {

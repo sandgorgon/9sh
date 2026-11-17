@@ -270,8 +270,16 @@ can jump to what you need instead of reading it as one wall of text:
 - `%cmd` calls out to an ordinary Linux binary; a `%cmd ... &` job is a
   live record — `j.status`, `j.ctl = "stop"`, `j | wait` all read/write
   through to real namespace files, not a snapshot.
+- The command name can be a path instead of something on `PATH`:
+  `%./build/app`, `%../tools/gen`, `%/opt/foo/bin/foo`. A relative one
+  resolves against `cd()`'s working directory, like every other `%cmd`.
+  It runs from the real filesystem only — a name that exists only in
+  the namespace (`%/n/otherhost/bin/foo`) is a clear error, not a
+  silent "no such file" — and it's matched against
+  `fullscreen_programs`/`native_programs` by its last element, so
+  `%/usr/bin/vim` still gets the real screen.
 - The command name itself can be computed: `%(expr) arg1 arg2 ...`
-  evaluates `expr` to a `String` first, then behaves exactly like a
+  evaluates `expr` to a `String` (or `Path`) first, then behaves exactly like a
   literal `%name` from there — the `%`-sigil counterpart to `@(expr)`
   for a job's mount point (see [Remote hosts](#remote-hosts) below). A
   bareword `native_programs` call (no `%` sigil, e.g. `9ed`) has no
@@ -884,7 +892,7 @@ A Unix socket path is capped at 108 bytes by the OS
 
 ## Status
 
-Pre-1.0 (`v0.14.0`). The full v1 build-order plan (namespace
+Pre-1.0 (`v0.15.0`). The full v1 build-order plan (namespace
 core, jobs, kyu, an interactive TUI, session history, remote namespace/
 auth, dotfiles sync) is implemented and covered by real tests — real 9P
 traffic over Unix sockets and TCP, real subprocess execution, real

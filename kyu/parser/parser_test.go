@@ -752,3 +752,22 @@ func TestAtHostRejectsOtherOperands(t *testing.T) {
 		}
 	}
 }
+
+// TestExternalCallPathName confirms a path-form name (%/bin/echo,
+// %./app) parses as an ordinary literal-name ExternalCall, and that
+// backgrounding it works the same way.
+func TestExternalCallPathName(t *testing.T) {
+	prog := parseOK(t, `%/bin/echo "hi" /tmp`)
+	ext, ok := prog.Stmts[0].(*ast.ExprStmt).X.(*ast.ExternalCall)
+	if !ok || ext.Name != "/bin/echo" || ext.NameExpr != nil || len(ext.Args) != 2 {
+		t.Fatalf("want ExternalCall(/bin/echo) with 2 args, got %#v", prog.Stmts[0])
+	}
+	prog = parseOK(t, `j := %./app &`)
+	bg, ok := prog.Stmts[0].(*ast.DefineStmt).Val.(*ast.Background)
+	if !ok {
+		t.Fatalf("want Background, got %#v", prog.Stmts[0])
+	}
+	if ext, ok := bg.Expr.(*ast.ExternalCall); !ok || ext.Name != "./app" {
+		t.Fatalf("want ExternalCall(./app), got %#v", bg.Expr)
+	}
+}

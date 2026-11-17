@@ -163,6 +163,9 @@ func evalBackgroundSubprocess(call *ast.ExternalCall, env *Env, pty bool) (value
 	if err != nil {
 		return nil, err
 	}
+	if bad := checkNamespaceOnlyName(env, name); bad != nil {
+		return nil, fmt.Errorf("'&': %s", bad.Msg)
+	}
 	if isFullscreenProgram(env, name) {
 		return nil, fmt.Errorf("'&': %s needs a live terminal, can't run in the background", name)
 	}

@@ -19,15 +19,26 @@ type Lexer struct {
 	// drives Go-style automatic newline insertion.
 	lastKind token.Kind
 
-	// lastWasExternalName is a third, narrower disambiguation in the same
-	// family as lastKind: true for exactly one token immediately after
-	// lexExternalName produces the %cmd command-name IDENT, false
-	// otherwise (including for every other IDENT). Kept separate from
-	// lastKind rather than folded into it because the command name must
-	// still emit as an ordinary token.IDENT (parseExternalCall depends on
-	// that) — this only affects lexSlashOrPath's exemption, not the token's
-	// own Kind. See lexSlashOrPath's doc comment for why it's needed.
-	lastWasExternalName bool
+	// extArgs is a third disambiguation in the same family as lastKind:
+	// it tracks whether the lexer is inside an external call's argument
+	// list (%cmd args..., or a native-program bareword's — see
+	// NativeProgramLookup), where a '/' can only ever start a Path
+	// argument, never divide: each argument is parsed on its own (the
+	// parser's parseExternalCallArgsFor uses parsePrefix), so an infix
+	// operator between arguments has no meaning. Without this,
+	// `%grep "foo" /tmp` would lex '/' as division after the STRING and
+	// fail to parse.
+	//
+	// One entry per open argument list, innermost last; each entry is
+	// the bracket depth opened since that list's command name. Only at
+	// depth 0 is the lexer directly in the list — inside (...), {...} or
+	// [...] an ordinary expression is back in charge (`%cmd (n / 2)`
+	// still divides). A stack, not a single flag, since an argument can
+	// itself hold another call: `%a (%b /x) /y`. Maintained by emitAt
+	// (trackExtArgs) and pushed by lexExternalName/lexIdent right after
+	// the command name. Affects only lexSlashOrPath's choice — the
+	// command name still emits as an ordinary token.IDENT.
+	extArgs []int
 
 	// NativeProgramLookup, when set, reports whether a just-lexed IDENT
 	// names a live "native program" (see kyu/eval's isNativeProgram —
@@ -35,9 +46,9 @@ type Lexer struct {
 	// no % sigil, e.g. 9ed). nil (the default, and every existing
 	// lexer.New caller) means no native programs are recognized — zero
 	// behavior change for any caller that doesn't opt in. When it does
-	// match, lexIdent sets lastWasExternalName exactly the way
-	// lexExternalName already does for a %cmd's own name, so a following
-	// bare '/path' argument lexes as PATH, not division — the identical
+	// match, lexIdent opens an argument list (extArgs) exactly the way
+	// lexExternalName already does for a %cmd's own name, so a bare
+	// '/path' argument lexes as PATH, not division — the identical
 	// hazard %/$ external names already had to solve, reused here rather
 	// than duplicated. Checked unconditionally, not gated to a
 	// statement-start position the way '%' itself is: unlike '%', which
@@ -114,7 +125,7 @@ func (l *Lexer) Next() token.Token {
 	r := l.peek()
 
 	switch {
-	case (isLetter(r) || isDigit(r)) && l.lastKind == token.PERCENT:
+	case (isLetter(r) || isDigit(r) || l.atPathName()) && l.lastKind == token.PERCENT:
 		return l.lexExternalName(line, col)
 	// A digit-leading native-program name (9ed, 9term, ... -- Plan-9-
 	// style tool names, the exact reason lexExternalName exists at all)
@@ -170,7 +181,12 @@ func (l *Lexer) Next() token.Token {
 		// operand) -- no new ambiguity with `x % (y)`, where lastKind
 		// (x) already ends a value and routes to MOD regardless of
 		// what follows.
-		if !endsValue(l.lastKind) && (isLetter(l.peek()) || isDigit(l.peek()) || l.peek() == '(') {
+		//
+		// A path start ('/', './', '../') is the same story: %/opt/x/bin/foo
+		// or %./build/app names a binary by path instead of via PATH (see
+		// lexExternalName). Same !endsValue gate, so `x %/y` is still
+		// modulo-then-path the way it always was.
+		if !endsValue(l.lastKind) && (isLetter(l.peek()) || isDigit(l.peek()) || l.peek() == '(' || l.atPathName()) {
 			return l.emitAt(token.PERCENT, "%", line, col)
 		}
 		return l.emitAt(token.MOD, "%", line, col)
@@ -311,14 +327,43 @@ func (l *Lexer) matchDurationUnit() (string, bool) {
 // (docker-compose, apt-get, ...) since there's no infix-subtraction
 // ambiguity in this position — nothing legal can precede an external
 // command name but the sigil itself. It's never a keyword.
+//
+// A name starting at a path (see atPathName: '/', './', '../') is
+// scanned with isPathChar instead, so %/opt/foo/bin/foo and
+// %./build/app name a binary by path, the way every other shell runs
+// one. The literal still emits as an ordinary IDENT — the parser and
+// eval never need to know which form produced it; os/exec itself skips
+// the PATH lookup for any name containing a '/'.
 func (l *Lexer) lexExternalName(line, col int) token.Token {
 	start := l.pos
-	for isLetter(l.peek()) || isDigit(l.peek()) || l.peek() == '-' {
-		l.advance()
+	if l.atPathName() {
+		for isPathChar(l.peek()) {
+			l.advance()
+		}
+	} else {
+		for isLetter(l.peek()) || isDigit(l.peek()) || l.peek() == '-' {
+			l.advance()
+		}
 	}
 	tok := l.emitAt(token.IDENT, string(l.src[start:l.pos]), line, col)
-	l.lastWasExternalName = true
+	l.extArgs = append(l.extArgs, 0)
 	return tok
+}
+
+// atPathName reports whether the current position starts a path-form
+// external command name: '/', './' or '../'. A bare '.' or '..' with no
+// following '/' doesn't count — `%.` stays the same error it always was
+// rather than trying to exec a directory.
+func (l *Lexer) atPathName() bool {
+	switch {
+	case l.peek() == '/':
+		return true
+	case l.peek() == '.' && l.peekAt(1) == '/':
+		return true
+	case l.peek() == '.' && l.peekAt(1) == '.' && l.peekAt(2) == '/':
+		return true
+	}
+	return false
 }
 
 // matchesDigitLeadingNativeName reports whether the current position
@@ -373,7 +418,7 @@ func (l *Lexer) lexIdent(line, col int) token.Token {
 	// digit-leading case — lit is always exactly what a plain kyu
 	// identifier could be.
 	if kind == token.IDENT && l.NativeProgramLookup != nil && l.NativeProgramLookup(lit) {
-		l.lastWasExternalName = true
+		l.extArgs = append(l.extArgs, 0)
 	}
 	return tok
 }
@@ -413,15 +458,13 @@ func (l *Lexer) lexString(line, col int) token.Token {
 // literal using only lexer state: a '/' can start a Path only where a value
 // could not have just ended (expression-start position). A prior PATH is
 // exempted: paths aren't divisible, so "bind /a /b" is two path arguments,
-// never a division expression. The command-name IDENT right after a '%'/'$'
-// sigil is exempted the same way (lastWasExternalName): "%cat /path" must
-// not re-lex "/path" as "cat / path" dividing a bareword by a path, since
-// external-call arguments are a juxtaposed positional list, never operands
-// of an infix operator against the command name. This only covers the
-// first argument — a later bareword Path after a non-Path argument (e.g.
-// `%grep "foo" /path`) still hits the general rule, a known, narrower gap.
+// never a division expression. Anywhere directly inside an external
+// call's argument list is exempted the same way (inExtArgs):
+// "%cat /path" and `%grep "foo" /path` must not re-lex "/path" as
+// division, since external-call arguments are a juxtaposed positional
+// list, never operands of an infix operator.
 func (l *Lexer) lexSlashOrPath(line, col int) token.Token {
-	if endsValue(l.lastKind) && l.lastKind != token.PATH && !l.lastWasExternalName {
+	if endsValue(l.lastKind) && l.lastKind != token.PATH && !l.inExtArgs() {
 		l.advance()
 		return l.emitAt(token.SLASH, "/", line, col)
 	}
@@ -438,6 +481,49 @@ func (l *Lexer) emit(k token.Kind, lit string) token.Token {
 
 func (l *Lexer) emitAt(k token.Kind, lit string, line, col int) token.Token {
 	l.lastKind = k
-	l.lastWasExternalName = false // see lexExternalName, the one place that overrides this right after
+	l.trackExtArgs(k)
 	return token.Token{Kind: k, Literal: lit, Line: line, Col: col}
+}
+
+// inExtArgs reports whether the lexer is directly inside an external
+// call's argument list — not nested in a bracket within it. See extArgs.
+func (l *Lexer) inExtArgs() bool {
+	n := len(l.extArgs)
+	return n > 0 && l.extArgs[n-1] == 0
+}
+
+// trackExtArgs updates extArgs for a just-emitted token of kind k:
+// brackets nest and un-nest, and whatever ends an argument list at its
+// own depth (the parser's endsExternalCallArgs set, plus a closing
+// bracket that belongs to an enclosing expression) closes it — and any
+// argument list that was itself closed by the same token, so a
+// newline after `%a (%b x)` or a `)` in `f(%a /x)` unwinds everything
+// it ends.
+func (l *Lexer) trackExtArgs(k token.Kind) {
+	if len(l.extArgs) == 0 {
+		return
+	}
+	top := len(l.extArgs) - 1
+	switch k {
+	case token.LPAREN, token.LBRACE, token.LBRACKET:
+		l.extArgs[top]++
+	case token.RPAREN, token.RBRACE, token.RBRACKET:
+		l.popClosedExtArgs()
+		if n := len(l.extArgs); n > 0 {
+			l.extArgs[n-1]--
+		}
+	case token.NEWLINE, token.SEMI, token.PIPE, token.AMP,
+		token.COMMA, token.AND, token.OR:
+		l.popClosedExtArgs()
+	case token.EOF:
+		l.extArgs = l.extArgs[:0]
+	}
+}
+
+// popClosedExtArgs drops every innermost argument list the lexer is
+// directly in (depth 0) — the ones a terminator token ends.
+func (l *Lexer) popClosedExtArgs() {
+	for l.inExtArgs() {
+		l.extArgs = l.extArgs[:len(l.extArgs)-1]
+	}
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/sandgorgon/9sh/kyu/ast"
 	"github.com/sandgorgon/9sh/kyu/value"
@@ -22,6 +24,7 @@ import (
 // runs on every %cmd, so a bad config value must not be the reason an
 // otherwise-fine command fails.
 func isFullscreenProgram(env *Env, name string) bool {
+	name = programName(name)
 	v, ok := env.Get("fullscreen_programs")
 	if !ok {
 		return false
@@ -36,6 +39,19 @@ func isFullscreenProgram(env *Env, name string) bool {
 		}
 	}
 	return false
+}
+
+// programName is the name fullscreen_programs/native_programs are
+// matched against: name itself for an ordinary %cmd, or its basename
+// for a path-form one (%/usr/bin/vim, %./bin/9ed -- see lexer's
+// lexExternalName), so a binary run by path keeps the treatment its
+// bare name would get. A trailing-slash path has no sensible basename
+// and is left as-is (it'll fail to exec anyway).
+func programName(name string) string {
+	if !strings.ContainsRune(name, '/') || strings.HasSuffix(name, "/") {
+		return name
+	}
+	return filepath.Base(name)
 }
 
 // isNativeProgram reports whether name is listed in the kyu-level
@@ -58,7 +74,12 @@ func isFullscreenProgram(env *Env, name string) bool {
 // identifier the lexer/parser see, so a bad config value must not be
 // the reason ordinary kyu code stops working.
 func isNativeProgram(env *Env, name string) bool {
-	if _, defined := env.Get(name); defined {
+	if strings.ContainsRune(name, '/') {
+		// A path-form name (%./bin/9ed) can't be a bareword call, so
+		// there's no variable to shadow it -- just match on its
+		// basename (see programName).
+		name = programName(name)
+	} else if _, defined := env.Get(name); defined {
 		return false
 	}
 	v, ok := env.Get("native_programs")
@@ -183,7 +204,7 @@ func runExternalFullscreen(env *Env, name string, argExprs []ast.Expr, native bo
 	// Re-resolve against envVars's own PATH -- see pathresolve's doc
 	// comment (exec.Command already resolved name against 9sh's own real
 	// PATH, which the Cmd.Env assignment above never affects).
-	if resolved, err := pathresolve.LookPath(name, envVars); err != nil {
+	if resolved, err := pathresolve.LookPathIn(name, cmd.Dir, envVars); err != nil {
 		cleanupCheckouts(checkouts)
 		return value.ErrorVal{Msg: fmt.Sprintf("%%%s: %v", name, err)}, nil
 	} else {

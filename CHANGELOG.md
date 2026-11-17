@@ -8,6 +8,29 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-17
+
+### Added
+
+- `%cmd` can name the binary by path: `%./build/app`, `%../tools/gen`,
+  `%/opt/foo/bin/foo`. A relative path runs from the directory set by
+  `cd()`. A path that exists only in the namespace (such as
+  `%/n/otherhost/bin/foo`) gives a clear error, since only the real
+  filesystem can be run from. `fullscreen_programs` and
+  `native_programs` match on the last part of the path, so
+  `%/usr/bin/vim` still gets the whole screen.
+- `%(expr)` accepts a `Path` as well as a `String`, so
+  `%(/opt/foo/bin/foo)` works the same as `%/opt/foo/bin/foo`.
+
+### Fixed
+
+- A bare path after another argument in a `%cmd` call, as in
+  `%grep "foo" /tmp/log`, is now read as a path. Before, it was read as
+  division and the line failed to parse. Inside brackets, `/` still
+  divides as usual: `%head (n / 2) /tmp/log`.
+- A `%cmd` named by a relative path is now checked in the `cd()`
+  directory it runs in, not in the directory 9sh was started from.
+
 ## [0.14.0] - 2026-11-15
 
 ### Added

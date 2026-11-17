@@ -826,7 +826,7 @@ func TestKyuReplTabCompletesNamespaceDirWithTrailingSlash(t *testing.T) {
 
 // TestKyuReplTabPathCompletionAsExternalCallArgument exercises the
 // motivating end-to-end case: a bare Path typed as a %cmd argument (the
-// kyu/lexer lastWasExternalName fix is what makes this position lex as a
+// kyu/lexer extArgs exemption is what makes this position lex as a
 // Path at all) completes against the namespace, not just standalone.
 func TestKyuReplTabPathCompletionAsExternalCallArgument(t *testing.T) {
 	env := newNamespaceTestEnv(t)

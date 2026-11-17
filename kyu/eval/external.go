@@ -69,6 +69,9 @@ func runExternal(x *ast.ExternalCall, in value.Value, env *Env) (value.Value, er
 	if err != nil {
 		return nil, err
 	}
+	if bad := checkNamespaceOnlyName(env, name); bad != nil {
+		return *bad, nil
+	}
 	if isFullscreenProgram(env, name) {
 		return runExternalFullscreen(env, name, x.Args, isNativeProgram(env, name))
 	}
@@ -111,11 +114,33 @@ func externalCallName(x *ast.ExternalCall, env *Env) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s, ok := v.(value.String)
-	if !ok {
-		return "", fmt.Errorf("%%(...): command name must be a string, got %s", v.Kind())
+	switch s := v.(type) {
+	case value.String:
+		return string(s), nil
+	case value.Path:
+		// %(/opt/foo/bin/foo) / %(dir + "app"): a Path is just as good
+		// a command name as its String spelling -- the same thing the
+		// literal %/opt/foo/bin/foo form produces (see lexer's
+		// lexExternalName).
+		return string(s), nil
 	}
-	return string(s), nil
+	return "", fmt.Errorf("%%(...): command name must be a string or path, got %s", v.Kind())
+}
+
+// checkNamespaceOnlyName is checkNamespaceOnlyPath's counterpart for
+// the command name itself: %/n/host/bin/foo (or %(/n/host/bin/foo))
+// reads like it should run a binary out of the namespace, but os/exec
+// only ever sees the real filesystem, so a name that resolves in the
+// namespace alone gets a clear error instead of a bare "no such file".
+// Only absolute names are checked -- a relative one (./app, ../bin/x)
+// is relative to the process cwd, which the namespace has no part in.
+func checkNamespaceOnlyName(env *Env, name string) *value.ErrorVal {
+	if !strings.HasPrefix(name, "/") || !resolvesInNamespaceOnly(env, value.Path(name)) {
+		return nil
+	}
+	return &value.ErrorVal{Msg: fmt.Sprintf(
+		"%%%s: command is a namespace path, not a real filesystem path — legacy binaries can only be run from the real filesystem; use checkout(%s, closure) to get a real copy first",
+		name, name)}
 }
 
 func runExternalDirect(env *Env, name string, args []string, in value.Value) (value.Value, error) {

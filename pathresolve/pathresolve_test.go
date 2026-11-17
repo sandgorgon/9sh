@@ -87,3 +87,20 @@ func TestLookPathEmptyPathSegmentMeansCwd(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, "mytool")
 	}
 }
+
+// TestLookPathInResolvesRelativeAgainstDir confirms a relative,
+// already-a-path name (./app) is checked against dir — where the child
+// will run — not this process's own cwd, and comes back unchanged.
+func TestLookPathInResolvesRelativeAgainstDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LookPathIn("./app", dir, nil)
+	if err != nil || got != "./app" {
+		t.Fatalf("LookPathIn(./app, dir) = %q, %v; want ./app, nil", got, err)
+	}
+	if _, err := LookPathIn("./app", t.TempDir(), nil); err == nil {
+		t.Fatal("want an error when ./app isn't in dir")
+	}
+}

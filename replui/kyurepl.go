@@ -1422,9 +1422,10 @@ func (w *kyuReplWidget) consumeFullscreenCmd() tui.Cmd {
 }
 
 // resultLines renders a top-level evaluation result as one or more
-// replLines, splitting on embedded newlines — each replLine is one visual
-// row (see scrollOffset/cursor-line math above), so handing one a raw "\n"
-// would render wrong (the painter has no notion of a line break mid-row).
+// replLines, splitting on embedded newlines — each replLine is one line
+// with no newline in it (layoutRows decides how many screen rows it
+// takes), so handing one a raw "\n" would render wrong (the painter has
+// no notion of a line break mid-row).
 // This applies regardless of Value kind: a plain kyu String (e.g. from
 // `... | join("\n")`) embeds real newlines exactly like external command
 // output does. Bytes is special-cased for its *text*, not its splitting:
@@ -1508,8 +1509,8 @@ func valueSpans(spans []replSpan, v value.Value) []replSpan {
 	return append(spans, replSpan{text: v.String(), style: resultStyle})
 }
 
-// spanLines splits a styled rendering into one replLine per visual row
-// the same way textLines splits plain text (a string value nested in a
+// spanLines splits a styled rendering into one replLine per line the
+// same way textLines splits plain text (a string value nested in a
 // record can carry real newlines), so the rows and their text are
 // identical to textLines(v.String(), ...) — only the colors differ.
 func spanLines(spans []replSpan) []replLine {

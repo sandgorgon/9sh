@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-17
+
 ### Added
 
 - Tab completes a `%cmd` named by a path: `%./bu`, `%../to` and

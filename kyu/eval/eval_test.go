@@ -1029,6 +1029,81 @@ func TestExternalCallComputedNameRejectsNonString(t *testing.T) {
 	}
 }
 
+// TestExternalCallPathNameRuns covers %/abs/path and %./rel/path: the
+// name skips PATH lookup, and a relative one resolves against cd()'s
+// working directory, not the test process's own.
+func TestExternalCallPathNameRuns(t *testing.T) {
+	echo, err := exec.LookPath("echo")
+	if err != nil {
+		t.Skip("echo not on PATH")
+	}
+	env := jobsEnv(t)
+	v := runEnv(t, "%"+echo+` "abs"`, env)
+	if string(v.(value.Bytes)) != "abs\n" {
+		t.Fatalf("stdout = %q, want %q", v, "abs\n")
+	}
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "hello.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho rel-$1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v = runEnv(t, `cd("`+dir+`")
+%./hello.sh "x"`, env)
+	if b, ok := v.(value.Bytes); !ok || string(b) != "rel-x\n" {
+		t.Fatalf("stdout = %q, want %q", v, "rel-x\n")
+	}
+}
+
+// TestExternalCallComputedNameAcceptsPath confirms %(expr) takes a
+// Path as well as a String.
+func TestExternalCallComputedNameAcceptsPath(t *testing.T) {
+	echo, err := exec.LookPath("echo")
+	if err != nil {
+		t.Skip("echo not on PATH")
+	}
+	env := jobsEnv(t)
+	v := runEnv(t, `p := `+echo+`
+%(p) "via-path"`, env)
+	if string(v.(value.Bytes)) != "via-path\n" {
+		t.Fatalf("stdout = %q, want %q", v, "via-path\n")
+	}
+}
+
+// TestExternalCallPathNameNamespaceOnly confirms a command name that
+// only exists in the namespace (here /jobs/clone) is a clear error,
+// foreground and background, not a bare exec "no such file".
+func TestExternalCallPathNameNamespaceOnly(t *testing.T) {
+	env := jobsEnv(t)
+	v := runEnv(t, `%/jobs/clone`, env)
+	ev, ok := v.(value.ErrorVal)
+	if !ok || !strings.Contains(ev.Msg, "command is a namespace path") {
+		t.Fatalf("want namespace-path ErrorVal, got %#v", v)
+	}
+	err := runEnvErr(t, `%/jobs/clone &`, env)
+	if !strings.Contains(err.Error(), "command is a namespace path") {
+		t.Fatalf("error = %v, want namespace-path error", err)
+	}
+}
+
+// TestExternalCallPathNameMatchesProgramLists confirms a path-form name
+// is matched against fullscreen_programs/native_programs by basename,
+// so %/usr/bin/vim keeps vim's fullscreen treatment.
+func TestExternalCallPathNameMatchesProgramLists(t *testing.T) {
+	env := jobsEnv(t)
+	markFullscreen(env, "vim")
+	markNative(env, "9ed")
+	if !isFullscreenProgram(env, "/usr/bin/vim") || !isFullscreenProgram(env, "./vim") {
+		t.Error("path-form vim not matched as fullscreen")
+	}
+	if !isNativeProgram(env, "./bin/9ed") {
+		t.Error("path-form 9ed not matched as native")
+	}
+	if isFullscreenProgram(env, "/usr/bin/vim/") {
+		t.Error("trailing-slash path must not match")
+	}
+}
+
 // TestExternalCallComputedNameRespectsFullscreenPrograms mirrors
 // TestPassthroughInheritsRealStdio exactly, but with %(name) in place
 // of %echo — confirming isFullscreenProgram's check (runExternal) sees

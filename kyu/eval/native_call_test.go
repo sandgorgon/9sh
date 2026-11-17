@@ -88,15 +88,14 @@ func TestNativeCallInsideEachClosure(t *testing.T) {
 // it as a native call at all -- exactly as intended, but wrong for this
 // test's purpose.
 //
-// The namespace path is assigned to a variable first (see
-// kyu/lexer's TestPathAsExternalCallFirstArg: a bareword Path after a
-// non-Path argument hits a known, pre-existing, deliberately unfixed
-// lexer gap shared with %cmd).
+// The namespace path is a bareword after two String arguments, which
+// also exercises kyu/lexer's extArgs exemption for a native call (see
+// TestPathAsExternalCallLaterArg): it must lex as a Path, not division.
 func TestNativeCallNamespaceOnlyPathPassedThroughLiterally(t *testing.T) {
 	skipUnlessOnPath(t, "sh")
 	env, _ := dirfsEnv(t)
 	markNative(env, "sh")
-	v := runEnvNative(t, "p := /src/greeting.txt\nsh \"-c\" \"echo -n $0\" p", env)
+	v := runEnvNative(t, "sh \"-c\" \"echo -n $0\" /src/greeting.txt", env)
 	got, ok := v.(value.Bytes)
 	if !ok {
 		t.Fatalf("got %#v (%s), want value.Bytes", v, v.Kind())

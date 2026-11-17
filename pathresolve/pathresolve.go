@@ -31,8 +31,23 @@ import (
 // own PATH) so callers with nothing to override see today's unchanged
 // behavior.
 func LookPath(name string, env []string) (string, error) {
+	return LookPathIn(name, "", env)
+}
+
+// LookPathIn is LookPath for a subprocess that will run in dir
+// (exec.Cmd.Dir; "" means this process's own cwd): a relative name
+// that's already a path (./app, ../bin/x — kyu's %./app form) is
+// checked for executability against dir, the directory the kernel will
+// actually resolve it in once the child has chdir'd there, not against
+// 9sh's own process cwd. The name is still returned unchanged, so
+// Cmd.Path stays relative and Cmd.Dir does the rest.
+func LookPathIn(name, dir string, env []string) (string, error) {
 	if strings.ContainsRune(name, os.PathSeparator) {
-		if isExecutable(name) {
+		check := name
+		if dir != "" && !filepath.IsAbs(name) {
+			check = filepath.Join(dir, name)
+		}
+		if isExecutable(check) {
 			return name, nil
 		}
 		return "", fmt.Errorf("%s: not an executable file", name)

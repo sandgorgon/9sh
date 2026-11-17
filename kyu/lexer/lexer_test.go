@@ -91,14 +91,12 @@ func TestPathVsDivision(t *testing.T) {
 	assertKinds(t, `x / y`, []token.Kind{token.IDENT, token.SLASH, token.IDENT, token.EOF})
 }
 
-// TestPathAsExternalCallFirstArg locks in lastWasExternalName's exemption:
-// a bare Path right after a %cmd command name must not re-lex as
+// TestPathAsExternalCallFirstArg locks in the extArgs exemption for a
+// bare Path right after a %cmd command name: it must not re-lex as
 // "name / path...", dividing the command name by the path -- the same
-// class of ambiguity TestPathVsDivision's `bind` case already covers, just
-// for the command-name-to-first-argument transition instead of comma-vs-
-// space. Also covers a second bareword Path argument (already-working via
-// the pre-existing "a prior PATH is exempted" rule) so a regression in
-// either exemption shows up here.
+// class of ambiguity TestPathVsDivision's `bind` case already covers.
+// Also covers a second bareword Path argument (the "a prior PATH is
+// exempted" rule).
 func TestPathAsExternalCallFirstArg(t *testing.T) {
 	assertKinds(t, `%cat /src/greeting.txt`, []token.Kind{
 		token.PERCENT, token.IDENT, token.PATH, token.EOF,
@@ -106,11 +104,58 @@ func TestPathAsExternalCallFirstArg(t *testing.T) {
 	assertKinds(t, `%cat /a/b /c/d`, []token.Kind{
 		token.PERCENT, token.IDENT, token.PATH, token.PATH, token.EOF,
 	})
-	// The known, narrower remaining gap (a bareword Path after a non-Path
-	// argument still divides) -- documented here so a future fix that
-	// closes it updates this test rather than silently leaving it stale.
+}
+
+// TestPathAsExternalCallLaterArg covers a bare Path after a non-Path
+// argument: anywhere directly in a %cmd's argument list, '/' starts a
+// Path, since nothing there can be divided.
+func TestPathAsExternalCallLaterArg(t *testing.T) {
 	assertKinds(t, `%grep "foo" /path`, []token.Kind{
-		token.PERCENT, token.IDENT, token.STRING, token.SLASH, token.IDENT, token.EOF,
+		token.PERCENT, token.IDENT, token.STRING, token.PATH, token.EOF,
+	})
+	assertKinds(t, `%head n 5 /a x /b`, []token.Kind{
+		token.PERCENT, token.IDENT, token.IDENT, token.INT, token.PATH, token.IDENT, token.PATH, token.EOF,
+	})
+}
+
+// TestExternalCallArgsNesting confirms brackets inside an argument list
+// hand '/' back to ordinary expression rules, and that a nested %cmd's
+// own list ends with its bracket without ending the outer one.
+func TestExternalCallArgsNesting(t *testing.T) {
+	// division inside parens, path after them
+	assertKinds(t, `%head (n / 2) /a`, []token.Kind{
+		token.PERCENT, token.IDENT, token.LPAREN, token.IDENT, token.SLASH, token.INT, token.RPAREN, token.PATH, token.EOF,
+	})
+	// nested %cmd: inner list ends at ')', outer one still active
+	assertKinds(t, `%a (%b "x" /y) "z" /w`, []token.Kind{
+		token.PERCENT, token.IDENT, token.LPAREN, token.PERCENT, token.IDENT, token.STRING, token.PATH, token.RPAREN,
+		token.STRING, token.PATH, token.EOF,
+	})
+	// a %cmd inside a call's parens ends at the call's ')'; division after it works
+	assertKinds(t, `f(%a /x) / 2`, []token.Kind{
+		token.IDENT, token.LPAREN, token.PERCENT, token.IDENT, token.PATH, token.RPAREN, token.SLASH, token.INT, token.EOF,
+	})
+}
+
+// TestExternalCallArgsEnd confirms every argument-list terminator hands
+// '/' back to division for what follows.
+func TestExternalCallArgsEnd(t *testing.T) {
+	for _, sep := range []string{"\n", ";", "|", "&&", "||"} {
+		src := "%a \"x\"" + sep + " y / 2"
+		toks := lexAll(t, src)
+		var sawSlash bool
+		for _, tk := range toks {
+			if tk.Kind == token.SLASH {
+				sawSlash = true
+			}
+		}
+		if !sawSlash {
+			t.Errorf("%q: want y / 2 to divide after the list ends, got %v", src, toks)
+		}
+	}
+	// a closure arg's own '|' params don't end the outer list
+	assertKinds(t, `%a { |j| j } /p`, []token.Kind{
+		token.PERCENT, token.IDENT, token.LBRACE, token.PIPE, token.IDENT, token.PIPE, token.IDENT, token.RBRACE, token.PATH, token.EOF,
 	})
 }
 
@@ -145,7 +190,7 @@ func lexAllNative(t *testing.T, src string, isNative func(string) bool) []token.
 // prefix-free "native program" call form (see kyu/eval's
 // isNativeProgram, kyu/parser's WithNativeProgramLookup/parseNativeCall):
 // a bareword IDENT matching NativeProgramLookup must lex exactly the way
-// a %cmd command name does (lexExternalName's IDENT, lastWasExternalName
+// a %cmd command name does (lexExternalName's IDENT, extArgs
 // set so a following bare Path doesn't re-lex as division) -- including
 // the digit-leading case (9ed) that's the entire reason this needs
 // lexer-level cooperation at all: outside '%', a leading digit would
@@ -325,4 +370,29 @@ func TestComment(t *testing.T) {
 	assertKinds(t, "x := 1 # comment\ny", []token.Kind{
 		token.IDENT, token.DEFINE, token.INT, token.NEWLINE, token.IDENT, token.EOF,
 	})
+}
+
+// TestExternalCommandNameMayBeAPath covers the path form of a %cmd's
+// name: '/', './' and '../' starts each lex as one IDENT holding the
+// whole path, the way %apt-get's hyphens do. The following bare Path
+// argument still lexes as PATH, not division, via the same
+// extArgs exemption a plain name gets.
+func TestExternalCommandNameMayBeAPath(t *testing.T) {
+	cases := []struct{ src, name string }{
+		{`%/opt/foo/bin/foo /tmp`, "/opt/foo/bin/foo"},
+		{`%./build/my-app_2.1 /tmp`, "./build/my-app_2.1"},
+		{`%../tools/gen /tmp`, "../tools/gen"},
+	}
+	for _, c := range cases {
+		toks := lexAll(t, c.src)
+		if len(toks) != 4 || toks[0].Kind != token.PERCENT ||
+			toks[1].Kind != token.IDENT || toks[1].Literal != c.name ||
+			toks[2].Kind != token.PATH || toks[2].Literal != "/tmp" {
+			t.Errorf("%s: got %v, want PERCENT IDENT(%s) PATH(/tmp) EOF", c.src, toks, c.name)
+		}
+	}
+	// still modulo after a value, path or not
+	assertKinds(t, `x %/a`, []token.Kind{token.IDENT, token.MOD, token.PATH, token.EOF})
+	// a bare '.' with no following '/' isn't a path name
+	assertKinds(t, `%.`, []token.Kind{token.MOD, token.DOT, token.EOF})
 }

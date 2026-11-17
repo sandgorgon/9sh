@@ -410,7 +410,7 @@ func (j *Job) startSubprocess(ctx context.Context) error {
 	// stale lookup failure from the first attempt, which Start()
 	// otherwise returns unconditionally before ever using cmd.Path. See
 	// package pathresolve's doc comment.
-	if resolved, err := pathresolve.LookPath(argv[0], env); err != nil {
+	if resolved, err := pathresolve.LookPathIn(argv[0], cwd, env); err != nil {
 		j.finish(StateFailed, nil, "", err.Error())
 		return nil // the failure is job status, not a ctl-command error — matches cmd.Start()'s own failure handling below
 	} else {
@@ -462,7 +462,7 @@ func (j *Job) startSubprocessPty(ctx context.Context) error {
 	// See startSubprocess's matching comment: re-resolve against env's
 	// own PATH rather than trusting exec.CommandContext's lookup against
 	// this process's PATH.
-	if resolved, err := pathresolve.LookPath(argv[0], env); err != nil {
+	if resolved, err := pathresolve.LookPathIn(argv[0], cwd, env); err != nil {
 		j.finish(StateFailed, nil, "", err.Error())
 		return nil
 	} else {

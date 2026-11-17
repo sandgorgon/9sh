@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -1661,6 +1662,70 @@ func (w *kyuReplWidget) currentPathBounds() (start int, ok bool) {
 	return start, true
 }
 
+// currentCommandPathBounds reports whether the cursor sits inside a
+// path-form external command name — right after a '%' sigil, starting
+// with '/', './' or '../' (kyu/lexer's atPathName: %/opt/foo/bin/foo,
+// %./build/app) — and if so, the rune index it starts at. Checked
+// before currentPathBounds, which would otherwise claim an absolute
+// one as an ordinary Path argument and offer namespace entries and
+// non-executables that can't be run.
+func (w *kyuReplWidget) currentCommandPathBounds() (start int, ok bool) {
+	rs := w.runes()
+	start = w.cursor
+	for start > 0 && isPathRune(rs[start-1]) {
+		start--
+	}
+	if start == 0 || start == w.cursor || rs[start-1] != '%' {
+		return 0, false
+	}
+	frag := string(rs[start:w.cursor])
+	if !strings.HasPrefix(frag, "/") && !strings.HasPrefix(frag, "./") && !strings.HasPrefix(frag, "../") {
+		return 0, false
+	}
+	return start, true
+}
+
+// commandPathCandidates completes a path-form command name against the
+// real filesystem only — exec can't run anything out of the namespace
+// (see kyu/eval's checkNamespaceOnlyName) — offering directories (with a
+// trailing '/', to keep going) and executable files, nothing else. A
+// relative fragment is listed against the cd() directory the command
+// will actually run in (Env.Cwd), not this process's own cwd, matching
+// pathresolve.LookPathIn. Candidates keep the fragment's own spelling
+// ("./build/app", not an absolute path).
+func (w *kyuReplWidget) commandPathCandidates(fragment string) []string {
+	i := strings.LastIndex(fragment, "/")
+	dirPart, partial := fragment[:i+1], fragment[i+1:]
+	dir := dirPart
+	if !filepath.IsAbs(dir) {
+		if cwd := w.env.Cwd(); cwd != "" {
+			dir = filepath.Join(cwd, dir)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var candidates []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, partial) {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, name)) // follows symlinks
+		if err != nil {
+			continue
+		}
+		switch {
+		case info.IsDir():
+			candidates = append(candidates, dirPart+name+"/")
+		case info.Mode()&0o111 != 0:
+			candidates = append(candidates, dirPart+name)
+		}
+	}
+	return candidates
+}
+
 // splitPathFragment splits a Path-in-progress like "/src/gree" into the
 // directory to list ("/src") and the partial final segment to match
 // against each entry's name ("gree"). A fragment with no second '/' yet
@@ -1727,18 +1792,24 @@ func (w *kyuReplWidget) pathCandidates(fragment string) []string {
 // replacement.
 //
 // Right after a '%' sigil the candidates are PATH executables (see
-// currentExternalNameBounds/externalNameCandidates); inside a bare Path
+// currentExternalNameBounds/externalNameCandidates), or, for a
+// path-form name (%./app, %/opt/...), real-filesystem directories and
+// executables (see currentCommandPathBounds/commandPathCandidates);
+// inside a bare Path
 // literal they're real filesystem and namespace entries merged (see
 // currentPathBounds/pathCandidates); everywhere else they're
 // env.Names() — every user variable and builtin, see its own doc
 // comment — plus kyuKeywords.
 func (w *kyuReplWidget) completeTab() {
 	externalStart, isExternal := w.currentExternalNameBounds()
+	cmdPathStart, isCmdPath := w.currentCommandPathBounds()
 	pathStart, isPath := w.currentPathBounds()
 	var start int
 	switch {
 	case isExternal:
 		start = externalStart
+	case isCmdPath:
+		start = cmdPathStart
 	case isPath:
 		start = pathStart
 	default:
@@ -1756,6 +1827,8 @@ func (w *kyuReplWidget) completeTab() {
 	switch {
 	case isExternal:
 		candidates = w.externalNameCandidates(fragment)
+	case isCmdPath:
+		candidates = w.commandPathCandidates(fragment)
 	case isPath:
 		candidates = w.pathCandidates(fragment)
 	default:

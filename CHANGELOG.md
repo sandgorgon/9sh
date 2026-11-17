@@ -8,6 +8,14 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+### Added
+
+- Tab completes a `%cmd` named by a path: `%./bu`, `%../to` and
+  `%/opt/fo` complete to directories and executable files. Relative
+  paths are looked up in the `cd()` directory. Only the real
+  filesystem is offered, since that's the only place a command can be
+  run from, so namespace entries and non-executable files are left out.
+
 ## [0.15.0] - 2026-11-17
 
 ### Added

@@ -8,6 +8,8 @@ once a first tagged release is cut.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-17
+
 ### Added
 
 - `%cmd` can name the binary by path: `%./build/app`, `%../tools/gen`,
